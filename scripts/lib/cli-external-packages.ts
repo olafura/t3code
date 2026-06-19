@@ -26,6 +26,9 @@
  * enforced by a test, not by inspection.
  */
 export const CLI_RUNTIME_EXTERNAL_PREFIXES = [
+  // Spawned as a Bun subprocess by `t3 tui`; its package and OpenTUI native
+  // dependencies must remain resolvable from the installed filesystem.
+  "@t3tools/tui",
   "node-pty",
   "ffi-rs",
   "@yuuang/",
