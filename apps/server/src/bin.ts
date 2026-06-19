@@ -13,6 +13,7 @@ import { hasCloudPublicConfig } from "./cloud/publicConfig.ts";
 import { sharedServerCommandFlags } from "./cli/config.ts";
 import { projectCommand } from "./cli/project.ts";
 import { runServerCommand, serveCommand, startCommand } from "./cli/server.ts";
+import { tuiCommand } from "./cli/tui.ts";
 
 const CliRuntimeLayer = Layer.mergeAll(NodeServices.layer, NetService.layer);
 
@@ -45,6 +46,7 @@ export const makeCli = ({ cloudEnabled = hasCloudPublicConfig } = {}) =>
     Command.withSubcommands([
       startCommand,
       serveCommand,
+      tuiCommand,
       authCommand,
       projectCommand,
       cloudEnabled ? connectCommand : connectUnavailableCommand,
