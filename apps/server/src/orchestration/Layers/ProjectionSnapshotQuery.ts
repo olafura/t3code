@@ -117,6 +117,13 @@ const ProjectIdLookupInput = Schema.Struct({
 const ThreadIdLookupInput = Schema.Struct({
   threadId: ThreadId,
 });
+
+/**
+ * Maximum number of most-recent activities loaded into a thread-detail snapshot.
+ * Bounds peak memory when opening a long-lived thread; older activities are
+ * fetched on demand (lazy-load, planned) and live ones stream in via events.
+ */
+const THREAD_DETAIL_ACTIVITY_WINDOW = 500;
 const ProjectionProjectLookupRowSchema = ProjectionProjectDbRowSchema;
 const ProjectionThreadIdLookupRowSchema = Schema.Struct({
   threadId: ThreadId,
@@ -808,6 +815,11 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
       `,
   });
 
+  // The thread-detail timeline loads only the most recent window of activities so a
+  // long-lived thread (tens of thousands of activities, hundreds of MB of payload)
+  // can't blow the server heap. New activities still stream in live via the event
+  // subscription; older history will be fetched on demand once lazy-load lands.
+  // Select the most recent N (sequence DESC) then re-sort ascending for display.
   const listThreadActivityRowsByThread = SqlSchema.findAll({
     Request: ThreadIdLookupInput,
     Result: ProjectionThreadActivityDbRowSchema,
@@ -823,8 +835,16 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           payload_json AS "payload",
           sequence,
           created_at AS "createdAt"
-        FROM projection_thread_activities
-        WHERE thread_id = ${threadId}
+        FROM (
+          SELECT *
+          FROM projection_thread_activities
+          WHERE thread_id = ${threadId}
+          ORDER BY
+            sequence DESC,
+            created_at DESC,
+            activity_id DESC
+          LIMIT ${THREAD_DETAIL_ACTIVITY_WINDOW}
+        )
         ORDER BY
           sequence ASC,
           created_at ASC,
