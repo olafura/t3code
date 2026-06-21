@@ -185,6 +185,10 @@ interface MessagesTimelineProps {
   onIsAtEndChange: (isAtEnd: boolean) => void;
   onManualNavigation: () => void;
   hideEmptyPlaceholder?: boolean;
+  /** Older history beyond the live activity window can be lazy-loaded. */
+  hasMoreOlder?: boolean;
+  loadingOlder?: boolean;
+  onLoadOlder?: () => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -219,6 +223,9 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   onIsAtEndChange,
   onManualNavigation,
   hideEmptyPlaceholder = false,
+  hasMoreOlder = false,
+  loadingOlder = false,
+  onLoadOlder,
 }: MessagesTimelineProps) {
   const [expandedTurnIds, setExpandedTurnIds] = useState<ReadonlySet<TurnId>>(new Set());
   const [expandedWorkGroupIds, setExpandedWorkGroupIds] = useState<ReadonlySet<string>>(new Set());
@@ -361,6 +368,11 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     if (isAtEnd !== undefined) {
       onIsAtEndChange(isAtEnd);
     }
+    // Reaching the top lazy-loads older history; maintainVisibleContentPosition
+    // (set on the list) keeps the viewport anchored when rows prepend.
+    if (state?.isAtStart && hasMoreOlder && !loadingOlder) {
+      onLoadOlder?.();
+    }
     if (!state || minimapItems.length === 0) {
       return;
     }
@@ -383,7 +395,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
 
       strip.dataset.inView = inView ? "true" : "false";
     }
-  }, [listRef, minimapItems, minimapStripMap, onIsAtEndChange]);
+  }, [listRef, minimapItems, minimapStripMap, onIsAtEndChange, hasMoreOlder, loadingOlder, onLoadOlder]);
 
   useEffect(() => {
     const frame = requestAnimationFrame(handleScroll);
@@ -414,6 +426,28 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       observer.disconnect();
     };
   }, [timelineViewportElement, rows.length]);
+
+  const listHeader = useMemo(() => {
+    if (loadingOlder) {
+      return (
+        <div className="flex items-center justify-center py-2 text-xs text-muted-foreground">
+          Loading older history…
+        </div>
+      );
+    }
+    if (hasMoreOlder) {
+      return (
+        <button
+          type="button"
+          onClick={onLoadOlder}
+          className="flex w-full cursor-pointer items-center justify-center py-2 text-xs text-muted-foreground transition-colors hover:text-foreground"
+        >
+          Load older history
+        </button>
+      );
+    }
+    return TIMELINE_LIST_HEADER;
+  }, [loadingOlder, hasMoreOlder, onLoadOlder]);
 
   const sharedState = useMemo<TimelineRowSharedState>(
     () => ({
@@ -511,7 +545,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
             }}
             onScroll={handleScroll}
             className="scrollbar-gutter-both h-full min-h-0 overflow-x-hidden overscroll-y-contain px-3 [overflow-anchor:none] sm:px-5"
-            ListHeaderComponent={TIMELINE_LIST_HEADER}
+            ListHeaderComponent={listHeader}
             ListFooterComponent={TIMELINE_LIST_FOOTER}
           />
           <TimelineMinimap

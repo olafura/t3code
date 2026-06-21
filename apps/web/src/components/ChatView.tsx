@@ -190,6 +190,7 @@ import {
   primaryServerKeybindingsAtom,
   serverEnvironment,
 } from "../state/server";
+import { orchestrationEnvironment } from "../state/orchestration";
 import { terminalEnvironment } from "../state/terminal";
 import { threadEnvironment } from "../state/threads";
 import { vcsEnvironment } from "../state/vcs";
@@ -265,6 +266,9 @@ const IMAGE_ONLY_BOOTSTRAP_PROMPT =
   "[User attached one or more images without additional text. Respond using the conversation context and the attached image(s).]";
 const EMPTY_ACTIVITIES: OrchestrationThreadActivity[] = [];
 const EMPTY_PROVIDERS: ServerProvider[] = [];
+// The server caps a thread-detail snapshot at the most recent N activities; when
+// the live window is full there may be older history to lazy-load on scroll-up.
+const ACTIVITY_WINDOW = 500;
 const EMPTY_PROVIDER_SKILLS: ServerProvider["skills"] = [];
 const EMPTY_PENDING_USER_INPUT_ANSWERS: Record<string, PendingUserInputDraftAnswer> = {};
 function useDraftHeroLayoutTransition(isDraftHeroState: boolean) {
@@ -1860,7 +1864,76 @@ function ChatViewContent(props: ChatViewProps) {
   );
   const selectedProvider: ProviderDriverKind = lockedProvider ?? unlockedSelectedProvider;
   const phase = derivePhase(activeThread?.session ?? null);
-  const threadActivities = activeThread?.activities ?? EMPTY_ACTIVITIES;
+
+  // ── Older-history lazy-load ────────────────────────────────────────────────
+  // The detail snapshot is windowed to the most recent ACTIVITY_WINDOW activities;
+  // older pages are fetched on demand (infinite scroll-up) and prepended. Messages
+  // aren't windowed server-side, so this just back-fills the older tool activity.
+  const [olderActivities, setOlderActivities] = useState<
+    ReadonlyArray<OrchestrationThreadActivity>
+  >([]);
+  const [olderLoaded, setOlderLoaded] = useState(false);
+  const [olderHasMore, setOlderHasMore] = useState(false);
+  const [loadingOlderActivities, setLoadingOlderActivities] = useState(false);
+  const loadThreadActivities = useAtomCommand(orchestrationEnvironment.loadThreadActivities, {
+    reportFailure: false,
+  });
+  const activeThreadIdForActivities = activeThread?.id ?? null;
+  useEffect(() => {
+    setOlderActivities([]);
+    setOlderLoaded(false);
+    setOlderHasMore(false);
+    setLoadingOlderActivities(false);
+  }, [activeThreadIdForActivities]);
+
+  const liveThreadActivities = activeThread?.activities ?? EMPTY_ACTIVITIES;
+  const threadActivities = useMemo(
+    () =>
+      olderActivities.length > 0
+        ? [...olderActivities, ...liveThreadActivities]
+        : liveThreadActivities,
+    [olderActivities, liveThreadActivities],
+  );
+  // Before any page is loaded, older history might exist iff the live window is
+  // full; afterwards the server's `hasMore` is authoritative.
+  const hasMoreOlderActivities = olderLoaded
+    ? olderHasMore
+    : liveThreadActivities.length >= ACTIVITY_WINDOW;
+  const loadOlderActivities = useCallback(() => {
+    if (!activeThread || loadingOlderActivities || !hasMoreOlderActivities) {
+      return;
+    }
+    const cursor = threadActivities[0]?.sequence;
+    if (cursor === undefined) {
+      return; // no sequence cursor → nothing to page from
+    }
+    setLoadingOlderActivities(true);
+    void loadThreadActivities({
+      environmentId: activeThread.environmentId,
+      input: { threadId: activeThread.id, beforeSequence: cursor },
+    })
+      .then((result) => {
+        if (result._tag !== "Success") {
+          return;
+        }
+        const page = result.value;
+        setOlderActivities((prev) => {
+          const seen = new Set(prev.map((activity) => activity.id));
+          const fresh = page.activities.filter((activity) => !seen.has(activity.id));
+          return [...fresh, ...prev];
+        });
+        setOlderLoaded(true);
+        setOlderHasMore(page.hasMore);
+      })
+      .finally(() => setLoadingOlderActivities(false));
+  }, [
+    activeThread,
+    loadingOlderActivities,
+    hasMoreOlderActivities,
+    threadActivities,
+    loadThreadActivities,
+  ]);
+
   const workLogEntries = useMemo(() => deriveWorkLogEntries(threadActivities), [threadActivities]);
   const pendingApprovals = useMemo(
     () => derivePendingApprovals(threadActivities),
@@ -5256,6 +5329,9 @@ function ChatViewContent(props: ChatViewProps) {
                 activeTurnStartedAt={activeWorkStartedAt}
                 listRef={legendListRef}
                 timelineEntries={timelineEntries}
+                hasMoreOlder={hasMoreOlderActivities}
+                loadingOlder={loadingOlderActivities}
+                onLoadOlder={loadOlderActivities}
                 latestTurn={activeLatestTurn}
                 runningTurnId={
                   activeThread.session?.status === "running"
