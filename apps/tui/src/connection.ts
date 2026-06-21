@@ -9,6 +9,7 @@ import {
   ORCHESTRATION_WS_METHODS,
   type OrchestrationShellSnapshot,
   type OrchestrationThread,
+  type OrchestrationThreadActivity,
   OrchestrationProposedPlanId,
   type ProjectId,
   type ProviderApprovalDecision,
@@ -335,6 +336,14 @@ export interface TuiClient {
   readonly revertCheckpoint: (threadId: ThreadId, turnCount: number) => Promise<void>;
   /** Fetch the unified diff for the turn that produced the given checkpoint. */
   readonly getTurnDiff: (threadId: ThreadId, toTurnCount: number) => Promise<string>;
+  /** Lazy-load the page of activities immediately older than `beforeSequence`. */
+  readonly getThreadActivities: (
+    threadId: ThreadId,
+    beforeSequence: number,
+  ) => Promise<{
+    readonly activities: ReadonlyArray<OrchestrationThreadActivity>;
+    readonly hasMore: boolean;
+  }>;
   /** The selectable models reported by the server's configured providers. */
   readonly listModels: () => Promise<ModelOption[]>;
   readonly setModel: (threadId: ThreadId, instanceId: string, model: string) => Promise<void>;
@@ -667,6 +676,14 @@ export function makeTuiClient(runtime: TuiRuntime): TuiClient {
           fromTurnCount: NonNegativeInt.make(Math.max(0, toTurnCount - 1)),
           toTurnCount: NonNegativeInt.make(toTurnCount),
         }).pipe(Effect.map((result) => result.diff)),
+      ),
+
+    getThreadActivities: (threadId, beforeSequence) =>
+      runtime.runPromise(
+        request(ORCHESTRATION_WS_METHODS.getThreadActivities, {
+          threadId,
+          beforeSequence: NonNegativeInt.make(Math.max(0, beforeSequence)),
+        }),
       ),
 
     listModels: () =>
