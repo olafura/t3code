@@ -222,3 +222,47 @@ describe("MessagesTimeline body", () => {
     expect(frame).toContain("▸ file-change");
   });
 });
+
+describe("MessagesTimeline older-history indicator", () => {
+  async function olderFrame(props: {
+    hasMoreOlder?: boolean;
+    loadingOlder?: boolean;
+  }): Promise<string> {
+    const ref = React.createRef<null>();
+    const t = await testRender(
+      <MessagesTimeline
+        detail={detail("default")}
+        approvals={[]}
+        approvalIndex={0}
+        workLogCollapsed={false}
+        projectHint={null}
+        width={88}
+        height={20}
+        syntaxStyle={SyntaxStyle.create()}
+        scrollRef={ref as never}
+        {...props}
+      />,
+      { width: 92, height: 24 },
+    );
+    await t.renderOnce();
+    await t.flush();
+    const frame = t.captureCharFrame();
+    t.renderer.destroy();
+    return frame;
+  }
+
+  it("Given older history is available, then it hints to scroll up to load it", async () => {
+    expect(await olderFrame({ hasMoreOlder: true })).toContain("scroll up to load older");
+  });
+
+  it("Given a load is in flight, then it shows the loading indicator", async () => {
+    expect(await olderFrame({ hasMoreOlder: true, loadingOlder: true })).toContain(
+      "loading older history",
+    );
+  });
+
+  it("Given no older history, then no indicator is shown", async () => {
+    const frame = await olderFrame({ hasMoreOlder: false });
+    expect(frame).not.toContain("older history");
+  });
+});

@@ -1,6 +1,7 @@
 import { type ScrollBoxRenderable, type SelectOption, SyntaxStyle } from "@opentui/core";
 import {
   DEFAULT_TERMINAL_ID,
+  type OrchestrationThreadActivity,
   type ProviderInteractionMode,
   type RuntimeMode,
 } from "@t3tools/contracts";
@@ -43,6 +44,9 @@ import {
 const LIST_PANE_WIDTH = 34;
 /** Conversation lines scrolled per page key. */
 const SCROLL_STEP = 8;
+// The server caps a thread-detail snapshot at the most recent N activities; when
+// the live window is full there may be older history to lazy-load on scroll-up.
+const ACTIVITY_WINDOW = 500;
 
 // Top-level layout + state wiring (mirrors apps/web/src/components/ChatView.tsx):
 // owns the external store + UI state, derives the row window and pane heights,
@@ -112,6 +116,14 @@ export function ChatView({
   const [approvalIndex, setApprovalIndex] = React.useState(0);
   // Collapse long tool-call runs in the conversation (^T toggles).
   const [workLogExpanded, setWorkLogExpanded] = React.useState(false);
+  // Lazy-loaded older activity pages, prepended ahead of the windowed live view
+  // (server caps detail at the most recent ACTIVITY_WINDOW). Reset per thread.
+  const [olderActivities, setOlderActivities] = React.useState<
+    ReadonlyArray<OrchestrationThreadActivity>
+  >([]);
+  const [olderLoaded, setOlderLoaded] = React.useState(false);
+  const [olderHasMore, setOlderHasMore] = React.useState(false);
+  const [loadingOlder, setLoadingOlder] = React.useState(false);
   // User-set prompt height in editor rows; null = auto-grow with content.
   const [promptHeight, setPromptHeight] = React.useState<number | null>(null);
   const [activeTerminal, setActiveTerminal] = React.useState<TerminalInfo | null>(null);
@@ -140,6 +152,46 @@ export function ChatView({
   // The agent is actively running a turn — show the red stop affordance (mirrors
   // the web composer swapping its send button for a stop button while running).
   const working = !!detail && isWorking(detail);
+
+  // ── Older-history lazy-load ────────────────────────────────────────────────
+  const detailId = detail?.id ?? null;
+  React.useEffect(() => {
+    setOlderActivities([]);
+    setOlderLoaded(false);
+    setOlderHasMore(false);
+    setLoadingOlder(false);
+  }, [detailId]);
+  // Before any page is loaded, older history might exist iff the live window is
+  // full; afterwards the server's `hasMore` is authoritative.
+  const hasMoreOlder = olderLoaded
+    ? olderHasMore
+    : (detail?.activities.length ?? 0) >= ACTIVITY_WINDOW;
+  // Activities shown in the timeline = lazy-loaded older pages + the live window.
+  const timelineActivities = React.useMemo(
+    () => (detail ? [...olderActivities, ...detail.activities] : []),
+    [detail, olderActivities],
+  );
+  const loadOlderActivities = React.useCallback(() => {
+    if (!detail || loadingOlder || !hasMoreOlder) return;
+    const oldest = olderActivities[0] ?? detail.activities[0];
+    const cursor = oldest?.sequence;
+    if (cursor === undefined) return; // no sequence cursor → nothing to page from
+    setLoadingOlder(true);
+    void client
+      .getThreadActivities(detail.id, cursor)
+      .then((page) => {
+        setOlderActivities((prev) => {
+          const seen = new Set(prev.map((activity) => activity.id));
+          const fresh = page.activities.filter((activity) => !seen.has(activity.id));
+          return [...fresh, ...prev];
+        });
+        setOlderLoaded(true);
+        setOlderHasMore(page.hasMore);
+      })
+      .catch(() => store.setStatus("Could not load older history.", "error"))
+      .finally(() => setLoadingOlder(false));
+  }, [client, detail, loadingOlder, hasMoreOlder, olderActivities, store]);
+
   const actionablePlan = React.useMemo(
     () => (detail ? latestActionableProposedPlan(detail) : null),
     [detail],
@@ -588,7 +640,15 @@ export function ChatView({
       if (reply.includes("\n")) return;
       store.moveSelection(1);
     },
-    onScrollUp: () => scrollRef.current?.scrollBy({ x: 0, y: -SCROLL_STEP }),
+    onScrollUp: () => {
+      // At the very top, scrolling up further lazy-loads older history.
+      const box = scrollRef.current;
+      if (box && box.scrollTop <= 0 && hasMoreOlder && !loadingOlder) {
+        loadOlderActivities();
+        return;
+      }
+      box?.scrollBy({ x: 0, y: -SCROLL_STEP });
+    },
     onScrollDown: () => scrollRef.current?.scrollBy({ x: 0, y: SCROLL_STEP }),
     onNewThread: () => {
       setProjectIndex(0);
@@ -879,6 +939,9 @@ export function ChatView({
         ) : (
           <MessagesTimeline
             detail={detail}
+            activities={timelineActivities}
+            hasMoreOlder={hasMoreOlder}
+            loadingOlder={loadingOlder}
             approvals={approvals}
             approvalIndex={activeApprovalIndex}
             projectHint={selectedProjectTitle}
