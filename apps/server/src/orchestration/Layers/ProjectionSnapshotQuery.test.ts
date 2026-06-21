@@ -1153,7 +1153,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
     }),
   );
 
-  it.effect("windows thread-detail activities to the most recent 500, in ascending order", () =>
+  it.effect("windows thread-detail activities to the most recent 500 and pages older on demand", () =>
     Effect.gen(function* () {
       const snapshotQuery = yield* ProjectionSnapshotQuery;
       const sql = yield* SqlClient.SqlClient;
@@ -1216,8 +1216,33 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
         const activities = threadDetail.value.activities;
         assert.equal(activities.length, 500);
         assert.equal(activities[0]?.summary, "act-101");
+        assert.equal(activities[0]?.sequence, 101);
         assert.equal(activities.at(-1)?.summary, "act-600");
       }
+
+      // Lazy-load the page immediately older than the windowed view (cursor =
+      // oldest loaded sequence, 101): sequences 1..100, ascending, no more left.
+      const olderPage = yield* snapshotQuery.getThreadActivitiesPage({
+        threadId: ThreadId.make("thread-1"),
+        beforeSequence: 101,
+        limit: 500,
+      });
+      assert.equal(olderPage.activities.length, 100);
+      assert.equal(olderPage.activities[0]?.summary, "act-1");
+      assert.equal(olderPage.activities.at(-1)?.summary, "act-100");
+      assert.equal(olderPage.hasMore, false);
+
+      // A bounded page returns the newest `limit` of the older set and reports
+      // that more remain (sequences 401..600, with 1..400 still older).
+      const boundedPage = yield* snapshotQuery.getThreadActivitiesPage({
+        threadId: ThreadId.make("thread-1"),
+        beforeSequence: 601,
+        limit: 200,
+      });
+      assert.equal(boundedPage.activities.length, 200);
+      assert.equal(boundedPage.activities[0]?.summary, "act-401");
+      assert.equal(boundedPage.activities.at(-1)?.summary, "act-600");
+      assert.equal(boundedPage.hasMore, true);
     }),
   );
 
