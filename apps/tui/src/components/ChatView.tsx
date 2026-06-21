@@ -192,6 +192,27 @@ export function ChatView({
       .finally(() => setLoadingOlder(false));
   }, [client, detail, loadingOlder, hasMoreOlder, olderActivities, store]);
 
+  // Copy-on-select: drag to highlight text anywhere in the conversation and it's
+  // copied to the clipboard (OSC 52). OpenTUI's `<text>` is selectable by default
+  // and the renderer fires "selection" once on drag-end with the completed
+  // selection, so this copies the final highlighted text. Paste back with the
+  // terminal's usual paste (the prompt accepts bracketed paste).
+  React.useEffect(() => {
+    const onSelection = (selection: { getSelectedText: () => string } | null) => {
+      const text = selection?.getSelectedText() ?? "";
+      if (text.length === 0) return;
+      const copied = renderer.copyToClipboardOSC52(text);
+      store.setStatus(
+        copied ? "Copied selection to clipboard." : "Clipboard not supported by this terminal.",
+        copied ? "success" : "error",
+      );
+    };
+    renderer.on("selection", onSelection);
+    return () => {
+      renderer.off("selection", onSelection);
+    };
+  }, [renderer, store]);
+
   const actionablePlan = React.useMemo(
     () => (detail ? latestActionableProposedPlan(detail) : null),
     [detail],
