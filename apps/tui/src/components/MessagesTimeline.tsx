@@ -1,5 +1,8 @@
 import { type ScrollBoxRenderable, SyntaxStyle } from "@opentui/core";
-import type { OrchestrationCheckpointSummary } from "@t3tools/contracts";
+import type {
+  OrchestrationCheckpointSummary,
+  OrchestrationThreadActivity,
+} from "@t3tools/contracts";
 import * as React from "react";
 
 import type { PendingApproval } from "../approvals.ts";
@@ -152,6 +155,9 @@ function ProposedPlanCard({
 
 export const MessagesTimeline = React.memo(function MessagesTimeline({
   detail,
+  activities,
+  hasMoreOlder = false,
+  loadingOlder = false,
   approvals,
   approvalIndex,
   projectHint,
@@ -162,6 +168,10 @@ export const MessagesTimeline = React.memo(function MessagesTimeline({
   scrollRef,
 }: {
   readonly detail: OrchestrationThread | null;
+  /** Activities to render (lazy-loaded older pages + live window); falls back to detail.activities. */
+  readonly activities?: ReadonlyArray<OrchestrationThreadActivity>;
+  readonly hasMoreOlder?: boolean;
+  readonly loadingOlder?: boolean;
   readonly approvals: ReadonlyArray<PendingApproval>;
   readonly approvalIndex: number;
   readonly projectHint: string | null;
@@ -173,9 +183,10 @@ export const MessagesTimeline = React.memo(function MessagesTimeline({
   readonly scrollRef: React.MutableRefObject<ScrollBoxRenderable | null>;
 }): React.ReactNode {
   const palette = usePalette();
+  const activityList = activities ?? detail?.activities ?? [];
   const contextWindow = React.useMemo(
-    () => (detail ? deriveContextWindow(detail.activities) : null),
-    [detail],
+    () => (detail ? deriveContextWindow(activityList) : null),
+    [detail, activityList],
   );
   const headerHeight = 1;
   const metaHeight = contextWindow ? 1 : 0;
@@ -188,12 +199,12 @@ export const MessagesTimeline = React.memo(function MessagesTimeline({
   const timeline = React.useMemo(
     () =>
       detail
-        ? foldWorkLog(withTurnSeparators(buildTimeline(detail.messages, detail.activities)), {
+        ? foldWorkLog(withTurnSeparators(buildTimeline(detail.messages, activityList)), {
             collapsed: workLogCollapsed,
             recent: 3,
           })
         : [],
-    [detail, workLogCollapsed],
+    [detail, activityList, workLogCollapsed],
   );
   const checkpointByMessage = React.useMemo(
     () => (detail ? changedFilesByMessage(detail.checkpoints) : new Map()),
@@ -261,6 +272,15 @@ export const MessagesTimeline = React.memo(function MessagesTimeline({
         stickyStart="bottom"
         style={{ rootOptions: { backgroundColor: "transparent" } }}
       >
+        {loadingOlder ? (
+          <box marginBottom={1}>
+            <text fg={palette.dim}>{"  ⟳ loading older history…"}</text>
+          </box>
+        ) : hasMoreOlder ? (
+          <box marginBottom={1}>
+            <text fg={palette.dim}>{"  ↑ scroll up to load older history"}</text>
+          </box>
+        ) : null}
         {timeline.map((row) => {
           if (row.kind === "folded") {
             return (
