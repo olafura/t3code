@@ -32,7 +32,7 @@ import { MessagesTimeline } from "./MessagesTimeline.tsx";
 import { RightPanel } from "./RightPanel.tsx";
 import { SelectOverlay, type SelectStatus } from "./SelectOverlay.tsx";
 import { Sidebar } from "./Sidebar.tsx";
-import { RevertMenu, ThreadActionsMenu } from "./ThreadActionsMenu.tsx";
+import { ConfirmDeleteMenu, RevertMenu } from "./ThreadOverlays.tsx";
 import { UserInputForm } from "./UserInputForm.tsx";
 import { type TerminalInfo, ThreadTerminalDrawer } from "./ThreadTerminalDrawer.tsx";
 import {
@@ -1182,12 +1182,7 @@ export function ChatView({
       ) : overlay === "revert" && detail ? (
         <RevertMenu checkpoints={checkpoints} selected={Math.min(revertIndex, checkpoints.length - 1)} />
       ) : overlay === "confirmDelete" && detail ? (
-        <ThreadActionsMenu
-          overlay={overlay}
-          title={detail.title}
-          archived={detail.archivedAt !== null}
-          sessionRunning={sessionActive}
-        />
+        <ConfirmDeleteMenu title={detail.title} />
       ) : keyMode === "userInput" && pendingUserInput ? (
         <UserInputForm
           pending={pendingUserInput}
