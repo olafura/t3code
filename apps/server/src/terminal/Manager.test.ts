@@ -1735,4 +1735,24 @@ describe("sanitizeTerminalHistoryChunk", () => {
     const second = sanitize("$ydone", first.pendingControlSequence);
     assert.equal(second.visibleText, "done");
   });
+
+  describe("responsesOnly (live stream)", () => {
+    const live = (data: string, pending = "") =>
+      sanitizeTerminalHistoryChunk(pending, data, { responsesOnly: true });
+
+    it("strips terminal responses (DA, DECRPM, cursor, DSR, OSC colour) that leak as garbage", () => {
+      const responses =
+        "\x1b[?1;2c\x1b[?2026;2$y\x1b[2;5R\x1b[0n\x1b]11;rgb:1616/1616/1616\x07";
+      assert.equal(live(`a${responses}b`).visibleText, "ab");
+    });
+
+    it("keeps queries the client must still answer (DECRQM, DA, DSR, OSC colour)", () => {
+      const queries = "\x1b[?2026$p\x1b[c\x1b[6n\x1b]11;?\x07";
+      assert.equal(live(`x${queries}y`).visibleText, `x${queries}y`);
+    });
+
+    it("keeps ordinary display sequences", () => {
+      assert.equal(live("\x1b[31mred\x1b[0m up").visibleText, "\x1b[31mred\x1b[0m up");
+    });
+  });
 });
