@@ -800,30 +800,47 @@ function isCsiFinalByte(codePoint: number): boolean {
   return codePoint >= 0x40 && codePoint <= 0x7e;
 }
 
-function shouldStripCsiSequence(body: string, finalByte: string): boolean {
-  if (finalByte === "n") {
-    return true;
-  }
+// `responsesOnly` strips ONLY terminal→host *responses* (which a program's
+// output should never contain — they're spurious echo), while leaving host→
+// terminal *queries* intact. The live stream uses it so the client's emulator
+// still receives queries it must answer (DA, DSR, DECRQM, OSC colour); the
+// scrollback uses the broader strip (responsesOnly=false) so a replay can't
+// re-trigger a query whose answer would echo at the prompt.
+function shouldStripCsiSequence(body: string, finalByte: string, responsesOnly = false): boolean {
+  // Cursor-position report (CSI r;c R) — always a response.
   if (finalByte === "R" && /^[0-9;?]*$/.test(body)) {
     return true;
   }
-  if (finalByte === "c" && /^[>0-9;?]*$/.test(body)) {
+  // Device-status report. `0 n`/`3 n` (optionally DEC `?`) are responses; `5 n`/
+  // `6 n` are queries the client must still answer.
+  if (finalByte === "n") {
+    return responsesOnly ? /^\??[03]$/.test(body) : true;
+  }
+  // Device attributes. `CSI ? … c` / `CSI > … ; … c` are responses; the bare
+  // `CSI c` / `CSI 0 c` / `CSI > c` forms are queries.
+  if (finalByte === "c") {
+    if (responsesOnly) return /^\?[0-9;]+$/.test(body) || /^>[0-9]+;[0-9;]+$/.test(body);
+    return /^[>0-9;?]*$/.test(body);
+  }
+  // DECRPM mode report (CSI ? Pm ; Ps $ y) — a response. The `$ p` form is the
+  // DECRQM query, kept in the live stream. The `$` intermediate distinguishes
+  // these from ordinary `p`/`y`-final CSIs.
+  if (finalByte === "y" && /^[?0-9;]*\$$/.test(body)) {
     return true;
   }
-  // DECRQM mode queries (…$p) and DECRPM replies (…$y): replaying a stored
-  // query makes the terminal answer again, and the shell echoes the answer as
-  // junk at the prompt. The `$` guard keeps setters like DECSTR (!p) and
-  // DECSCL ("p) intact.
-  if ((finalByte === "p" || finalByte === "y") && /^[0-9;?]*\$$/.test(body)) {
-    return true;
+  // DECRQM mode query. Keep it in the live stream so the client can answer,
+  // but never replay it from persisted history.
+  if (finalByte === "p" && /^[?0-9;]*\$$/.test(body)) {
+    return !responsesOnly;
   }
   // XTVERSION query (>q). DECSCUSR (space-intermediate q) stays.
   if (finalByte === "q" && /^>[0-9;]*$/.test(body)) {
-    return true;
+    return !responsesOnly;
   }
-  // Kitty keyboard protocol query/reply (?u). Restore-cursor (bare u) stays.
+  // Kitty keyboard protocol query/reply (?u). Keep the bare query live while
+  // stripping replies with flag parameters; restore-cursor (bare u) stays.
   if (finalByte === "u" && body.startsWith("?")) {
-    return true;
+    return responsesOnly ? /^\?[0-9;]+$/.test(body) : true;
   }
   return false;
 }
@@ -831,12 +848,13 @@ function shouldStripCsiSequence(body: string, finalByte: string): boolean {
 // DECRQSS ($q) and XTGETTCAP (+q) queries plus their replies ([01]$r / [01]+r):
 // pure request/response traffic with no visual value, and replaying a stored
 // query triggers a fresh reply.
-function shouldStripDcsSequence(content: string): boolean {
-  return /^[01]?[$+][qr]/.test(content);
+function shouldStripDcsSequence(content: string, responsesOnly = false): boolean {
+  return responsesOnly ? /^[01][$+]r/.test(content) : /^[01]?[$+][qr]/.test(content);
 }
 
-function shouldStripOscSequence(content: string): boolean {
-  return /^(10|11|12);(?:\?|rgb:)/.test(content);
+function shouldStripOscSequence(content: string, responsesOnly = false): boolean {
+  // OSC 10/11/12 colour: `rgb:…` is a response; `?` is a query.
+  return responsesOnly ? /^(10|11|12);rgb:/.test(content) : /^(10|11|12);(?:\?|rgb:)/.test(content);
 }
 
 function stripStringTerminator(value: string): string {
@@ -882,10 +900,15 @@ function findEscapeSequenceEndIndex(input: string, start: number): number | null
   return isEscapeFinalByte(input.charCodeAt(cursor)) ? cursor + 1 : start + 1;
 }
 
+// Exported for unit testing. `responsesOnly` strips only terminal responses
+// (for the live stream, which must still relay queries the client answers);
+// the default also strips queries (for replayed scrollback).
 export function sanitizeTerminalHistoryChunk(
   pendingControlSequence: string,
   data: string,
+  options: { readonly responsesOnly?: boolean } = {},
 ): { visibleText: string; pendingControlSequence: string } {
+  const responsesOnly = options.responsesOnly ?? false;
   const input = `${pendingControlSequence}${data}`;
   let visibleText = "";
   let index = 0;
@@ -909,7 +932,7 @@ export function sanitizeTerminalHistoryChunk(
           if (isCsiFinalByte(input.charCodeAt(cursor))) {
             const sequence = input.slice(index, cursor + 1);
             const body = input.slice(index + 2, cursor);
-            if (!shouldStripCsiSequence(body, input[cursor] ?? "")) {
+            if (!shouldStripCsiSequence(body, input[cursor] ?? "", responsesOnly)) {
               append(sequence);
             }
             index = cursor + 1;
@@ -936,8 +959,8 @@ export function sanitizeTerminalHistoryChunk(
         const sequence = input.slice(index, terminatorIndex);
         const content = stripStringTerminator(input.slice(index + 2, terminatorIndex));
         const strip =
-          (nextCodePoint === 0x5d && shouldStripOscSequence(content)) ||
-          (nextCodePoint === 0x50 && shouldStripDcsSequence(content));
+          (nextCodePoint === 0x5d && shouldStripOscSequence(content, responsesOnly)) ||
+          (nextCodePoint === 0x50 && shouldStripDcsSequence(content, responsesOnly));
         if (!strip) {
           append(sequence);
         }
@@ -960,7 +983,7 @@ export function sanitizeTerminalHistoryChunk(
         if (isCsiFinalByte(input.charCodeAt(cursor))) {
           const sequence = input.slice(index, cursor + 1);
           const body = input.slice(index + 1, cursor);
-          if (!shouldStripCsiSequence(body, input[cursor] ?? "")) {
+          if (!shouldStripCsiSequence(body, input[cursor] ?? "", responsesOnly)) {
             append(sequence);
           }
           index = cursor + 1;
@@ -982,8 +1005,8 @@ export function sanitizeTerminalHistoryChunk(
       const sequence = input.slice(index, terminatorIndex);
       const content = stripStringTerminator(input.slice(index + 1, terminatorIndex));
       const strip =
-        (codePoint === 0x9d && shouldStripOscSequence(content)) ||
-        (codePoint === 0x90 && shouldStripDcsSequence(content));
+        (codePoint === 0x9d && shouldStripOscSequence(content, responsesOnly)) ||
+        (codePoint === 0x90 && shouldStripDcsSequence(content, responsesOnly));
       if (!strip) {
         append(sequence);
       }
@@ -1659,6 +1682,14 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
             session.pendingHistoryControlSequence,
             nextEvent.data,
           );
+          // The live stream strips only terminal *responses* (spurious echo
+          // that would otherwise paint as garbage) while still relaying the
+          // queries the client's emulator answers. Same pending boundary.
+          const live = sanitizeTerminalHistoryChunk(
+            session.pendingHistoryControlSequence,
+            nextEvent.data,
+            { responsesOnly: true },
+          );
           session.pendingHistoryControlSequence = sanitized.pendingControlSequence;
           if (sanitized.visibleText.length > 0) {
             session.history = capHistory(
@@ -1674,7 +1705,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
             terminalId: session.terminalId,
             sequence: eventStamp.sequence,
             history: sanitized.visibleText.length > 0 ? session.history : null,
-            data: nextEvent.data,
+            data: live.visibleText,
           } as const;
         }
 
