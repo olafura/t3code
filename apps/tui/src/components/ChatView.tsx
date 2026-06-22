@@ -1140,6 +1140,7 @@ export function ChatView({
             width={rightWidth}
             height={panesHeight}
             onRunAction={onRunGitAction}
+            onPull={store.pullGit}
             onOpenUrl={(url) => store.setStatus(url, "info")}
           />
         ) : null}
