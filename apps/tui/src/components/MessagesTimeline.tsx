@@ -344,6 +344,7 @@ export const MessagesTimeline = React.memo(function MessagesTimeline({
                 flexDirection="row"
                 width={width}
                 justifyContent="flex-end"
+                marginTop={1}
                 marginBottom={1}
               >
                 <box
@@ -367,7 +368,7 @@ export const MessagesTimeline = React.memo(function MessagesTimeline({
             );
           }
           return (
-            <box key={message.id} flexDirection="column" marginBottom={1}>
+            <box key={message.id} flexDirection="column" marginTop={1} marginBottom={1}>
               <markdown
                 content={body}
                 syntaxStyle={syntaxStyle}
