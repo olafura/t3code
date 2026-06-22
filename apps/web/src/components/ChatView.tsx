@@ -1866,9 +1866,10 @@ function ChatViewContent(props: ChatViewProps) {
   const phase = derivePhase(activeThread?.session ?? null);
 
   // ── Older-history lazy-load ────────────────────────────────────────────────
-  // The detail snapshot is windowed to the most recent ACTIVITY_WINDOW activities;
-  // older pages are fetched on demand (infinite scroll-up) and prepended. Messages
-  // aren't windowed server-side, so this just back-fills the older tool activity.
+  // The detail snapshot windows activities to the most recent page (the server
+  // sets `hasMoreActivities` when older ones exist); older pages are fetched on
+  // demand (infinite scroll-up) and prepended. Messages aren't windowed
+  // server-side, so this just back-fills the older tool activity.
   const [olderActivities, setOlderActivities] = useState<
     ReadonlyArray<OrchestrationThreadActivity>
   >([]);
@@ -1878,13 +1879,17 @@ function ChatViewContent(props: ChatViewProps) {
   const loadThreadActivities = useAtomCommand(orchestrationEnvironment.loadThreadActivities, {
     reportFailure: false,
   });
-  const activeThreadIdForActivities = activeThread?.id ?? null;
+  const activeThreadActivityRequestKey = activeThread
+    ? `${activeThread.environmentId}\u0000${activeThread.id}`
+    : null;
+  const activeThreadActivityRequestKeyRef = useRef(activeThreadActivityRequestKey);
+  activeThreadActivityRequestKeyRef.current = activeThreadActivityRequestKey;
   useEffect(() => {
     setOlderActivities([]);
     setOlderLoaded(false);
     setOlderHasMore(false);
     setLoadingOlderActivities(false);
-  }, [activeThreadIdForActivities]);
+  }, [activeThreadActivityRequestKey]);
 
   const liveThreadActivities = activeThread?.activities ?? EMPTY_ACTIVITIES;
   const threadActivities = useMemo(
@@ -1894,25 +1899,42 @@ function ChatViewContent(props: ChatViewProps) {
         : liveThreadActivities,
     [olderActivities, liveThreadActivities],
   );
-  // Before any page is loaded, older history might exist iff the live window is
-  // full; afterwards the server's `hasMore` is authoritative.
+  // Before any page is loaded, the server tells us whether older history exists
+  // beyond the windowed snapshot; afterwards the page `hasMore` is authoritative.
   const hasMoreOlderActivities = olderLoaded
     ? olderHasMore
-    : liveThreadActivities.length >= ACTIVITY_WINDOW;
+    : (activeThread?.hasMoreActivities ?? false);
+  // Tracks the request key of an in-flight older-history load. The scroll
+  // handler fires onLoadOlder on every frame while at the top, but the loading
+  // *state* only updates on the next render — without a synchronous guard a fast
+  // scroll-to-top dispatches several duplicate requests for the same cursor.
+  const inFlightOlderKeyRef = useRef<string | null>(null);
   const loadOlderActivities = useCallback(() => {
-    if (!activeThread || loadingOlderActivities || !hasMoreOlderActivities) {
+    if (!activeThread || !hasMoreOlderActivities) {
       return;
     }
-    const cursor = threadActivities[0]?.sequence;
-    if (cursor === undefined) {
-      return; // no sequence cursor → nothing to page from
+    const oldestActivity = threadActivities[0];
+    if (!oldestActivity || !activeThreadActivityRequestKey) {
+      return;
     }
+    if (inFlightOlderKeyRef.current === activeThreadActivityRequestKey) {
+      return; // a load for this thread is already in flight
+    }
+    const cursorInput =
+      oldestActivity.sequence !== undefined
+        ? { beforeSequence: oldestActivity.sequence }
+        : { beforeCreatedAt: oldestActivity.createdAt, beforeActivityId: oldestActivity.id };
+    const requestKey = activeThreadActivityRequestKey;
+    inFlightOlderKeyRef.current = requestKey;
     setLoadingOlderActivities(true);
     void loadThreadActivities({
       environmentId: activeThread.environmentId,
-      input: { threadId: activeThread.id, beforeSequence: cursor },
+      input: { threadId: activeThread.id, ...cursorInput },
     })
       .then((result) => {
+        if (activeThreadActivityRequestKeyRef.current !== requestKey) {
+          return;
+        }
         if (result._tag !== "Success") {
           return;
         }
@@ -1925,10 +1947,17 @@ function ChatViewContent(props: ChatViewProps) {
         setOlderLoaded(true);
         setOlderHasMore(page.hasMore);
       })
-      .finally(() => setLoadingOlderActivities(false));
+      .finally(() => {
+        if (inFlightOlderKeyRef.current === requestKey) {
+          inFlightOlderKeyRef.current = null;
+        }
+        if (activeThreadActivityRequestKeyRef.current === requestKey) {
+          setLoadingOlderActivities(false);
+        }
+      });
   }, [
     activeThread,
-    loadingOlderActivities,
+    activeThreadActivityRequestKey,
     hasMoreOlderActivities,
     threadActivities,
     loadThreadActivities,
