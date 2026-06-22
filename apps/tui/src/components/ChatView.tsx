@@ -1218,6 +1218,8 @@ export function ChatView({
             syntaxStyle={syntaxStyle}
             scrollRef={scrollRef}
             onOpenDiff={openDiffAtTurn}
+            getAttachmentUrl={client.getAttachmentUrl}
+            onOpenUrl={(url) => store.setStatus(url, "info")}
           />
         )}
         {rightPanelVisible ? (
