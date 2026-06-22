@@ -800,12 +800,16 @@ function isCsiFinalByte(codePoint: number): boolean {
   return codePoint >= 0x40 && codePoint <= 0x7e;
 }
 
-// `responsesOnly` strips ONLY terminal→host *responses* (which a program's
-// output should never contain — they're spurious echo), while leaving host→
-// terminal *queries* intact. The live stream uses it so the client's emulator
-// still receives queries it must answer (DA, DSR, DECRQM, OSC colour); the
-// scrollback uses the broader strip (responsesOnly=false) so a replay can't
-// re-trigger a query whose answer would echo at the prompt.
+/**
+ * Whether a CSI sequence should be dropped from the sanitized terminal stream.
+ *
+ * `responsesOnly` strips ONLY terminal→host *responses* (spurious echo a
+ * program's output should never contain) while leaving host→terminal *queries*
+ * intact — the live stream uses it so the client's emulator still receives the
+ * queries it must answer (DA, DSR, DECRQM, OSC colour). The default
+ * (responsesOnly=false, for replayed scrollback) also strips queries, so a
+ * replay can't re-trigger one whose answer would echo at the prompt.
+ */
 function shouldStripCsiSequence(body: string, finalByte: string, responsesOnly = false): boolean {
   // Cursor-position report (CSI r;c R) — always a response.
   if (finalByte === "R" && /^[0-9;?]*$/.test(body)) {
@@ -845,16 +849,33 @@ function shouldStripCsiSequence(body: string, finalByte: string, responsesOnly =
   return false;
 }
 
-// DECRQSS ($q) and XTGETTCAP (+q) queries plus their replies ([01]$r / [01]+r):
-// pure request/response traffic with no visual value, and replaying a stored
-// query triggers a fresh reply.
-function shouldStripDcsSequence(content: string, responsesOnly = false): boolean {
-  return responsesOnly ? /^[01][$+]r/.test(content) : /^[01]?[$+][qr]/.test(content);
-}
-
+/**
+ * Whether an OSC sequence should be dropped. Only OSC 10/11/12 colour is
+ * sanitized: `rgb:…` is a terminal response, `?` is a host query (kept in the
+ * live stream when `responsesOnly` is set so the client still answers it).
+ */
 function shouldStripOscSequence(content: string, responsesOnly = false): boolean {
   // OSC 10/11/12 colour: `rgb:…` is a response; `?` is a query.
   return responsesOnly ? /^(10|11|12);rgb:/.test(content) : /^(10|11|12);(?:\?|rgb:)/.test(content);
+}
+
+/**
+ * Whether a DCS sequence should be dropped (the `$` intermediate marks the
+ * capability-negotiation forms, as with CSI):
+ *   - DECRPSS/XTGETTCAP reply (DCS Ps $ r / Ps + r) — a terminal→host response,
+ *     stripped from both views (it must never survive as visible text).
+ *   - DECRQSS/XTGETTCAP query (DCS $ q / + q) — a host→terminal query, stripped
+ *     from scrollback so a replay can't re-trigger it, but relayed live so the
+ *     client still answers. Other DCS (sixel, DECUDK, …) is left untouched.
+ */
+function shouldStripDcsSequence(content: string, responsesOnly = false): boolean {
+  if (/^[01]?[$+]r/.test(content)) {
+    return true;
+  }
+  if (/^[$+]q/.test(content)) {
+    return !responsesOnly;
+  }
+  return false;
 }
 
 function stripStringTerminator(value: string): string {
@@ -900,22 +921,148 @@ function findEscapeSequenceEndIndex(input: string, start: number): number | null
   return isEscapeFinalByte(input.charCodeAt(cursor)) ? cursor + 1 : start + 1;
 }
 
-// Exported for unit testing. `responsesOnly` strips only terminal responses
-// (for the live stream, which must still relay queries the client answers);
-// the default also strips queries (for replayed scrollback).
-export function sanitizeTerminalHistoryChunk(
+// A flattened terminal-reply fragment (the ESC introducer is already gone):
+// DECRPM "<m>;<v>$y", device-attributes "<m>;<v>c", OSC 10/11/12 or OSC 4 palette
+// colour ("1[012];rgb:…" / "4;<idx>;rgb:…"), or DECRPSS "<0|1>$r<setting>" (e.g.
+// the "1$r0m" tail from #1238).
+//
+// The colour alternative is pinned to the real OSC numbers (10/11/12, or 4 with
+// an index) rather than an unbounded "(?:[0-9]+;)+" run — that both stops it
+// matching ordinary "<n>;rgb:…" text and removes a catastrophic-backtracking
+// (ReDoS) path on a long ";"-separated digit run that never reaches "rgb:". The
+// DECRPSS setting is length-bounded for the same reason and to stop it eating a
+// following digit/semicolon run of legitimate text.
+//
+// The negative lookbehind skips a colour run that is still inside an intact OSC
+// frame: the escape-aware walk keeps a framed OSC 4 palette report (`shouldStrip
+// OscSequence` only strips OSC 10/11/12), so without this guard the flattened
+// pass would delete the inner `4;<idx>;rgb:…` and leave a broken `ESC ] … ST`
+// shell. Flattened residue has no introducer, so this only excludes framed ones.
+const FLATTENED_OSC_COLOUR = "(?<!\\x1b\\]|\\x9d)(?:1[012];|4;[0-9]+;)rgb:[0-9a-fA-F/]+";
+const FLATTENED_DECRPSS = "[01]\\$r[0-9;]{0,8}[a-zA-Z]";
+const FLATTENED_FRAGMENT = `(?:[0-9]+;[0-9]+\\$y|[0-9]+;[0-9]+c|${FLATTENED_OSC_COLOUR}|${FLATTENED_DECRPSS})`;
+const FLATTENED_REPLY_RUN = new RegExp(
+  `${FLATTENED_FRAGMENT}(?:[\\x07\\r n]{0,8}${FLATTENED_FRAGMENT})+`,
+  "g",
+);
+const FLATTENED_REPLY_TOKEN = new RegExp(
+  `(?:${FLATTENED_OSC_COLOUR}|[0-9]+;[0-9]+\\$y|${FLATTENED_DECRPSS})`,
+  "g",
+);
+/**
+ * Drop the flattened terminal-reply residue a shell echoes at the prompt.
+ *
+ * When a capability reply lands at an idle prompt the shell echoes its
+ * *flattened* parameters as visible text (the ESC introducer is already gone, so
+ * the escape-aware strip can't see it). Two passes: drop a run of 2+ flattened
+ * fragments (DSR "n"/BEL/CR may separate them), then drop the unambiguous
+ * OSC-colour / DECRPM / DECRPSS tokens even when isolated. Ambiguous lone
+ * "<m>;<v>c" / "n" forms and ordinary words (e.g. "running", "1;2c") are kept.
+ */
+function stripFlattenedModeReplyResidue(text: string): string {
+  // Every fragment contains either ";" (DECRPM/DA/OSC) or "$r" (DECRPSS), so text
+  // with neither can't hold residue — skip the regexes.
+  if (!text.includes(";") && !text.includes("$r")) {
+    return text;
+  }
+  return text.replace(FLATTENED_REPLY_RUN, "").replace(FLATTENED_REPLY_TOKEN, "");
+}
+
+// Matches the terminal→host response sequences the browser emulator
+// auto-generates in answer to a program's capability queries: DECRPM "$y",
+// device-attributes "c", device-status "0n"/"3n", OSC 10/11/12 + OSC 4 palette
+// colour, and DECRPSS "$r". Each introducer accepts both the 7-bit ESC form and
+// the 8-bit C1 byte (CSI 0x9b, OSC 0x9d, DCS 0x90), and each terminator the BEL,
+// ESC\, or 8-bit ST (0x9c) — matching the output sanitizer so a C1-encoded reply
+// can't slip past the input filter the way the output walk already handles.
+// Cursor-position reports (CSI … R) and the bare query forms are intentionally
+// NOT matched — the DA alternation requires a parameter so `CSI ? c` / `CSI > c`
+// queries are kept.
+//
+// Focus in/out (CSI I / CSI O) are NOT stripped: a program that enabled focus
+// reporting (DECSET ?1004 — vim, tmux) legitimately expects them, and they are
+// user-action-driven so they never feed the runaway redraw-requery loop the
+// capability responses do.
+const INPUT_CSI = "(?:\\x1b\\[|\\x9b)";
+const INPUT_OSC = "(?:\\x1b\\]|\\x9d)";
+const INPUT_DCS = "(?:\\x1bP|\\x90)";
+const INPUT_ST = "(?:\\x07|\\x1b\\\\|\\x9c)";
+const INPUT_TERMINAL_RESPONSE = new RegExp(
+  [
+    `${INPUT_CSI}\\?[0-9;]*\\$y`,
+    `${INPUT_CSI}[?>][0-9;]+c`,
+    `${INPUT_CSI}\\??[03]n`,
+    `${INPUT_OSC}(?:1[012];|4;[0-9]+;)rgb:[0-9a-fA-F/]*${INPUT_ST}`,
+    `${INPUT_DCS}[01]?\\$r[^\\x1b\\x07\\x9c]*${INPUT_ST}`,
+  ].join("|"),
+  "g",
+);
+/**
+ * Strip the browser emulator's auto-generated terminal responses from client
+ * input before it reaches the PTY.
+ *
+ * The emulator answers the program's capability queries (DECRPM, device
+ * attributes, device status, OSC colour) and emits focus events, sending them
+ * all as input. At an idle prompt the shell has no reader for them, so it echoes
+ * them — and a prompt that re-queries on redraw turns that into a runaway
+ * feedback loop. A user never types these, so dropping them at the source breaks
+ * the loop. Cursor-position reports and the bare query forms are kept, since
+ * programs legitimately block on those. Exported for unit testing.
+ */
+export function stripTerminalResponsesFromInput(data: string): string {
+  // Skip the regex unless the data carries a 7-bit ESC or one of the 8-bit C1
+  // introducers (CSI 0x9b, OSC 0x9d, DCS 0x90) a response could start with.
+  const hasIntroducer =
+    data.includes("\x1b") ||
+    data.includes("\x9b") ||
+    data.includes("\x9d") ||
+    data.includes("\x90");
+  return hasIntroducer ? data.replace(INPUT_TERMINAL_RESPONSE, "") : data;
+}
+
+/**
+ * Single parse of a chunk that produces BOTH sanitized views at once:
+ *   - `historyText`: the scrollback strip — drops terminal queries AND responses
+ *     so a replay can never re-trigger a query whose answer would echo.
+ *   - `liveText`: the live-stream strip — drops only terminal→host responses
+ *     (spurious echo) while relaying host→terminal queries the client answers.
+ *
+ * Both share one walk and one pending-sequence boundary: the boundary depends
+ * only on byte structure (where an incomplete escape sequence ends), never on
+ * which complete sequences are stripped, so it is identical for both views.
+ */
+function sanitizeTerminalChunkDual(
   pendingControlSequence: string,
   data: string,
-  options: { readonly responsesOnly?: boolean } = {},
-): { visibleText: string; pendingControlSequence: string } {
-  const responsesOnly = options.responsesOnly ?? false;
+): { historyText: string; liveText: string; pendingControlSequence: string } {
   const input = `${pendingControlSequence}${data}`;
-  let visibleText = "";
+  let historyText = "";
+  let liveText = "";
   let index = 0;
 
-  const append = (value: string) => {
-    visibleText += value;
+  // Ordinary text and sequences neither view strips go to both buffers.
+  const appendBoth = (value: string) => {
+    historyText += value;
+    liveText += value;
   };
+  // A CSI sequence: each view keeps it unless its own strip rule removes it.
+  const appendCsi = (sequence: string, body: string, finalByte: string) => {
+    if (!shouldStripCsiSequence(body, finalByte, false)) historyText += sequence;
+    if (!shouldStripCsiSequence(body, finalByte, true)) liveText += sequence;
+  };
+  const appendOsc = (sequence: string, content: string) => {
+    if (!shouldStripOscSequence(content, false)) historyText += sequence;
+    if (!shouldStripOscSequence(content, true)) liveText += sequence;
+  };
+  const appendDcs = (sequence: string, content: string) => {
+    if (!shouldStripDcsSequence(content, false)) historyText += sequence;
+    if (!shouldStripDcsSequence(content, true)) liveText += sequence;
+  };
+  const pending = () => ({
+    historyText: stripFlattenedModeReplyResidue(historyText),
+    liveText: stripFlattenedModeReplyResidue(liveText),
+    pendingControlSequence: input.slice(index),
+  });
 
   while (index < input.length) {
     const codePoint = input.charCodeAt(index);
@@ -923,7 +1070,7 @@ export function sanitizeTerminalHistoryChunk(
     if (codePoint === 0x1b) {
       const nextCodePoint = input.charCodeAt(index + 1);
       if (Number.isNaN(nextCodePoint)) {
-        return { visibleText, pendingControlSequence: input.slice(index) };
+        return pending();
       }
 
       if (nextCodePoint === 0x5b) {
@@ -932,16 +1079,14 @@ export function sanitizeTerminalHistoryChunk(
           if (isCsiFinalByte(input.charCodeAt(cursor))) {
             const sequence = input.slice(index, cursor + 1);
             const body = input.slice(index + 2, cursor);
-            if (!shouldStripCsiSequence(body, input[cursor] ?? "", responsesOnly)) {
-              append(sequence);
-            }
+            appendCsi(sequence, body, input[cursor] ?? "");
             index = cursor + 1;
             break;
           }
           cursor += 1;
         }
         if (cursor >= input.length) {
-          return { visibleText, pendingControlSequence: input.slice(index) };
+          return pending();
         }
         continue;
       }
@@ -954,15 +1099,16 @@ export function sanitizeTerminalHistoryChunk(
       ) {
         const terminatorIndex = findStringTerminatorIndex(input, index + 2);
         if (terminatorIndex === null) {
-          return { visibleText, pendingControlSequence: input.slice(index) };
+          return pending();
         }
         const sequence = input.slice(index, terminatorIndex);
         const content = stripStringTerminator(input.slice(index + 2, terminatorIndex));
-        const strip =
-          (nextCodePoint === 0x5d && shouldStripOscSequence(content, responsesOnly)) ||
-          (nextCodePoint === 0x50 && shouldStripDcsSequence(content, responsesOnly));
-        if (!strip) {
-          append(sequence);
+        if (nextCodePoint === 0x5d) {
+          appendOsc(sequence, content);
+        } else if (nextCodePoint === 0x50) {
+          appendDcs(sequence, content);
+        } else {
+          appendBoth(sequence);
         }
         index = terminatorIndex;
         continue;
@@ -970,9 +1116,9 @@ export function sanitizeTerminalHistoryChunk(
 
       const escapeSequenceEndIndex = findEscapeSequenceEndIndex(input, index + 1);
       if (escapeSequenceEndIndex === null) {
-        return { visibleText, pendingControlSequence: input.slice(index) };
+        return pending();
       }
-      append(input.slice(index, escapeSequenceEndIndex));
+      appendBoth(input.slice(index, escapeSequenceEndIndex));
       index = escapeSequenceEndIndex;
       continue;
     }
@@ -983,16 +1129,14 @@ export function sanitizeTerminalHistoryChunk(
         if (isCsiFinalByte(input.charCodeAt(cursor))) {
           const sequence = input.slice(index, cursor + 1);
           const body = input.slice(index + 1, cursor);
-          if (!shouldStripCsiSequence(body, input[cursor] ?? "", responsesOnly)) {
-            append(sequence);
-          }
+          appendCsi(sequence, body, input[cursor] ?? "");
           index = cursor + 1;
           break;
         }
         cursor += 1;
       }
       if (cursor >= input.length) {
-        return { visibleText, pendingControlSequence: input.slice(index) };
+        return pending();
       }
       continue;
     }
@@ -1000,25 +1144,49 @@ export function sanitizeTerminalHistoryChunk(
     if (codePoint === 0x9d || codePoint === 0x90 || codePoint === 0x9e || codePoint === 0x9f) {
       const terminatorIndex = findStringTerminatorIndex(input, index + 1);
       if (terminatorIndex === null) {
-        return { visibleText, pendingControlSequence: input.slice(index) };
+        return pending();
       }
       const sequence = input.slice(index, terminatorIndex);
       const content = stripStringTerminator(input.slice(index + 1, terminatorIndex));
-      const strip =
-        (codePoint === 0x9d && shouldStripOscSequence(content, responsesOnly)) ||
-        (codePoint === 0x90 && shouldStripDcsSequence(content, responsesOnly));
-      if (!strip) {
-        append(sequence);
+      if (codePoint === 0x9d) {
+        appendOsc(sequence, content);
+      } else if (codePoint === 0x90) {
+        appendDcs(sequence, content);
+      } else {
+        appendBoth(sequence);
       }
       index = terminatorIndex;
       continue;
     }
 
-    append(input[index] ?? "");
+    appendBoth(input[index] ?? "");
     index += 1;
   }
 
-  return { visibleText, pendingControlSequence: "" };
+  return {
+    historyText: stripFlattenedModeReplyResidue(historyText),
+    liveText: stripFlattenedModeReplyResidue(liveText),
+    pendingControlSequence: "",
+  };
+}
+
+/**
+ * Sanitize one chunk of terminal output. `responsesOnly` selects the live-stream
+ * view (strips only terminal responses, relaying queries the client answers);
+ * the default selects the scrollback view (also strips queries). Both are
+ * computed in one pass — see {@link sanitizeTerminalChunkDual}. Exported for unit
+ * testing.
+ */
+export function sanitizeTerminalHistoryChunk(
+  pendingControlSequence: string,
+  data: string,
+  options: { readonly responsesOnly?: boolean } = {},
+): { visibleText: string; pendingControlSequence: string } {
+  const dual = sanitizeTerminalChunkDual(pendingControlSequence, data);
+  return {
+    visibleText: (options.responsesOnly ?? false) ? dual.liveText : dual.historyText,
+    pendingControlSequence: dual.pendingControlSequence,
+  };
 }
 
 function legacySafeThreadId(threadId: string): string {
@@ -1458,7 +1626,11 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
             (cause) => new TerminalHistoryError({ operation: "read", threadId, terminalId, cause }),
           ),
         );
-      const capped = capHistory(raw, historyLineLimit);
+      // Sanitize on load so terminal query/response residue persisted by older
+      // builds (the "…$y" / colour-report garble) is stripped from replayed
+      // scrollback — not just from newly-written output. Idempotent for clean
+      // logs; the rewrite below persists the cleanup.
+      const capped = capHistory(sanitizeTerminalHistoryChunk("", raw).visibleText, historyLineLimit);
       if (capped !== raw) {
         yield* fileSystem
           .writeFileString(nextPath, capped)
@@ -1498,7 +1670,8 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
             new TerminalHistoryError({ operation: "migrate", threadId, terminalId, cause }),
         ),
       );
-    const capped = capHistory(raw, historyLineLimit);
+    // Sanitize while migrating so the new-path log starts clean (see above).
+    const capped = capHistory(sanitizeTerminalHistoryChunk("", raw).visibleText, historyLineLimit);
     yield* fileSystem
       .writeFileString(nextPath, capped)
       .pipe(
@@ -1678,22 +1851,17 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         }
 
         if (nextEvent.type === "output") {
-          const sanitized = sanitizeTerminalHistoryChunk(
+          // One parse yields both views: the scrollback strip (drops queries and
+          // responses) feeds history; the live strip (drops only responses,
+          // relaying queries the client answers) feeds the streamed data.
+          const sanitized = sanitizeTerminalChunkDual(
             session.pendingHistoryControlSequence,
             nextEvent.data,
-          );
-          // The live stream strips only terminal *responses* (spurious echo
-          // that would otherwise paint as garbage) while still relaying the
-          // queries the client's emulator answers. Same pending boundary.
-          const live = sanitizeTerminalHistoryChunk(
-            session.pendingHistoryControlSequence,
-            nextEvent.data,
-            { responsesOnly: true },
           );
           session.pendingHistoryControlSequence = sanitized.pendingControlSequence;
-          if (sanitized.visibleText.length > 0) {
+          if (sanitized.historyText.length > 0) {
             session.history = capHistory(
-              `${session.history}${sanitized.visibleText}`,
+              `${session.history}${sanitized.historyText}`,
               historyLineLimit,
             );
           }
@@ -1704,8 +1872,8 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
             threadId: session.threadId,
             terminalId: session.terminalId,
             sequence: eventStamp.sequence,
-            history: sanitized.visibleText.length > 0 ? session.history : null,
-            data: live.visibleText,
+            history: sanitized.historyText.length > 0 ? session.history : null,
+            data: sanitized.liveText,
           } as const;
         }
 
@@ -2529,8 +2697,10 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         terminalId,
       });
     }
+    const data = stripTerminalResponsesFromInput(input.data);
+    if (data.length === 0) return;
     yield* Effect.try({
-      try: () => process.write(input.data),
+      try: () => process.write(data),
       catch: (cause) =>
         new TerminalWriteError({
           threadId: input.threadId,
