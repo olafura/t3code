@@ -91,6 +91,8 @@ export function ChatView({
   const [diffStatus, setDiffStatus] = React.useState<DiffStatus>("loading");
   const [diffText, setDiffText] = React.useState("");
   const [diffView, setDiffView] = React.useState<DiffView>("unified");
+  // When a single changed file was clicked, scope the diff to it (cleared on turn nav).
+  const [diffFocusPath, setDiffFocusPath] = React.useState<string | null>(null);
   const diffScrollRef = React.useRef<ScrollBoxRenderable | null>(null);
   // Model picker (^K → m): fetched lazily on open.
   // A native-<select> picker for the composer controls (model / runtime / reasoning).
@@ -252,12 +254,13 @@ export function ChatView({
   }, [client, diffOpen, detail?.id, diffIndex, diffSelectedTurnCount, latestTurnCount]);
 
   // Open the diff viewer scoped to a specific turn (clicking a changed-files row).
-  const openDiffAtTurn = (turnCount: number) => {
+  const openDiffAtTurn = (turnCount: number, filePath?: string) => {
     const index = checkpoints.findIndex(
       (checkpoint) => checkpoint.checkpointTurnCount === turnCount,
     );
     setOverlay("none");
     setDiffIndex(index >= 0 ? index + 1 : 0);
+    setDiffFocusPath(filePath ?? null);
     setDiffOpen(true);
   };
 
@@ -870,8 +873,14 @@ export function ChatView({
       setDiffIndex(0);
       setDiffOpen(true);
     },
-    onDiffPrev: () => setDiffIndex((index) => (index <= 0 ? diffEntryCount - 1 : index - 1)),
-    onDiffNext: () => setDiffIndex((index) => (index + 1) % Math.max(diffEntryCount, 1)),
+    onDiffPrev: () => {
+      setDiffFocusPath(null);
+      setDiffIndex((index) => (index <= 0 ? diffEntryCount - 1 : index - 1));
+    },
+    onDiffNext: () => {
+      setDiffFocusPath(null);
+      setDiffIndex((index) => (index + 1) % Math.max(diffEntryCount, 1));
+    },
     onDiffScrollUp: () => diffScrollRef.current?.scrollBy({ x: 0, y: -SCROLL_STEP }),
     onDiffScrollDown: () => diffScrollRef.current?.scrollBy({ x: 0, y: SCROLL_STEP }),
     onDiffToggleView: () => setDiffView((view) => (view === "unified" ? "split" : "unified")),
@@ -1014,6 +1023,7 @@ export function ChatView({
             height={panesHeight}
             syntaxStyle={syntaxStyle}
             scrollRef={diffScrollRef}
+            {...(diffFocusPath ? { focusPath: diffFocusPath } : {})}
           />
         ) : (
           <MessagesTimeline
