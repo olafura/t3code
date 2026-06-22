@@ -1884,14 +1884,19 @@ function ChatViewContent(props: ChatViewProps) {
     : null;
   const activeThreadActivityRequestKeyRef = useRef(activeThreadActivityRequestKey);
   activeThreadActivityRequestKeyRef.current = activeThreadActivityRequestKey;
+  const liveThreadActivities = activeThread?.activities ?? EMPTY_ACTIVITIES;
+  // The live window's oldest activity is stable while new activities only
+  // append; it changes when the window is re-snapshotted (reconnect) or rows are
+  // removed (checkpoint revert), either of which can make prepended older pages
+  // stale or gappy — so reset the lazy-load state when it (or the thread) changes.
+  const liveOldestActivityId = liveThreadActivities[0]?.id ?? null;
   useEffect(() => {
     setOlderActivities([]);
     setOlderLoaded(false);
     setOlderHasMore(false);
     setLoadingOlderActivities(false);
-  }, [activeThreadActivityRequestKey]);
+  }, [activeThreadActivityRequestKey, liveOldestActivityId]);
 
-  const liveThreadActivities = activeThread?.activities ?? EMPTY_ACTIVITIES;
   const threadActivities = useMemo(
     () =>
       olderActivities.length > 0
@@ -1940,7 +1945,13 @@ function ChatViewContent(props: ChatViewProps) {
         }
         const page = result.value;
         setOlderActivities((prev) => {
+          // Dedup against both already-loaded older pages and the live window so
+          // an overlap at the window boundary can't leave duplicate ids (which
+          // would break timeline keys and work-log derivation).
           const seen = new Set(prev.map((activity) => activity.id));
+          for (const activity of liveThreadActivities) {
+            seen.add(activity.id);
+          }
           const fresh = page.activities.filter((activity) => !seen.has(activity.id));
           return [...fresh, ...prev];
         });
@@ -1960,6 +1971,7 @@ function ChatViewContent(props: ChatViewProps) {
     activeThreadActivityRequestKey,
     hasMoreOlderActivities,
     threadActivities,
+    liveThreadActivities,
     loadThreadActivities,
   ]);
 
