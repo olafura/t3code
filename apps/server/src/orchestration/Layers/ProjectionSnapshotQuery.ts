@@ -1,6 +1,7 @@
 import {
   ChatAttachment,
   CheckpointRef,
+  EventId,
   IsoDateTime,
   MessageId,
   NonNegativeInt,
@@ -125,9 +126,15 @@ const ThreadIdLookupInput = Schema.Struct({
  */
 const THREAD_DETAIL_ACTIVITY_WINDOW = 500;
 
-const ThreadActivitiesPageInput = Schema.Struct({
+const ThreadActivitiesBeforeSequenceInput = Schema.Struct({
   threadId: ThreadId,
   beforeSequence: Schema.Number,
+  limit: Schema.Number,
+});
+const ThreadActivitiesBeforeActivityInput = Schema.Struct({
+  threadId: ThreadId,
+  beforeCreatedAt: IsoDateTime,
+  beforeActivityId: EventId,
   limit: Schema.Number,
 });
 const ProjectionProjectLookupRowSchema = ProjectionProjectDbRowSchema;
@@ -866,7 +873,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             sequence DESC,
             created_at DESC,
             activity_id DESC
-          LIMIT ${THREAD_DETAIL_ACTIVITY_WINDOW}
+          -- One extra beyond the window so the caller can report hasMoreActivities.
+          LIMIT ${THREAD_DETAIL_ACTIVITY_WINDOW + 1}
         )
         ORDER BY
           sequence ASC,
@@ -877,10 +885,15 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
 
   // Older-than-cursor page for lazy-load. Returns rows newest-first (DESC) so a
   // simple LIMIT yields the page adjacent to the cursor; the caller reverses to
-  // ascending. COALESCE keeps legacy unsequenced rows (sequence NULL) orderable
-  // as the very oldest, so paging eventually reaches them.
+  // ascending. `sequence IS NULL` (legacy unsequenced) rows sort last under
+  // `sequence DESC` (SQLite orders NULLs last in DESC) — the very oldest — so
+  // paging eventually reaches them. `beforeSequence` is a NonNegativeInt, so
+  // `(sequence < beforeSequence OR sequence IS NULL)` is equivalent to the old
+  // `COALESCE(sequence, -1) < beforeSequence` but lets the
+  // (thread_id, sequence, created_at, activity_id) index satisfy the ORDER BY
+  // directly instead of forcing a filesort over the whole thread.
   const listThreadActivityRowsBeforeSequence = SqlSchema.findAll({
-    Request: ThreadActivitiesPageInput,
+    Request: ThreadActivitiesBeforeSequenceInput,
     Result: ProjectionThreadActivityDbRowSchema,
     execute: ({ threadId, beforeSequence, limit }) =>
       sql`
@@ -896,9 +909,49 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           created_at AS "createdAt"
         FROM projection_thread_activities
         WHERE thread_id = ${threadId}
-          AND COALESCE(sequence, -1) < ${beforeSequence}
+          AND (sequence < ${beforeSequence} OR sequence IS NULL)
         ORDER BY
-          COALESCE(sequence, -1) DESC,
+          sequence DESC,
+          created_at DESC,
+          activity_id DESC
+        LIMIT ${limit}
+      `,
+  });
+
+  // Legacy unsequenced (sequence NULL) rows are paged by a (created_at,
+  // activity_id) cursor. created_at is compared lexicographically as TEXT, which
+  // equals chronological order only because timestamps are canonical ISO-8601
+  // (always UTC `Z`, fixed millisecond precision) — the same invariant every
+  // `ORDER BY created_at` in this layer (including the detail window above)
+  // already relies on, so the cursor stays consistent with how rows are
+  // displayed. activity_id breaks created_at ties; its ordering is arbitrary but
+  // matches the window's `activity_id` tiebreak, so pages never skip or repeat.
+  const listUnsequencedThreadActivityRowsBeforeActivity = SqlSchema.findAll({
+    Request: ThreadActivitiesBeforeActivityInput,
+    Result: ProjectionThreadActivityDbRowSchema,
+    execute: ({ threadId, beforeCreatedAt, beforeActivityId, limit }) =>
+      sql`
+        SELECT
+          activity_id AS "activityId",
+          thread_id AS "threadId",
+          turn_id AS "turnId",
+          tone,
+          kind,
+          summary,
+          payload_json AS "payload",
+          sequence,
+          created_at AS "createdAt"
+        FROM projection_thread_activities
+        WHERE thread_id = ${threadId}
+          AND sequence IS NULL
+          AND (
+            created_at < ${beforeCreatedAt}
+            OR (
+              created_at = ${beforeCreatedAt}
+              AND activity_id < ${beforeActivityId}
+            )
+          )
+        ORDER BY
           created_at DESC,
           activity_id DESC
         LIMIT ${limit}
@@ -1254,6 +1307,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                 messages: messagesByThread.get(row.threadId) ?? [],
                 proposedPlans: proposedPlansByThread.get(row.threadId) ?? [],
                 activities: activitiesByThread.get(row.threadId) ?? [],
+                // The full snapshot is unwindowed, so there is never more to load.
+                hasMoreActivities: false,
                 checkpoints: checkpointsByThread.get(row.threadId) ?? [],
                 session: sessionsByThread.get(row.threadId) ?? null,
               }));
@@ -2062,7 +2117,14 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           return message;
         }),
         proposedPlans: proposedPlanRows.map(mapProposedPlanRow),
-        activities: activityRows.map(mapThreadActivityRow),
+        // The query fetches WINDOW+1 ascending rows; if it returned the extra
+        // one, older activities exist beyond the window — drop that oldest row
+        // and flag it so clients can lazy-load older history.
+        activities: (activityRows.length > THREAD_DETAIL_ACTIVITY_WINDOW
+          ? activityRows.slice(activityRows.length - THREAD_DETAIL_ACTIVITY_WINDOW)
+          : activityRows
+        ).map(mapThreadActivityRow),
+        hasMoreActivities: activityRows.length > THREAD_DETAIL_ACTIVITY_WINDOW,
         checkpoints: checkpointRows.map((row) => ({
           turnId: row.turnId,
           checkpointTurnCount: row.checkpointTurnCount,
@@ -2121,11 +2183,20 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         THREAD_DETAIL_ACTIVITY_WINDOW,
       );
       // Fetch one extra to detect whether older activities remain.
-      const rows = yield* listThreadActivityRowsBeforeSequence({
-        threadId: input.threadId,
-        beforeSequence: input.beforeSequence,
-        limit: limit + 1,
-      }).pipe(
+      const rowsEffect =
+        "beforeSequence" in input
+          ? listThreadActivityRowsBeforeSequence({
+              threadId: input.threadId,
+              beforeSequence: input.beforeSequence,
+              limit: limit + 1,
+            })
+          : listUnsequencedThreadActivityRowsBeforeActivity({
+              threadId: input.threadId,
+              beforeCreatedAt: input.beforeCreatedAt,
+              beforeActivityId: input.beforeActivityId,
+              limit: limit + 1,
+            });
+      const rows = yield* rowsEffect.pipe(
         Effect.mapError(
           toPersistenceSqlOrDecodeError(
             "ProjectionSnapshotQuery.getThreadActivitiesPage:query",

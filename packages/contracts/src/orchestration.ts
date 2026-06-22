@@ -363,6 +363,10 @@ export const OrchestrationThread = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed([])),
   ),
   activities: Schema.Array(OrchestrationThreadActivity),
+  // The detail snapshot windows `activities` to the most recent page; this is
+  // true when older activities exist beyond the window and can be lazy-loaded
+  // via the getThreadActivities RPC. Absent on lightweight (shell) threads.
+  hasMoreActivities: Schema.optional(Schema.Boolean),
   checkpoints: Schema.Array(OrchestrationCheckpointSummary),
   session: Schema.NullOr(OrchestrationSession),
 });
@@ -1241,15 +1245,25 @@ export type OrchestrationGetTurnDiffResult = typeof OrchestrationGetTurnDiffResu
 
 /**
  * Cursor-paginated load of a thread's OLDER activities (lazy-load / infinite
- * scroll). `beforeSequence` is the `sequence` of the oldest activity the client
- * currently holds; the server returns the page of activities immediately older
- * than it (chronological ascending) plus whether any remain beyond that.
+ * scroll). Sequenced activity uses `beforeSequence`, the `sequence` of the
+ * oldest activity the client currently holds. Legacy unsequenced activity uses
+ * the `(beforeCreatedAt, beforeActivityId)` pair from the oldest loaded
+ * activity. The server returns the page of activities immediately older than the
+ * cursor (chronological ascending) plus whether any remain beyond that.
  */
-export const OrchestrationGetThreadActivitiesInput = Schema.Struct({
-  threadId: ThreadId,
-  beforeSequence: NonNegativeInt,
-  limit: Schema.optional(NonNegativeInt),
-});
+export const OrchestrationGetThreadActivitiesInput = Schema.Union([
+  Schema.Struct({
+    threadId: ThreadId,
+    beforeSequence: NonNegativeInt,
+    limit: Schema.optional(NonNegativeInt),
+  }),
+  Schema.Struct({
+    threadId: ThreadId,
+    beforeCreatedAt: IsoDateTime,
+    beforeActivityId: EventId,
+    limit: Schema.optional(NonNegativeInt),
+  }),
+]);
 export type OrchestrationGetThreadActivitiesInput =
   typeof OrchestrationGetThreadActivitiesInput.Type;
 
