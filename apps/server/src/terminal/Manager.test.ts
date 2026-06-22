@@ -1,5 +1,5 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { assert, it } from "@effect/vitest";
+import { assert, describe, it } from "@effect/vitest";
 import {
   DEFAULT_TERMINAL_ID,
   type TerminalAttachStreamEvent,
@@ -28,6 +28,7 @@ import { expect } from "vite-plus/test";
 
 import * as ProcessRunner from "../processRunner.ts";
 import * as TerminalManager from "./Manager.ts";
+import { sanitizeTerminalHistoryChunk } from "./Manager.ts";
 import * as PtyAdapter from "./PtyAdapter.ts";
 
 class WaitForConditionError extends Data.TaggedError("WaitForConditionError")<{
@@ -1701,4 +1702,37 @@ it.layer(
       expect(process.killSignals).toContain("SIGKILL");
     }).pipe(Effect.provide(TestClock.layer())),
   );
+});
+
+describe("sanitizeTerminalHistoryChunk", () => {
+  const sanitize = (data: string, pending = "") => sanitizeTerminalHistoryChunk(pending, data);
+
+  it("strips DECRPM mode reports (CSI ? Pm ; Ps $ y) from history", () => {
+    const reports = "\x1b[?69;0$y\x1b[?2026;2$y\x1b[?2048;0$y";
+    const { visibleText } = sanitize(`before${reports}after`);
+    assert.equal(visibleText, "beforeafter");
+    // The residue users were seeing must not survive.
+    assert.ok(!visibleText.includes("$y"));
+    assert.ok(!visibleText.includes("2026"));
+  });
+
+  it("strips DECRQM mode queries (CSI ? Pm $ p) so replay can't re-trigger them", () => {
+    const { visibleText } = sanitize("x\x1b[?2026$p\x1b[?2048$py");
+    assert.equal(visibleText, "xy");
+  });
+
+  it("keeps ordinary text and non-report CSI sequences", () => {
+    // SGR colour (m) and cursor moves stay; a plain 'p'/'y' without the `$`
+    // intermediate is not a mode sequence and must be preserved.
+    const { visibleText } = sanitize("\x1b[31mred\x1b[0m \x1b[2Aup happy");
+    assert.equal(visibleText, "\x1b[31mred\x1b[0m \x1b[2Aup happy");
+  });
+
+  it("handles a report split across chunks via the pending buffer", () => {
+    const first = sanitize("tail\x1b[?69;0");
+    assert.equal(first.visibleText, "tail");
+    assert.notEqual(first.pendingControlSequence, "");
+    const second = sanitize("$ydone", first.pendingControlSequence);
+    assert.equal(second.visibleText, "done");
+  });
 });

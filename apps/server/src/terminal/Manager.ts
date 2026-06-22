@@ -878,6 +878,15 @@ function shouldStripCsiSequence(body: string, finalByte: string): boolean {
   if (finalByte === "c" && /^[>0-9;?]*$/.test(body)) {
     return true;
   }
+  // DECRQM mode queries (CSI ? Pm $ p) and DECRPM mode reports (CSI ? Pm ; Ps $ y)
+  // are terminal-capability negotiation, never display content. If they survive
+  // into the scrollback, a re-attaching emulator replays the query, answers it,
+  // and the answer echoes at the shell prompt — leaking "<mode>;<val>$y" onto the
+  // screen (the residue users see when returning to a terminal). The `$`
+  // intermediate is what distinguishes these from ordinary `p`/`y`-final CSIs.
+  if ((finalByte === "p" || finalByte === "y") && /^[?0-9;]*\$$/.test(body)) {
+    return true;
+  }
   return false;
 }
 
@@ -928,7 +937,7 @@ function findEscapeSequenceEndIndex(input: string, start: number): number | null
   return isEscapeFinalByte(input.charCodeAt(cursor)) ? cursor + 1 : start + 1;
 }
 
-function sanitizeTerminalHistoryChunk(
+export function sanitizeTerminalHistoryChunk(
   pendingControlSequence: string,
   data: string,
 ): { visibleText: string; pendingControlSequence: string } {
