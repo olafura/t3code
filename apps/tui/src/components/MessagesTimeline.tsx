@@ -16,11 +16,11 @@ import { clip } from "../format.ts";
 import { type ActionableProposedPlan, latestActionableProposedPlan } from "../proposedPlan.ts";
 import { WorkingIndicator } from "./WorkingIndicator.tsx";
 import {
-  buildTimeline,
   changedFilesByMessage,
+  deriveTimelineEntries,
   diffStat,
-  foldWorkLog,
   isWorking,
+  MAX_VISIBLE_WORK_LOG_ENTRIES,
   withTurnSeparators,
   workingStartedAt,
 } from "../timeline.ts";
@@ -69,6 +69,47 @@ function ToolRow({
       {statusGlyph ? <span fg={statusColor}>{` ${statusGlyph}`}</span> : null}
       {preview ? <span fg={palette.dim}>{`  ${clip(preview, previewRoom)}`}</span> : null}
     </text>
+  );
+}
+
+/**
+ * A group of consecutive tool calls (mirrors the web's WorkGroupSection): only the
+ * most recent MAX_VISIBLE_WORK_LOG_ENTRIES are shown, with a clickable
+ * "+N previous tool calls" expander; clicking reveals the rest ("Show fewer tool
+ * calls"). Each group keeps its own collapse state.
+ */
+function WorkGroupSection({
+  groupedEntries,
+  palette,
+  width,
+}: {
+  readonly groupedEntries: ReadonlyArray<WorkLogEntry>;
+  readonly palette: Palette;
+  readonly width: number;
+}): React.ReactNode {
+  const [expanded, setExpanded] = React.useState(false);
+  if (groupedEntries.length === 0) return null;
+  const hasOverflow = groupedEntries.length > MAX_VISIBLE_WORK_LOG_ENTRIES;
+  const visibleEntries =
+    hasOverflow && !expanded
+      ? groupedEntries.slice(-MAX_VISIBLE_WORK_LOG_ENTRIES)
+      : groupedEntries;
+  const hiddenCount = groupedEntries.length - visibleEntries.length;
+  return (
+    <box flexDirection="column" marginBottom={1}>
+      {visibleEntries.map((entry) => (
+        <ToolRow key={entry.id} entry={entry} palette={palette} width={width} />
+      ))}
+      {hasOverflow ? (
+        <box onMouseDown={() => setExpanded((value) => !value)}>
+          <text fg={palette.dim}>
+            {expanded
+              ? "  ⌃ Show fewer tool calls"
+              : `  ⌄ +${hiddenCount} previous tool call${hiddenCount === 1 ? "" : "s"}`}
+          </text>
+        </box>
+      ) : null}
+    </box>
   );
 }
 
@@ -171,7 +212,6 @@ export const MessagesTimeline = React.memo(function MessagesTimeline({
   approvals,
   approvalIndex,
   projectHint,
-  workLogCollapsed,
   width,
   height,
   syntaxStyle,
@@ -187,8 +227,6 @@ export const MessagesTimeline = React.memo(function MessagesTimeline({
   readonly approvals: ReadonlyArray<PendingApproval>;
   readonly approvalIndex: number;
   readonly projectHint: string | null;
-  /** When true, long tool-call runs collapse to their most recent few (^T toggles). */
-  readonly workLogCollapsed: boolean;
   readonly width: number;
   readonly height: number;
   readonly syntaxStyle: SyntaxStyle;
@@ -214,14 +252,8 @@ export const MessagesTimeline = React.memo(function MessagesTimeline({
   const startedAt = detail ? workingStartedAt(detail) : null;
 
   const timeline = React.useMemo(
-    () =>
-      detail
-        ? foldWorkLog(withTurnSeparators(buildTimeline(detail.messages, activityList)), {
-            collapsed: workLogCollapsed,
-            recent: 3,
-          })
-        : [],
-    [detail, activityList, workLogCollapsed],
+    () => (detail ? withTurnSeparators(deriveTimelineEntries(detail.messages, activityList)) : []),
+    [detail, activityList],
   );
   const checkpointByMessage = React.useMemo(
     () => (detail ? changedFilesByMessage(detail.checkpoints) : new Map()),
@@ -299,13 +331,6 @@ export const MessagesTimeline = React.memo(function MessagesTimeline({
           </box>
         ) : null}
         {timeline.map((row) => {
-          if (row.kind === "folded") {
-            return (
-              <box key={row.id} marginBottom={1}>
-                <text fg={palette.dim}>{`  ⋯ ${row.hiddenCount} earlier step${row.hiddenCount === 1 ? "" : "s"}  (^T expand)`}</text>
-              </box>
-            );
-          }
           if (row.kind === "separator") {
             const head = `── turn ${row.turnNumber} `;
             return (
@@ -314,11 +339,14 @@ export const MessagesTimeline = React.memo(function MessagesTimeline({
               </box>
             );
           }
-          if (row.kind === "tool") {
+          if (row.kind === "work") {
             return (
-              <box key={row.id} marginBottom={1}>
-                <ToolRow entry={row.entry} palette={palette} width={width} />
-              </box>
+              <WorkGroupSection
+                key={row.id}
+                groupedEntries={row.groupedEntries}
+                palette={palette}
+                width={width}
+              />
             );
           }
           const message = row.message;
