@@ -115,8 +115,6 @@ export function ChatView({
   const [newField, setNewField] = React.useState<"message" | "branch" | "worktree">("message");
   // Which pending approval ^A/^R act on; ↑/↓ move it while an approval is up.
   const [approvalIndex, setApprovalIndex] = React.useState(0);
-  // Collapse long tool-call runs in the conversation (^T toggles).
-  const [workLogExpanded, setWorkLogExpanded] = React.useState(false);
   // Lazy-loaded older activity pages, prepended ahead of the windowed live view
   // (server caps detail at the most recent ACTIVITY_WINDOW). Reset per thread.
   const [olderActivities, setOlderActivities] = React.useState<
@@ -713,7 +711,6 @@ export function ChatView({
         .catch((error) => store.setStatus(`implement failed: ${String(error)}`, "error"));
       store.setStatus("Implementing plan…", "busy");
     },
-    onToggleWorkLog: () => setWorkLogExpanded((expanded) => !expanded),
     onOpenActions: () => {
       if (!detail) {
         store.setStatus("Select a thread first.");
@@ -927,7 +924,6 @@ export function ChatView({
     "^E term",
     ...(actionablePlan ? ["^Y implement"] : []),
     ...(approvals.length > 0 ? [approvals.length > 1 ? "^A/^R approve (↑/↓)" : "^A/^R approve"] : []),
-    `^T tools ${workLogExpanded ? "▾" : "▸"}`,
     "^K actions",
     "^F find",
     ...(working ? ["Esc stop"] : []),
@@ -977,7 +973,6 @@ export function ChatView({
             approvals={approvals}
             approvalIndex={activeApprovalIndex}
             projectHint={selectedProjectTitle}
-            workLogCollapsed={!workLogExpanded}
             width={chatWidth}
             height={panesHeight}
             syntaxStyle={syntaxStyle}
