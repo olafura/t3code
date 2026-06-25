@@ -997,7 +997,13 @@ function findEscapeSequenceEndIndex(input: string, start: number): number | null
 // shell. Flattened residue has no introducer, so this only excludes framed ones.
 const FLATTENED_OSC_COLOUR = "(?<!\\x1b\\]|\\x9d)(?:1[012];|4;[0-9]+;)rgb:[0-9a-fA-F/]+";
 const FLATTENED_DECRPSS = "[01]\\$r[0-9;]{0,8}[a-zA-Z]";
-const FLATTENED_FRAGMENT = `(?:[0-9]+;[0-9]+\\$y|[0-9]+;[0-9]+c|${FLATTENED_OSC_COLOUR}|${FLATTENED_DECRPSS})`;
+// Flattened cursor-position report (CPR, `CSI <row>;<col> R`) — e.g. the
+// "<row>;<col>R" / ";1RR" runs a `CSI 6 n` query produces when the emulator's
+// reply echoes at an idle prompt. Row is optional and the echoed "R" can double,
+// so allow `[0-9]*;[0-9]+R+`. Only stripped in a RUN (like the DA `c` form) — a
+// lone `<n>;<n>R` is too ambiguous to drop on its own.
+const FLATTENED_CPR = "[0-9]*;[0-9]+R+";
+const FLATTENED_FRAGMENT = `(?:[0-9]+;[0-9]+\\$y|[0-9]+;[0-9]+c|${FLATTENED_CPR}|${FLATTENED_OSC_COLOUR}|${FLATTENED_DECRPSS})`;
 const FLATTENED_REPLY_RUN = new RegExp(
   `${FLATTENED_FRAGMENT}(?:[\\x07\\r n]{0,8}${FLATTENED_FRAGMENT})+`,
   "g",
@@ -1027,14 +1033,19 @@ function stripFlattenedModeReplyResidue(text: string): string {
 
 // Matches the terminal→host response sequences the browser emulator
 // auto-generates in answer to a program's capability queries: DECRPM "$y",
-// device-attributes "c", device-status "0n"/"3n", OSC 10/11/12 + OSC 4 palette
-// colour, and DECRPSS "$r". Each introducer accepts both the 7-bit ESC form and
-// the 8-bit C1 byte (CSI 0x9b, OSC 0x9d, DCS 0x90), and each terminator the BEL,
-// ESC\, or 8-bit ST (0x9c) — matching the output sanitizer so a C1-encoded reply
-// can't slip past the input filter the way the output walk already handles.
-// Cursor-position reports (CSI … R) and the bare query forms are intentionally
-// NOT matched — the DA alternation requires a parameter so `CSI ? c` / `CSI > c`
-// queries are kept.
+// device-attributes "c", device-status "0n"/"3n", cursor-position report
+// "<row>;<col>R" (CPR), OSC 10/11/12 + OSC 4 palette colour, and DECRPSS "$r".
+// Each introducer accepts both the 7-bit ESC form and the 8-bit C1 byte (CSI
+// 0x9b, OSC 0x9d, DCS 0x90), and each terminator the BEL, ESC\, or 8-bit ST
+// (0x9c) — matching the output sanitizer so a C1-encoded reply can't slip past.
+//
+// CPR (`CSI <row>;<col> R`) IS stripped: like the other capability replies it is
+// an emulator auto-answer (to `CSI 6 n`), and a prompt that re-queries on redraw
+// makes the echoed reply the worst runaway-flood source (issue: a prompt's
+// `;1RR` flood). The `;`-separated two-parameter form is required, so it never
+// matches a single keystroke or a bare `CSI R`. The bare DSR query forms are
+// kept — the DA alternation requires a parameter so `CSI ? c` / `CSI > c` and
+// `CSI 6 n` queries pass through.
 //
 // Focus in/out (CSI I / CSI O) are NOT stripped: a program that enabled focus
 // reporting (DECSET ?1004 — vim, tmux) legitimately expects them, and they are
@@ -1049,6 +1060,7 @@ const INPUT_TERMINAL_RESPONSE = new RegExp(
     `${INPUT_CSI}\\?[0-9;]*\\$y`,
     `${INPUT_CSI}[?>][0-9;]+c`,
     `${INPUT_CSI}\\??[03]n`,
+    `${INPUT_CSI}[0-9]*;[0-9]+R`,
     `${INPUT_OSC}(?:1[012];|4;[0-9]+;)rgb:[0-9a-fA-F/]*${INPUT_ST}`,
     `${INPUT_DCS}[01]?\\$r[^\\x1b\\x07\\x9c]*${INPUT_ST}`,
   ].join("|"),
@@ -1059,12 +1071,14 @@ const INPUT_TERMINAL_RESPONSE = new RegExp(
  * input before it reaches the PTY.
  *
  * The emulator answers the program's capability queries (DECRPM, device
- * attributes, device status, OSC colour) and emits focus events, sending them
- * all as input. At an idle prompt the shell has no reader for them, so it echoes
- * them — and a prompt that re-queries on redraw turns that into a runaway
- * feedback loop. A user never types these, so dropping them at the source breaks
- * the loop. Cursor-position reports and the bare query forms are kept, since
- * programs legitimately block on those. Exported for unit testing.
+ * attributes, device status, cursor position, OSC colour) and emits focus
+ * events, sending them all as input. At an idle prompt the shell has no reader
+ * for them, so it echoes them — and a prompt that re-queries on redraw turns
+ * that into a runaway feedback loop. A user never types these, so dropping them
+ * at the source breaks the loop. The cursor-position report (CPR) is the most
+ * aggressive offender (a prompt's `;1RR` flood), so its two-parameter
+ * `CSI <row>;<col> R` reply is stripped too; only the bare query forms
+ * (`CSI 6 n`, `CSI ? c`) are kept. Exported for unit testing.
  */
 export function stripTerminalResponsesFromInput(data: string): string {
   // Skip the regex unless the data carries a 7-bit ESC or one of the 8-bit C1

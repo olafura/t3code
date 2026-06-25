@@ -1763,6 +1763,14 @@ describe("sanitizeTerminalHistoryChunk", () => {
     assert.equal(sanitize("running a connection").visibleText, "running a connection");
   });
 
+  it("drops a flattened cursor-position-report (CPR) run, keeps a lone one", () => {
+    // The `;1RR`/`<row>;<col>R` flood from a prompt's CSI 6n re-query echoing at
+    // an idle prompt. Stripped as a run; a lone `<n>;<n>R` is ambiguous and kept.
+    assert.equal(sanitize(`prompt$ ${";1RR".repeat(40)}`).visibleText, "prompt$ ");
+    assert.equal(sanitize(`x ${"1;1R".repeat(20)} y`).visibleText, "x  y");
+    assert.equal(sanitize("at 12;5R done").visibleText, "at 12;5R done"); // lone, kept
+  });
+
   it("does not over-match ordinary text that merely looks reply-shaped", () => {
     // The colour alternative is pinned to OSC 10/11/12 and OSC 4 (`4;<idx>;`), so
     // an arbitrary "<n>;rgb:…" in program output survives.
@@ -1954,14 +1962,21 @@ describe("stripTerminalResponsesFromInput", () => {
     assert.equal(stripTerminalResponsesFromInput("\x1b[O"), "\x1b[O"); // focus out
   });
 
-  it("keeps real user input, cursor-position reports, and bare query forms", () => {
+  it("strips cursor-position report (CPR) replies that drive the prompt redraw flood", () => {
+    assert.equal(stripTerminalResponsesFromInput("\x1b[1;1R"), ""); // CPR reply
+    assert.equal(stripTerminalResponsesFromInput("\x1b[;1R"), ""); // empty-row CPR
+    assert.equal(stripTerminalResponsesFromInput("\x1b[1;1R\x1b[1;1R\x1b[1;1R"), ""); // flood
+    assert.equal(stripTerminalResponsesFromInput("\x9b5;10R"), ""); // 8-bit C1 CPR
+  });
+
+  it("keeps real user input, cursor moves, and bare query forms", () => {
     assert.equal(stripTerminalResponsesFromInput("ls -la\r"), "ls -la\r"); // keystrokes
     assert.equal(
       stripTerminalResponsesFromInput("\x1b[A\x1b[B\x1b[C\x1b[D"),
       "\x1b[A\x1b[B\x1b[C\x1b[D",
     ); // arrows
     assert.equal(stripTerminalResponsesFromInput("\x03"), "\x03"); // Ctrl-C
-    assert.equal(stripTerminalResponsesFromInput("\x1b[5;10R"), "\x1b[5;10R"); // CPR kept
+    assert.equal(stripTerminalResponsesFromInput("\x1b[1;5H"), "\x1b[1;5H"); // cursor-move (H, not CPR)
     assert.equal(stripTerminalResponsesFromInput("\x1b[c"), "\x1b[c"); // bare DA query kept
     assert.equal(stripTerminalResponsesFromInput("\x1b[>c"), "\x1b[>c"); // bare secondary DA query kept
     assert.equal(stripTerminalResponsesFromInput("\x1b[6n"), "\x1b[6n"); // DSR query kept
