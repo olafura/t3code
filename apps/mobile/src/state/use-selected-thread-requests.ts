@@ -106,7 +106,7 @@ export function useSelectedThreadRequests() {
   const activePendingApprovals = pendingRequests.approvals;
   const activePendingApproval = activePendingApprovals[0] ?? null;
   const activePendingUserInputs = pendingRequests.userInputs;
-  const activePendingUserInput = activePendingUserInputs[0] ?? null;
+  const activePendingUserInput = activePendingUserInputs.at(-1) ?? null;
   const questionServerConfigs = useServerConfigs();
   const attachmentDrafts = useAtomValue(composerDraftsAtom);
   const preparationCounts = useAtomValue(questionAttachmentPreparationAtom);
