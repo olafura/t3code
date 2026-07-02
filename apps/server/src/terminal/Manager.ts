@@ -927,81 +927,238 @@ function isCsiFinalByte(codePoint: number): boolean {
   return codePoint >= 0x40 && codePoint <= 0x7e;
 }
 
+// ─── Canonical terminal capability-sequence grammar ─────────────────────────
+//
+// Single source of truth for every capability sequence the sanitizer knows.
+// ALL matching layers derive from this table — the framed strip rules for the
+// scrollback and live views, the client-input reply filter, and the flattened
+// residue patterns — so a sequence type added here is wired into every layer
+// at once and the layers cannot drift out of sync (the recurring review
+// finding class: "handled in layer X but missed in layer Y").
+//
+// Semantics per entry:
+//   response (terminal→host): spurious echo in output — stripped from history
+//     AND live when `stripFromOutput` (OSC 4 rgb is the exception: in output
+//     that shape is the legitimate set-palette command); stripped from client
+//     input via `input` (the emulator auto-reply that feeds the idle-prompt
+//     echo loop; null relays it).
+//   query (host→terminal): stripped from scrollback (a replay would re-trigger
+//     the emulator's answer) but relayed live so the client answers it.
+//   flattened: the reply's parameters echoed as visible text once the shell
+//     flattened away the introducer; stripped in runs, and alone only when
+//     `loneStrippable` (unambiguous shapes).
+//
+// `samples` hold concrete bodies for the cross-layer invariant tests: every
+// layer is exercised against every sample in 7-bit and 8-bit framings, so a
+// half-wired entry fails the suite instead of shipping.
+export interface TerminalSequenceDescriptor {
+  readonly name: string;
+  readonly kind: "csi" | "osc" | "dcs";
+  readonly response?: {
+    /** Framed body (CSI: full body incl. final byte; OSC/DCS: content prefix). */
+    readonly body: string;
+    readonly stripFromOutput: boolean;
+    /** Input-filter body (null = relayed in input). */
+    readonly input: string | null;
+    readonly samples: ReadonlyArray<string>;
+  };
+  readonly query?: {
+    readonly body: string;
+    readonly samples: ReadonlyArray<string>;
+  };
+  readonly flattened?: {
+    readonly source: string;
+    readonly loneStrippable: boolean;
+    readonly samples: ReadonlyArray<string>;
+  };
+}
+
+export const TERMINAL_SEQUENCE_GRAMMAR: ReadonlyArray<TerminalSequenceDescriptor> = [
+  {
+    name: "DECRPM mode report / DECRQM query",
+    kind: "csi",
+    response: {
+      body: "[?0-9;]*\\$y",
+      stripFromOutput: true,
+      input: "\\?[0-9;]*\\$y",
+      samples: ["?2026;2$y", "?69;0$y"],
+    },
+    query: { body: "[?0-9;]*\\$p", samples: ["?2026$p"] },
+    flattened: {
+      source: "[0-9]+;[0-9]+\\$y",
+      loneStrippable: true,
+      samples: ["2026;2$y", "69;0$y"],
+    },
+  },
+  {
+    name: "device attributes (primary/secondary DA)",
+    kind: "csi",
+    response: {
+      // Responses carry parameters; the bare `CSI c` / `CSI ? c` / `CSI > c`
+      // query forms deliberately do NOT match (covered by `query` below).
+      body: "(?:\\?[0-9;]+|>[0-9]+;[0-9;]+)c",
+      stripFromOutput: true,
+      input: "[?>][0-9;]+c",
+      samples: ["?1;2c", ">0;276;0c"],
+    },
+    query: { body: "[>0-9;?]*c", samples: ["c", ">c", "?c"] },
+    flattened: {
+      // Two or three params, the `>` sometimes preserved by the echo. Run-only:
+      // a lone "1;2c" is indistinguishable from ordinary text.
+      source: ">?[0-9]+;[0-9]+(?:;[0-9]+)?c",
+      loneStrippable: false,
+      samples: ["1;2c", ">0;276;0c", "0;276;0c"],
+    },
+  },
+  {
+    name: "device status report (DSR)",
+    kind: "csi",
+    response: {
+      body: "\\??[03]n",
+      stripFromOutput: true,
+      input: "\\??[03]n",
+      samples: ["0n", "3n", "?0n"],
+    },
+    // Any other `n`-final CSI (`CSI 5 n`, `CSI 6 n`, DEC forms) is a query —
+    // `[^]*` keeps scrollback stripping every n-final CSI, as it always has.
+    query: { body: "[^]*n", samples: ["5n", "6n"] },
+  },
+  {
+    name: "cursor position report (CPR / DECXCPR)",
+    kind: "csi",
+    response: {
+      body: "[0-9;?]*R",
+      stripFromOutput: true,
+      // Input requires the two-parameter reply shape so a bare `CSI R` or
+      // anything keystroke-like is never eaten.
+      input: "\\??[0-9]*;[0-9]+R",
+      samples: ["1;1R", "?5;10R", ";1R"],
+    },
+    flattened: {
+      // The `;1RR` prompt-flood shape; the echoed "R" can double. Run-only.
+      source: "[0-9]*;[0-9]+R+",
+      loneStrippable: false,
+      samples: [";1RR", "1;1R"],
+    },
+  },
+  {
+    name: "OSC 10/11/12 colour",
+    kind: "osc",
+    response: {
+      body: "(?:10|11|12);rgb:",
+      stripFromOutput: true,
+      input: "1[012];rgb:[0-9a-fA-F/]*",
+      samples: ["11;rgb:1616/1616/1616", "10;rgb:ffff/ffff/ffff"],
+    },
+    query: { body: "(?:10|11|12);\\?", samples: ["11;?"] },
+    flattened: {
+      // Pinned to the real OSC numbers (never an unbounded `(?:[0-9]+;)+` run —
+      // that both over-matched ordinary "<n>;rgb:…" text and was a ReDoS). The
+      // lookbehind skips a colour run still inside an intact OSC frame the
+      // escape walk chose to keep.
+      source: "(?<!\\x1b\\]|\\x9d)1[012];rgb:[0-9a-fA-F/]+",
+      loneStrippable: true,
+      samples: ["11;rgb:1616/1616/1616"],
+    },
+  },
+  {
+    name: "OSC 4 palette colour",
+    kind: "osc",
+    response: {
+      // In OUTPUT `OSC 4;<idx>;rgb:` is the legitimate set-palette command
+      // (themes) — never stripped there. The reply shape only travels as
+      // client input, where it is dropped.
+      body: "4;[0-9]+;rgb:",
+      stripFromOutput: false,
+      input: "4;[0-9]+;rgb:[0-9a-fA-F/]*",
+      samples: ["4;1;rgb:1616/1616/1616"],
+    },
+    query: { body: "4;[0-9]+;\\?", samples: ["4;1;?"] },
+    flattened: {
+      // Same framed-lookbehind guard as OSC 10/11/12: a kept framed OSC 4
+      // set-palette command must not have its inner payload deleted.
+      source: "(?<!\\x1b\\]|\\x9d)4;[0-9]+;rgb:[0-9a-fA-F/]+",
+      loneStrippable: true,
+      samples: ["4;0;rgb:1818/1e1e/2626"],
+    },
+  },
+  {
+    name: "DECRPSS / DECRQSS status strings",
+    kind: "dcs",
+    response: {
+      body: "[01]?\\$r",
+      stripFromOutput: true,
+      input: "[01]?\\$r[^\\x1b\\x07\\x9c]*",
+      samples: ["1$r0m"],
+    },
+    query: { body: "\\$q", samples: ["$qm"] },
+    flattened: {
+      // Length-bounded payload: unbounded `[0-9;]*` both ate following number
+      // runs of legitimate text and was a backtracking hazard.
+      source: "[01]\\$r[0-9;]{0,8}[a-zA-Z]",
+      loneStrippable: true,
+      samples: ["1$r0m"],
+    },
+  },
+];
+
+// One composed matcher per (kind × class), derived once at module load. CSI
+// bodies (incl. final byte) must match fully; OSC/DCS bodies are content
+// prefixes, mirroring how the walk hands them over.
+function composeFramedMatcher(
+  kind: TerminalSequenceDescriptor["kind"],
+  sources: ReadonlyArray<string>,
+): RegExp | null {
+  if (sources.length === 0) return null;
+  const alternation = sources.map((source) => `(?:${source})`).join("|");
+  return kind === "csi" ? new RegExp(`^(?:${alternation})$`) : new RegExp(`^(?:${alternation})`);
+}
+
+function framedMatchers(kind: TerminalSequenceDescriptor["kind"]) {
+  const entries = TERMINAL_SEQUENCE_GRAMMAR.filter((descriptor) => descriptor.kind === kind);
+  return {
+    response: composeFramedMatcher(
+      kind,
+      entries.flatMap((d) => (d.response?.stripFromOutput ? [d.response.body] : [])),
+    ),
+    query: composeFramedMatcher(
+      kind,
+      entries.flatMap((d) => (d.query ? [d.query.body] : [])),
+    ),
+  };
+}
+
+const CSI_MATCHERS = framedMatchers("csi");
+const OSC_MATCHERS = framedMatchers("osc");
+const DCS_MATCHERS = framedMatchers("dcs");
+
 /**
  * Whether a CSI sequence should be dropped from the sanitized terminal stream.
- *
- * `responsesOnly` strips ONLY terminal→host *responses* (spurious echo a
- * program's output should never contain) while leaving host→terminal *queries*
- * intact — the live stream uses it so the client's emulator still receives the
- * queries it must answer (DA, DSR, DECRQM, OSC colour). The default
- * (responsesOnly=false, for replayed scrollback) also strips queries, so a
- * replay can't re-trigger one whose answer would echo at the prompt.
+ * `responsesOnly` (the live view) strips only terminal→host responses; the
+ * default (scrollback) also strips host→terminal queries so a replay can't
+ * re-trigger one. Derived from {@link TERMINAL_SEQUENCE_GRAMMAR}.
  */
 function shouldStripCsiSequence(body: string, finalByte: string, responsesOnly = false): boolean {
-  // Cursor-position report (CSI r;c R) — always a response.
-  if (finalByte === "R" && /^[0-9;?]*$/.test(body)) {
-    return true;
-  }
-  // Device-status report. `0 n`/`3 n` (optionally DEC `?`) are responses; `5 n`/
-  // `6 n` are queries the client must still answer.
-  if (finalByte === "n") {
-    return responsesOnly ? /^\??[03]$/.test(body) : true;
-  }
-  // Device attributes. `CSI ? … c` / `CSI > … ; … c` are responses; the bare
-  // `CSI c` / `CSI 0 c` / `CSI > c` forms are queries.
-  if (finalByte === "c") {
-    if (responsesOnly) return /^\?[0-9;]+$/.test(body) || /^>[0-9]+;[0-9;]+$/.test(body);
-    return /^[>0-9;?]*$/.test(body);
-  }
-  // DECRPM mode report (CSI ? Pm ; Ps $ y) — a response. The `$ p` form is the
-  // DECRQM query, kept in the live stream. The `$` intermediate distinguishes
-  // these from ordinary `p`/`y`-final CSIs.
-  if (finalByte === "y" && /^[?0-9;]*\$$/.test(body)) {
-    return true;
-  }
-  if (finalByte === "p" && /^[?0-9;]*\$$/.test(body)) {
-    return !responsesOnly;
-  }
+  const full = `${body}${finalByte}`;
+  if (CSI_MATCHERS.response?.test(full)) return true;
+  if (!responsesOnly && CSI_MATCHERS.query?.test(full)) return true;
+  return false;
+}
+
+/** OSC counterpart of {@link shouldStripCsiSequence} (tests content, not body+final). */
+function shouldStripOscSequence(content: string, responsesOnly = false): boolean {
+  if (OSC_MATCHERS.response?.test(content)) return true;
+  if (!responsesOnly && OSC_MATCHERS.query?.test(content)) return true;
   return false;
 }
 
 /**
- * Whether an OSC sequence should be dropped. OSC 10/11/12 colour and the OSC 4
- * palette *query* are sanitized: `rgb:…` (10/11/12) is a terminal response and
- * `?` a host query — queries are relayed live (`responsesOnly`) so the client
- * still answers them, and stripped from scrollback so a replay can't re-trigger
- * them (the emulator's answer would echo at the prompt).
- *
- * OSC 4 `rgb:` payloads are intentionally NOT stripped from output: in the
- * output direction that shape is the legitimate set-palette-colour command
- * (themes), not a response — the reply form only travels as client *input*,
- * where {@link stripTerminalResponsesFromInput} drops it.
- */
-function shouldStripOscSequence(content: string, responsesOnly = false): boolean {
-  if (responsesOnly) {
-    // Live: strip only responses; relay all queries.
-    return /^(10|11|12);rgb:/.test(content);
-  }
-  // Scrollback: also strip the queries (OSC 10/11/12 `?` and OSC 4 `<idx>;?`).
-  return /^(10|11|12);(?:\?|rgb:)/.test(content) || /^4;[0-9]+;\?/.test(content);
-}
-
-/**
- * Whether a DCS sequence should be dropped (the `$` intermediate marks the
- * capability-negotiation forms, as with CSI):
- *   - DECRPSS status reply (DCS Ps $ r D…D ST) — a terminal→host response,
- *     stripped from both views (it must never survive as visible text).
- *   - DECRQSS status query (DCS $ q D…D ST) — a host→terminal query, stripped
- *     from scrollback so a replay can't re-trigger it, but relayed live so the
- *     client still answers. Other DCS (sixel, DECUDK, …) is left untouched.
+ * DCS counterpart. Only the `$`-intermediate capability-negotiation forms are
+ * classified; other DCS (sixel, DECUDK, tmux passthrough) is left untouched.
  */
 function shouldStripDcsSequence(content: string, responsesOnly = false): boolean {
-  if (/^[01]?\$r/.test(content)) {
-    return true;
-  }
-  if (/^\$q/.test(content)) {
-    return !responsesOnly;
-  }
+  if (DCS_MATCHERS.response?.test(content)) return true;
+  if (!responsesOnly && DCS_MATCHERS.query?.test(content)) return true;
   return false;
 }
 
@@ -1048,47 +1205,25 @@ function findEscapeSequenceEndIndex(input: string, start: number): number | null
   return isEscapeFinalByte(input.charCodeAt(cursor)) ? cursor + 1 : start + 1;
 }
 
-// A flattened terminal-reply fragment (the ESC introducer is already gone):
-// DECRPM "<m>;<v>$y", device-attributes "<m>;<v>c", OSC 10/11/12 or OSC 4 palette
-// colour ("1[012];rgb:…" / "4;<idx>;rgb:…"), or DECRPSS "<0|1>$r<setting>" (e.g.
-// the "1$r0m" tail from #1238).
-//
-// The colour alternative is pinned to the real OSC numbers (10/11/12, or 4 with
-// an index) rather than an unbounded "(?:[0-9]+;)+" run — that both stops it
-// matching ordinary "<n>;rgb:…" text and removes a catastrophic-backtracking
-// (ReDoS) path on a long ";"-separated digit run that never reaches "rgb:". The
-// DECRPSS setting is length-bounded for the same reason and to stop it eating a
-// following digit/semicolon run of legitimate text.
-//
-// The negative lookbehind skips a colour run that is still inside an intact OSC
-// frame: the escape-aware walk keeps a framed OSC 4 palette report (`shouldStrip
-// OscSequence` only strips OSC 10/11/12), so without this guard the flattened
-// pass would delete the inner `4;<idx>;rgb:…` and leave a broken `ESC ] … ST`
-// shell. Flattened residue has no introducer, so this only excludes framed ones.
-const FLATTENED_OSC_COLOUR = "(?<!\\x1b\\]|\\x9d)(?:1[012];|4;[0-9]+;)rgb:[0-9a-fA-F/]+";
-const FLATTENED_DECRPSS = "[01]\\$r[0-9;]{0,8}[a-zA-Z]";
-// Flattened cursor-position report (CPR, `CSI <row>;<col> R`) — e.g. the
-// "<row>;<col>R" / ";1RR" runs a `CSI 6 n` query produces when the emulator's
-// reply echoes at an idle prompt. Row is optional and the echoed "R" can double,
-// so allow `[0-9]*;[0-9]+R+`. Only stripped in a RUN (like the DA `c` form) — a
-// lone `<n>;<n>R` is too ambiguous to drop on its own.
-const FLATTENED_CPR = "[0-9]*;[0-9]+R+";
-// Flattened device-attributes reply: the primary form flattens to "<m>;<v>c"
-// and the secondary (`CSI > Pp;Pv;Pc c`) to ">0;276;0c" — two or three params,
-// optionally keeping the ">" the shell echo sometimes preserves. Run-only, like
-// the other ambiguous forms.
-const FLATTENED_DA = ">?[0-9]+;[0-9]+(?:;[0-9]+)?c";
-const FLATTENED_FRAGMENT = `(?:[0-9]+;[0-9]+\\$y|${FLATTENED_DA}|${FLATTENED_CPR}|${FLATTENED_OSC_COLOUR}|${FLATTENED_DECRPSS})`;
-// Fragments in an echoed run are adjacent or separated by BEL/CR/a flattened
-// DSR "n" tail — never by a space (verified against the captured logs). A space
-// is ordinary text: including it would let a run bridge across real words and
-// delete an ambiguous lone token next to a genuine one ("see 1;2c 2026;2$y").
+// Flattened-residue patterns, derived from the grammar. RUN strips 2+
+// fragments in sequence; TOKEN additionally strips the unambiguous shapes even
+// in isolation. Fragments in an echoed run are adjacent or separated by BEL/CR/
+// a flattened DSR "n" tail — never by a space (verified against the captured
+// logs): a space is ordinary text, and including it would let a run bridge
+// across real words and delete an ambiguous lone token next to a genuine one
+// ("see 1;2c 2026;2$y").
+const FLATTENED_SOURCES = TERMINAL_SEQUENCE_GRAMMAR.flatMap((descriptor) =>
+  descriptor.flattened ? [descriptor.flattened] : [],
+);
+const FLATTENED_FRAGMENT = `(?:${FLATTENED_SOURCES.map((f) => `(?:${f.source})`).join("|")})`;
 const FLATTENED_REPLY_RUN = new RegExp(
   `${FLATTENED_FRAGMENT}(?:[\\x07\\rn]{0,8}${FLATTENED_FRAGMENT})+`,
   "g",
 );
 const FLATTENED_REPLY_TOKEN = new RegExp(
-  `(?:${FLATTENED_OSC_COLOUR}|[0-9]+;[0-9]+\\$y|${FLATTENED_DECRPSS})`,
+  `(?:${FLATTENED_SOURCES.filter((f) => f.loneStrippable)
+    .map((f) => `(?:${f.source})`)
+    .join("|")})`,
   "g",
 );
 /**
@@ -1135,16 +1270,18 @@ const INPUT_OSC = "(?:\\x1b\\]|\\x9d)";
 const INPUT_DCS = "(?:\\x1bP|\\x90)";
 const INPUT_ST = "(?:\\x07|\\x1b\\\\|\\x9c)";
 const INPUT_TERMINAL_RESPONSE = new RegExp(
-  [
-    `${INPUT_CSI}\\?[0-9;]*\\$y`,
-    `${INPUT_CSI}[?>][0-9;]+c`,
-    `${INPUT_CSI}\\??[03]n`,
-    // CPR reply — plain (`CSI r;c R`, answers CSI 6 n) and DEC-private
-    // (`CSI ? r;c R`, answers CSI ? 6 n / DECXCPR), matching the output strip.
-    `${INPUT_CSI}\\??[0-9]*;[0-9]+R`,
-    `${INPUT_OSC}(?:1[012];|4;[0-9]+;)rgb:[0-9a-fA-F/]*${INPUT_ST}`,
-    `${INPUT_DCS}[01]?\\$r[^\\x1b\\x07\\x9c]*${INPUT_ST}`,
-  ].join("|"),
+  TERMINAL_SEQUENCE_GRAMMAR.flatMap((descriptor) => {
+    const input = descriptor.response?.input;
+    if (!input) return [];
+    switch (descriptor.kind) {
+      case "csi":
+        return [`${INPUT_CSI}(?:${input})`];
+      case "osc":
+        return [`${INPUT_OSC}(?:${input})${INPUT_ST}`];
+      case "dcs":
+        return [`${INPUT_DCS}(?:${input})${INPUT_ST}`];
+    }
+  }).join("|"),
   "g",
 );
 /**

@@ -32,6 +32,7 @@ import {
   sanitizePersistedTerminalHistory,
   sanitizeTerminalHistoryChunk,
   stripTerminalResponsesFromInput,
+  TERMINAL_SEQUENCE_GRAMMAR,
 } from "./Manager.ts";
 import * as PtyAdapter from "./PtyAdapter.ts";
 
@@ -2183,4 +2184,165 @@ describe("stripTerminalResponsesFromInput", () => {
     assert.equal(stripTerminalResponsesFromInput("\x1b[>c"), "\x1b[>c"); // bare secondary DA query kept
     assert.equal(stripTerminalResponsesFromInput("\x1b[6n"), "\x1b[6n"); // DSR query kept
   });
+});
+
+// ─── Cross-layer grammar invariants ──────────────────────────────────────────
+// Every sample in TERMINAL_SEQUENCE_GRAMMAR is exercised against every layer in
+// every framing. These encode the consistency laws the individual layers must
+// obey — the class of defect earlier review rounds kept finding ("handled in
+// layer X, missed in layer Y") fails here instead of shipping.
+describe("terminal sequence grammar invariants", () => {
+  const historyView = (data: string) => sanitizeTerminalHistoryChunk("", data).visibleText;
+  const liveView = (data: string) =>
+    sanitizeTerminalHistoryChunk("", data, { responsesOnly: true }).visibleText;
+
+  type Kind = (typeof TERMINAL_SEQUENCE_GRAMMAR)[number]["kind"];
+  // 7-bit, 8-bit-C1, and (for string sequences) alternate-terminator framings.
+  const framings = (kind: Kind, body: string): ReadonlyArray<[label: string, framed: string]> => {
+    switch (kind) {
+      case "csi":
+        return [
+          ["7-bit", `\x1b[${body}`],
+          ["8-bit", `\x9b${body}`],
+        ];
+      case "osc":
+        return [
+          ["7-bit BEL", `\x1b]${body}\x07`],
+          ["7-bit ST", `\x1b]${body}\x1b\\`],
+          ["8-bit", `\x9d${body}\x9c`],
+        ];
+      case "dcs":
+        return [
+          ["7-bit ST", `\x1bP${body}\x1b\\`],
+          ["7-bit BEL", `\x1bP${body}\x07`],
+          ["8-bit", `\x90${body}\x9c`],
+        ];
+    }
+  };
+  const strippedBy = (view: (data: string) => string, framed: string) =>
+    view(`a${framed}b`) === "ab";
+  const keptBy = (view: (data: string) => string, framed: string) =>
+    view(`a${framed}b`) === `a${framed}b`;
+
+  for (const descriptor of TERMINAL_SEQUENCE_GRAMMAR) {
+    describe(descriptor.name, () => {
+      const response = descriptor.response;
+      if (response) {
+        it("response: output views obey stripFromOutput in every framing", () => {
+          for (const sample of response.samples) {
+            for (const [label, framed] of framings(descriptor.kind, sample)) {
+              if (response.stripFromOutput) {
+                assert.equal(strippedBy(historyView, framed), true, `history keeps ${label} ${sample}`);
+                assert.equal(strippedBy(liveView, framed), true, `live keeps ${label} ${sample}`);
+              } else {
+                assert.equal(keptBy(historyView, framed), true, `history strips ${label} ${sample}`);
+                assert.equal(keptBy(liveView, framed), true, `live strips ${label} ${sample}`);
+              }
+            }
+          }
+        });
+
+        it("response: input filter obeys `input` in every framing", () => {
+          for (const sample of response.samples) {
+            for (const [label, framed] of framings(descriptor.kind, sample)) {
+              const filtered = stripTerminalResponsesFromInput(`a${framed}b`);
+              if (response.input !== null) {
+                assert.equal(filtered, "ab", `input relays ${label} ${sample}`);
+              } else {
+                assert.equal(filtered, `a${framed}b`, `input strips ${label} ${sample}`);
+              }
+            }
+          }
+        });
+
+        it("law: a response stripped from input is stripped from scrollback (OSC 4 rgb is the one documented exception)", () => {
+          // Replay safety: if the input filter drops the emulator reply, the
+          // persisted scrollback must never carry the framed reply either —
+          // except OSC 4 rgb, whose output shape is the legitimate set-palette
+          // command and MUST survive output.
+          const exception = !response.stripFromOutput;
+          for (const sample of response.samples) {
+            for (const [label, framed] of framings(descriptor.kind, sample)) {
+              if (response.input !== null && !exception) {
+                assert.equal(strippedBy(historyView, framed), true, `input-stripped ${label} ${sample} survives scrollback`);
+              }
+            }
+          }
+        });
+      }
+
+      const query = descriptor.query;
+      if (query) {
+        it("query: stripped from scrollback, relayed live, untouched in input", () => {
+          for (const sample of query.samples) {
+            for (const [label, framed] of framings(descriptor.kind, sample)) {
+              assert.equal(strippedBy(historyView, framed), true, `history keeps query ${label} ${sample}`);
+              assert.equal(keptBy(liveView, framed), true, `live strips query ${label} ${sample}`);
+              assert.equal(
+                stripTerminalResponsesFromInput(`a${framed}b`),
+                `a${framed}b`,
+                `input strips query ${label} ${sample}`,
+              );
+            }
+          }
+        });
+      }
+
+      const flattened = descriptor.flattened;
+      if (flattened) {
+        it("flattened: a run always strips; a lone token strips iff loneStrippable", () => {
+          for (const sample of flattened.samples) {
+            const run = `${sample}${sample}`;
+            assert.equal(historyView(`a ${run} b`), "a  b", `run survives history: ${sample}`);
+            assert.equal(liveView(`a ${run} b`), "a  b", `run survives live: ${sample}`);
+            if (flattened.loneStrippable) {
+              assert.equal(historyView(`a ${sample} b`), "a  b", `lone token survives: ${sample}`);
+            } else {
+              assert.equal(historyView(`a ${sample} b`), `a ${sample} b`, `ambiguous lone token stripped: ${sample}`);
+            }
+          }
+        });
+      }
+
+      it("law: 7-bit and 8-bit framings behave identically in every layer", () => {
+        const bodies = [
+          ...(response?.samples ?? []),
+          ...(query?.samples ?? []),
+        ];
+        for (const sample of bodies) {
+          const framed = framings(descriptor.kind, sample);
+          const reference = framed[0];
+          if (!reference) continue;
+          for (const [label, form] of framed.slice(1)) {
+            for (const [layer, view] of [
+              ["history", historyView],
+              ["live", liveView],
+              ["input", (data: string) => stripTerminalResponsesFromInput(data)],
+            ] as const) {
+              assert.equal(
+                view(`a${form}b`) === "ab",
+                view(`a${reference[1]}b`) === "ab",
+                `${layer} disagrees between ${reference[0]} and ${label} for ${sample}`,
+              );
+            }
+          }
+        }
+      });
+
+      it("law: sanitizing is idempotent over every framed sample", () => {
+        const bodies = [
+          ...(response?.samples ?? []),
+          ...(query?.samples ?? []),
+        ];
+        for (const sample of bodies) {
+          for (const [label, framed] of framings(descriptor.kind, sample)) {
+            const once = historyView(`a${framed}b`);
+            assert.equal(historyView(once), once, `history not idempotent for ${label} ${sample}`);
+            const live = liveView(`a${framed}b`);
+            assert.equal(liveView(live), live, `live not idempotent for ${label} ${sample}`);
+          }
+        }
+      });
+    });
+  }
 });
