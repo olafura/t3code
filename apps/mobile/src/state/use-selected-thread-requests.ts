@@ -85,9 +85,9 @@ export function useSelectedThreadRequests() {
     [selectedThread],
   );
   const activePendingApprovals = pendingRequests.approvals;
-  const activePendingApproval = activePendingApprovals[0] ?? null;
+  const activePendingApproval = activePendingApprovals.at(-1) ?? null;
   const activePendingUserInputs = pendingRequests.userInputs;
-  const activePendingUserInput = activePendingUserInputs[0] ?? null;
+  const activePendingUserInput = activePendingUserInputs.at(-1) ?? null;
   const activePendingUserInputDrafts =
     activePendingUserInput && selectedThreadShell
       ? (userInputDraftsByRequestKey[
