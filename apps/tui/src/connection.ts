@@ -358,10 +358,20 @@ export interface TuiClient {
   readonly getTurnDiff: (threadId: ThreadId, toTurnCount: number) => Promise<string>;
   /** Fetch the cumulative diff of all changes in the thread up to `toTurnCount`. */
   readonly getFullThreadDiff: (threadId: ThreadId, toTurnCount: number) => Promise<string>;
-  /** Lazy-load the page of activities immediately older than `beforeSequence`. */
+  /**
+   * Lazy-load the page of activities immediately older than the cursor.
+   * Sequenced activity pages by `beforeSequence`; legacy/unsequenced activity
+   * (the common case — `sequence` is absent on most rows) pages by the
+   * `(beforeCreatedAt, beforeActivityId)` keyset, matching web/mobile.
+   */
   readonly getThreadActivities: (
     threadId: ThreadId,
-    beforeSequence: number,
+    cursor:
+      | { readonly beforeSequence: number }
+      | {
+          readonly beforeCreatedAt: OrchestrationThreadActivity["createdAt"];
+          readonly beforeActivityId: OrchestrationThreadActivity["id"];
+        },
   ) => Promise<{
     readonly activities: ReadonlyArray<OrchestrationThreadActivity>;
     readonly hasMore: boolean;
@@ -769,12 +779,21 @@ export function makeTuiClient(runtime: TuiRuntime, origin = ""): TuiClient {
         }).pipe(Effect.map((result) => result.diff)),
       ),
 
-    getThreadActivities: (threadId, beforeSequence) =>
+    getThreadActivities: (threadId, cursor) =>
       runtime.runPromise(
-        request(ORCHESTRATION_WS_METHODS.getThreadActivities, {
-          threadId,
-          beforeSequence: NonNegativeInt.make(Math.max(0, beforeSequence)),
-        }),
+        request(
+          ORCHESTRATION_WS_METHODS.getThreadActivities,
+          "beforeSequence" in cursor
+            ? {
+                threadId,
+                beforeSequence: NonNegativeInt.make(Math.max(0, cursor.beforeSequence)),
+              }
+            : {
+                threadId,
+                beforeCreatedAt: cursor.beforeCreatedAt,
+                beforeActivityId: cursor.beforeActivityId,
+              },
+        ),
       ),
 
     listModels: () =>
