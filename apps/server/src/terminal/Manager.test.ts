@@ -1784,6 +1784,27 @@ describe("sanitizeTerminalHistoryChunk", () => {
       sanitize("tail 1$r0;120;340;Hello there").visibleText,
       "tail 1$r0;120;340;Hello there",
     );
+    // A space is ordinary text, not a run separator: an ambiguous lone token next
+    // to a genuine one must not be bridged into a deletable run — only the
+    // unambiguous DECRPM token goes.
+    assert.equal(sanitize("see 1;2c 2026;2$y now").visibleText, "see 1;2c  now");
+    assert.equal(
+      sanitize("coords 5;10c 6;11c 7;12c here").visibleText,
+      "coords 5;10c 6;11c 7;12c here",
+    );
+  });
+
+  it("strips an OSC 4 palette query from scrollback but relays it live", () => {
+    // A replayed OSC 4 query (`OSC 4;<idx>;? ST`) makes the emulator re-answer,
+    // and the echoed answer garbles the prompt — so scrollback drops it, while
+    // the live stream relays it for the client to answer (the answer is then
+    // stripped by the input filter, breaking the loop).
+    const query = "\x1b]4;1;?\x07";
+    assert.equal(sanitize(`a${query}b`).visibleText, "ab");
+    assert.equal(
+      sanitizeTerminalHistoryChunk("", `a${query}b`, { responsesOnly: true }).visibleText,
+      `a${query}b`,
+    );
   });
 
   it("preserves a framed OSC 4 palette report instead of mangling its inner rgb", () => {

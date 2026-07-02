@@ -907,13 +907,24 @@ function shouldStripCsiSequence(body: string, finalByte: string, responsesOnly =
 }
 
 /**
- * Whether an OSC sequence should be dropped. Only OSC 10/11/12 colour is
- * sanitized: `rgb:…` is a terminal response, `?` is a host query (kept in the
- * live stream when `responsesOnly` is set so the client still answers it).
+ * Whether an OSC sequence should be dropped. OSC 10/11/12 colour and the OSC 4
+ * palette *query* are sanitized: `rgb:…` (10/11/12) is a terminal response and
+ * `?` a host query — queries are relayed live (`responsesOnly`) so the client
+ * still answers them, and stripped from scrollback so a replay can't re-trigger
+ * them (the emulator's answer would echo at the prompt).
+ *
+ * OSC 4 `rgb:` payloads are intentionally NOT stripped from output: in the
+ * output direction that shape is the legitimate set-palette-colour command
+ * (themes), not a response — the reply form only travels as client *input*,
+ * where {@link stripTerminalResponsesFromInput} drops it.
  */
 function shouldStripOscSequence(content: string, responsesOnly = false): boolean {
-  // OSC 10/11/12 colour: `rgb:…` is a response; `?` is a query.
-  return responsesOnly ? /^(10|11|12);rgb:/.test(content) : /^(10|11|12);(?:\?|rgb:)/.test(content);
+  if (responsesOnly) {
+    // Live: strip only responses; relay all queries.
+    return /^(10|11|12);rgb:/.test(content);
+  }
+  // Scrollback: also strip the queries (OSC 10/11/12 `?` and OSC 4 `<idx>;?`).
+  return /^(10|11|12);(?:\?|rgb:)/.test(content) || /^4;[0-9]+;\?/.test(content);
 }
 
 /**
@@ -1004,8 +1015,12 @@ const FLATTENED_DECRPSS = "[01]\\$r[0-9;]{0,8}[a-zA-Z]";
 // lone `<n>;<n>R` is too ambiguous to drop on its own.
 const FLATTENED_CPR = "[0-9]*;[0-9]+R+";
 const FLATTENED_FRAGMENT = `(?:[0-9]+;[0-9]+\\$y|[0-9]+;[0-9]+c|${FLATTENED_CPR}|${FLATTENED_OSC_COLOUR}|${FLATTENED_DECRPSS})`;
+// Fragments in an echoed run are adjacent or separated by BEL/CR/a flattened
+// DSR "n" tail — never by a space (verified against the captured logs). A space
+// is ordinary text: including it would let a run bridge across real words and
+// delete an ambiguous lone token next to a genuine one ("see 1;2c 2026;2$y").
 const FLATTENED_REPLY_RUN = new RegExp(
-  `${FLATTENED_FRAGMENT}(?:[\\x07\\r n]{0,8}${FLATTENED_FRAGMENT})+`,
+  `${FLATTENED_FRAGMENT}(?:[\\x07\\rn]{0,8}${FLATTENED_FRAGMENT})+`,
   "g",
 );
 const FLATTENED_REPLY_TOKEN = new RegExp(
