@@ -28,7 +28,11 @@ import { expect } from "vite-plus/test";
 
 import * as ProcessRunner from "../processRunner.ts";
 import * as TerminalManager from "./Manager.ts";
-import { sanitizeTerminalHistoryChunk, stripTerminalResponsesFromInput } from "./Manager.ts";
+import {
+  sanitizePersistedTerminalHistory,
+  sanitizeTerminalHistoryChunk,
+  stripTerminalResponsesFromInput,
+} from "./Manager.ts";
 import * as PtyAdapter from "./PtyAdapter.ts";
 
 class WaitForConditionError extends Data.TaggedError("WaitForConditionError")<{
@@ -925,6 +929,49 @@ it.layer(
         ),
         "1200 millis",
       );
+    }),
+  );
+
+  it.effect("strips capability replies at an idle prompt but relays them to a foreground program", () =>
+    Effect.gen(function* () {
+      let inspect: {
+        readonly hasRunningSubprocess: boolean;
+        readonly childCommand: string | null;
+        readonly processIds: ReadonlyArray<number>;
+      } = { hasRunningSubprocess: false, childCommand: null, processIds: [] };
+      const { manager, ptyAdapter, getEvents } = yield* createManager(5, {
+        subprocessInspector: () => Effect.succeed(inspect),
+        subprocessPollIntervalMs: 20,
+      });
+      yield* manager.open(openInput());
+      const process = ptyAdapter.processes[0];
+      expect(process).toBeDefined();
+      if (!process) return;
+
+      // Idle prompt (no subprocess): the emulator's CPR auto-reply is dropped —
+      // the shell would only echo it back (the `;1RR` flood).
+      yield* manager.write({
+        threadId: "thread-1",
+        terminalId: DEFAULT_TERMINAL_ID,
+        data: "\x1b[1;1R",
+      });
+      expect(process.writes).toEqual([]);
+
+      // Foreground program running (vim): it issued the query and is blocked
+      // reading the answer — input must pass through verbatim.
+      inspect = { hasRunningSubprocess: true, childCommand: "vim", processIds: [100] };
+      yield* waitFor(
+        Effect.map(getEvents, (events) =>
+          events.some((event) => event.type === "activity" && event.hasRunningSubprocess),
+        ),
+        "1200 millis",
+      );
+      yield* manager.write({
+        threadId: "thread-1",
+        terminalId: DEFAULT_TERMINAL_ID,
+        data: "\x1b[1;1R",
+      });
+      expect(process.writes).toEqual(["\x1b[1;1R"]);
     }),
   );
 
@@ -1838,6 +1885,47 @@ describe("sanitizeTerminalHistoryChunk", () => {
     assert.notEqual(first.pendingControlSequence, "");
     const second = sanitize("$ydone", first.pendingControlSequence);
     assert.equal(second.visibleText, "done");
+  });
+
+  it("flushes an over-long unterminated introducer instead of freezing the stream", () => {
+    // A stray OSC/DCS introducer with no terminator (binary output, a program
+    // killed mid-escape-write) must not swallow all subsequent output into the
+    // pending buffer forever — past the cap the remainder flushes verbatim and
+    // the stream recovers.
+    let pending = "";
+    let emitted = "";
+    const first = sanitize("before\x1b]0;never-terminated-", pending);
+    emitted += first.visibleText;
+    pending = first.pendingControlSequence;
+    assert.equal(first.visibleText, "before");
+    assert.notEqual(pending, "");
+    const chunk = "x".repeat(8 * 1024);
+    for (let i = 0; i < 12; i += 1) {
+      const step = sanitize(chunk, pending);
+      emitted += step.visibleText;
+      pending = step.pendingControlSequence;
+    }
+    assert.ok(
+      emitted.includes("x".repeat(1024)),
+      "stream stayed frozen after an unterminated introducer",
+    );
+    assert.equal(pending, "");
+    // Later output flows normally again.
+    assert.equal(sanitize("after", pending).visibleText, "after");
+  });
+
+  it("preserves scrollback after an unterminated introducer on whole-buffer load", () => {
+    // A log written by an older build can contain an introducer with no
+    // terminator partway through; everything after it must survive the
+    // load-time sanitize verbatim, since the result is persisted back over the
+    // log file (dropping the pending tail would be permanent truncation).
+    const raw = `early history\n\x1b]0;unterminated${"later content\n".repeat(50)}`;
+    assert.equal(sanitizePersistedTerminalHistory(raw), raw);
+    // Residue in the terminated portion is still stripped; the tail survives.
+    const dirty = "prompt$ \x1b[?2026;2$y rest\x1b]0;tail-without-terminator";
+    const cleaned = sanitizePersistedTerminalHistory(dirty);
+    assert.equal(cleaned.includes("$y"), false);
+    assert.equal(cleaned.includes("tail-without-terminator"), true);
   });
 
   it("self-heals a flattened token split across PTY chunks on the next reload", () => {

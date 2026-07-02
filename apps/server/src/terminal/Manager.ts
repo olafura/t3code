@@ -1093,7 +1093,12 @@ const INPUT_TERMINAL_RESPONSE = new RegExp(
  * at the source breaks the loop. The cursor-position report (CPR) is the most
  * aggressive offender (a prompt's `;1RR` flood), so its two-parameter
  * `CSI <row>;<col> R` reply is stripped too; only the bare query forms
- * (`CSI 6 n`, `CSI ? c`) are kept. Exported for unit testing.
+ * (`CSI 6 n`, `CSI ? c`) are kept.
+ *
+ * The write path only applies this while NO foreground subprocess is running
+ * (the idle-prompt scenario above): a running program (vim, a CPR-based UI) is
+ * presumed to be reading the replies to its own queries, and stripping them
+ * would stall its capability negotiation. Exported for unit testing.
  */
 export function stripTerminalResponsesFromInput(data: string): string {
   // Skip the regex unless the data carries a 7-bit ESC or one of the 8-bit C1
@@ -1105,6 +1110,18 @@ export function stripTerminalResponsesFromInput(data: string): string {
     data.includes("\x90");
   return hasIntroducer ? data.replace(INPUT_TERMINAL_RESPONSE, "") : data;
 }
+
+// Upper bound on the buffered incomplete-sequence remainder. An unterminated
+// OSC/DCS introducer (a program killed mid-escape-write, or binary output
+// containing a stray 0x9d/0x90 byte) would otherwise swallow ALL subsequent
+// output into `pendingControlSequence` forever — freezing the live stream and
+// growing server memory unboundedly. Past this cap the remainder is flushed
+// VERBATIM to both views (raw passthrough, matching the pre-sanitizer
+// behaviour) and parsing restarts fresh on the next chunk. Sized to hold any
+// realistic legitimate cross-chunk sequence (OSC 52 clipboard payloads,
+// tmux-passthrough wrappers); a larger-than-cap sixel merely degrades to raw
+// passthrough of bytes the sanitizer would have kept anyway.
+const MAX_PENDING_CONTROL_SEQUENCE_LENGTH = 64 * 1024;
 
 /**
  * Single parse of a chunk that produces BOTH sanitized views at once:
@@ -1144,11 +1161,24 @@ function sanitizeTerminalChunkDual(
     if (!shouldStripDcsSequence(content, false)) historyText += sequence;
     if (!shouldStripDcsSequence(content, true)) liveText += sequence;
   };
-  const pending = () => ({
-    historyText: stripFlattenedModeReplyResidue(historyText),
-    liveText: stripFlattenedModeReplyResidue(liveText),
-    pendingControlSequence: input.slice(index),
-  });
+  const pending = () => {
+    // Overflow guard: a remainder past the cap can never be a legitimate
+    // in-flight sequence — flush it verbatim (both views) instead of buffering,
+    // so an unterminated introducer can't freeze the stream or pin memory.
+    if (input.length - index > MAX_PENDING_CONTROL_SEQUENCE_LENGTH) {
+      const flushed = input.slice(index);
+      return {
+        historyText: stripFlattenedModeReplyResidue(historyText + flushed),
+        liveText: stripFlattenedModeReplyResidue(liveText + flushed),
+        pendingControlSequence: "",
+      };
+    }
+    return {
+      historyText: stripFlattenedModeReplyResidue(historyText),
+      liveText: stripFlattenedModeReplyResidue(liveText),
+      pendingControlSequence: input.slice(index),
+    };
+  };
 
   while (index < input.length) {
     const codePoint = input.charCodeAt(index);
@@ -1273,6 +1303,21 @@ export function sanitizeTerminalHistoryChunk(
     visibleText: (options.responsesOnly ?? false) ? dual.liveText : dual.historyText,
     pendingControlSequence: dual.pendingControlSequence,
   };
+}
+
+/**
+ * Sanitize a WHOLE persisted scrollback buffer for load/migration, losslessly.
+ *
+ * Unlike the per-chunk API, there is no next chunk: a trailing incomplete
+ * sequence (an unterminated OSC/DCS introducer a program left mid-write) must
+ * be appended back VERBATIM rather than held in `pendingControlSequence` —
+ * discarding it would silently truncate everything after the introducer, and
+ * the caller persists the result over the log file, making the loss permanent.
+ * Exported for unit testing.
+ */
+export function sanitizePersistedTerminalHistory(raw: string): string {
+  const result = sanitizeTerminalHistoryChunk("", raw);
+  return `${result.visibleText}${result.pendingControlSequence}`;
 }
 
 function legacySafeThreadId(threadId: string): string {
@@ -1692,7 +1737,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       // builds (the "…$y" / colour-report garble) is stripped from replayed
       // scrollback — not just from newly-written output. Idempotent for clean
       // logs; the rewrite below persists the cleanup.
-      const capped = capHistory(sanitizeTerminalHistoryChunk("", raw).visibleText, historyLineLimit);
+      const capped = capHistory(sanitizePersistedTerminalHistory(raw), historyLineLimit);
       if (capped !== raw) {
         yield* fileSystem
           .writeFileString(nextPath, capped)
@@ -1733,7 +1778,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         ),
       );
     // Sanitize while migrating so the new-path log starts clean (see above).
-    const capped = capHistory(sanitizeTerminalHistoryChunk("", raw).visibleText, historyLineLimit);
+    const capped = capHistory(sanitizePersistedTerminalHistory(raw), historyLineLimit);
     yield* fileSystem
       .writeFileString(nextPath, capped)
       .pipe(
@@ -2744,7 +2789,18 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         terminalId,
       });
     }
-    const data = stripTerminalResponsesFromInput(input.data);
+    // The reply-strip exists to break the IDLE-PROMPT echo loop (a shell with
+    // no reader echoes the emulator's auto-replies, and a prompt that re-queries
+    // on redraw turns that into a flood). When a foreground program is running
+    // it is presumed to be reading those replies — vim/neovim block on their
+    // OSC 11 background probe and DECRQM queries, CPR-based UIs on `CSI 6 n` —
+    // so relay input verbatim; stripping would starve the program of answers to
+    // its own queries. The ~1s subprocess-poll latency means a program's very
+    // first queries can still lose their reply; accepted next to the runaway
+    // flood the strip prevents.
+    const data = session.hasRunningSubprocess
+      ? input.data
+      : stripTerminalResponsesFromInput(input.data);
     if (data.length === 0) return;
     yield* Effect.try({
       try: () => process.write(data),
