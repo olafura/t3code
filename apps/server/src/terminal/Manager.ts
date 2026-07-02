@@ -268,6 +268,12 @@ export interface TerminalSessionState {
    * platform can't tell.
    */
   shellForeground: boolean;
+  /**
+   * When a cursor-position query (`CSI 6 n`) was last relayed in the live
+   * stream (epoch ms; 0 = never). Arms the query-gated CPR strip in `write`
+   * for {@link CURSOR_QUERY_REPLY_GRACE_MS}.
+   */
+  lastCursorQueryRelayedAt: number;
   /** Normalized child command name when `hasRunningSubprocess`; cleared when idle. */
   childCommandLabel: string | null;
   runtimeEnv: Record<string, string> | null;
@@ -960,6 +966,14 @@ export interface TerminalSequenceDescriptor {
     readonly stripFromOutput: boolean;
     /** Input-filter body (null = relayed in input). */
     readonly input: string | null;
+    /**
+     * Only strip this reply from input while a matching query was recently
+     * relayed in the live stream. Needed when the reply's byte shape collides
+     * with real keyboard input (CPR `CSI 1;2R` == xterm's modified F3): the
+     * keystroke passes at a quiet prompt, while the query-driven echo flood is
+     * still broken because the querying prompt re-arms the gate every redraw.
+     */
+    readonly inputRequiresRecentQuery?: boolean;
     readonly samples: ReadonlyArray<string>;
   };
   readonly query?: {
@@ -1030,8 +1044,11 @@ export const TERMINAL_SEQUENCE_GRAMMAR: ReadonlyArray<TerminalSequenceDescriptor
       body: "[0-9;?]*R",
       stripFromOutput: true,
       // Input requires the two-parameter reply shape so a bare `CSI R` or
-      // anything keystroke-like is never eaten.
+      // anything keystroke-like is never eaten — and is additionally gated on a
+      // recently-relayed `CSI 6 n` query, because `CSI 1;<mod>R` is also
+      // xterm's encoding for modified F3.
       input: "\\??[0-9]*;[0-9]+R",
+      inputRequiresRecentQuery: true,
       samples: ["1;1R", "?5;10R", ";1R"],
     },
     flattened: {
@@ -1045,8 +1062,13 @@ export const TERMINAL_SEQUENCE_GRAMMAR: ReadonlyArray<TerminalSequenceDescriptor
     name: "OSC 10/11/12 colour",
     kind: "osc",
     response: {
+      // In OUTPUT `OSC 1[012];rgb:` is the legitimate set-default-colour
+      // command (themes) — like OSC 4, never stripped there; the reply shape
+      // only travels as client input, where it is dropped. A framed reply
+      // replayed from an old log re-applies the colour the terminal already
+      // has (a no-op set), never re-triggering the echo loop.
       body: "(?:10|11|12);rgb:",
-      stripFromOutput: true,
+      stripFromOutput: false,
       input: "1[012];rgb:[0-9a-fA-F/]*",
       samples: ["11;rgb:1616/1616/1616", "10;rgb:ffff/ffff/ffff"],
     },
@@ -1269,21 +1291,34 @@ const INPUT_CSI = "(?:\\x1b\\[|\\x9b)";
 const INPUT_OSC = "(?:\\x1b\\]|\\x9d)";
 const INPUT_DCS = "(?:\\x1bP|\\x90)";
 const INPUT_ST = "(?:\\x07|\\x1b\\\\|\\x9c)";
-const INPUT_TERMINAL_RESPONSE = new RegExp(
-  TERMINAL_SEQUENCE_GRAMMAR.flatMap((descriptor) => {
-    const input = descriptor.response?.input;
-    if (!input) return [];
+function composeInputMatcher(gated: boolean): RegExp | null {
+  const sources = TERMINAL_SEQUENCE_GRAMMAR.flatMap((descriptor) => {
+    const response = descriptor.response;
+    if (!response?.input) return [];
+    if ((response.inputRequiresRecentQuery ?? false) !== gated) return [];
     switch (descriptor.kind) {
       case "csi":
-        return [`${INPUT_CSI}(?:${input})`];
+        return [`${INPUT_CSI}(?:${response.input})`];
       case "osc":
-        return [`${INPUT_OSC}(?:${input})${INPUT_ST}`];
+        return [`${INPUT_OSC}(?:${response.input})${INPUT_ST}`];
       case "dcs":
-        return [`${INPUT_DCS}(?:${input})${INPUT_ST}`];
+        return [`${INPUT_DCS}(?:${response.input})${INPUT_ST}`];
     }
-  }).join("|"),
-  "g",
-);
+  });
+  return sources.length === 0 ? null : new RegExp(sources.join("|"), "g");
+}
+
+const INPUT_TERMINAL_RESPONSE = composeInputMatcher(false);
+const INPUT_QUERY_GATED_RESPONSE = composeInputMatcher(true);
+// A relayed cursor-position query in the LIVE stream (`CSI 6 n` / `CSI ? 6 n`,
+// 7-bit or 8-bit) — arms the query-gated input strip for a grace window.
+const RELAYED_CURSOR_QUERY = new RegExp(`${INPUT_CSI}\\??6n`);
+/**
+ * How long after relaying a cursor-position query the CPR reply strip stays
+ * armed. A prompt that re-queries on every redraw (the flood scenario)
+ * constantly re-arms it; a quiet prompt lets modified-F3 keystrokes through.
+ */
+export const CURSOR_QUERY_REPLY_GRACE_MS = 5_000;
 /**
  * Strip the browser emulator's auto-generated terminal responses from client
  * input before it reaches the PTY.
@@ -1303,15 +1338,31 @@ const INPUT_TERMINAL_RESPONSE = new RegExp(
  * presumed to be reading the replies to its own queries, and stripping them
  * would stall its capability negotiation. Exported for unit testing.
  */
-export function stripTerminalResponsesFromInput(data: string): string {
-  // Skip the regex unless the data carries a 7-bit ESC or one of the 8-bit C1
+export function stripTerminalResponsesFromInput(
+  data: string,
+  options: {
+    /**
+     * Include the query-gated reply shapes (CPR). Defaults true (the full
+     * strip); the write path passes whether a cursor query was recently
+     * relayed, so an idle prompt with no outstanding query lets the
+     * byte-identical modified-F3 keystrokes through.
+     */
+    readonly includeQueryGated?: boolean;
+  } = {},
+): string {
+  // Skip the regexes unless the data carries a 7-bit ESC or one of the 8-bit C1
   // introducers (CSI 0x9b, OSC 0x9d, DCS 0x90) a response could start with.
   const hasIntroducer =
     data.includes("\x1b") ||
     data.includes("\x9b") ||
     data.includes("\x9d") ||
     data.includes("\x90");
-  return hasIntroducer ? data.replace(INPUT_TERMINAL_RESPONSE, "") : data;
+  if (!hasIntroducer) return data;
+  let stripped = INPUT_TERMINAL_RESPONSE ? data.replace(INPUT_TERMINAL_RESPONSE, "") : data;
+  if ((options.includeQueryGated ?? true) && INPUT_QUERY_GATED_RESPONSE) {
+    stripped = stripped.replace(INPUT_QUERY_GATED_RESPONSE, "");
+  }
+  return stripped;
 }
 
 // Upper bound on the buffered incomplete-sequence remainder. An unterminated
@@ -1556,8 +1607,13 @@ export function sanitizeTerminalHistoryChunk(
  * Exported for unit testing.
  */
 export function sanitizePersistedTerminalHistory(raw: string): string {
-  const result = sanitizeTerminalHistoryChunk("", raw);
-  return `${result.visibleText}${result.pendingControlSequence}`;
+  // Single walk with NO overflow recovery: the streaming path's 64 KiB cap
+  // exists to keep a LIVE stream from freezing, but here the whole buffer is
+  // already in hand and the result is persisted back over the log file — the
+  // trailing incomplete sequence must be preserved byte-for-byte however large
+  // it is, never re-sanitized as if it were ordinary text.
+  const result = sanitizeTerminalChunkOnce(raw);
+  return `${result.historyText}${result.pendingControlSequence}`;
 }
 
 function legacySafeThreadId(threadId: string): string {
@@ -2206,6 +2262,11 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
             nextEvent.data,
           );
           session.pendingHistoryControlSequence = sanitized.pendingControlSequence;
+          // A relayed cursor query means a CPR reply is genuinely expected —
+          // arm the query-gated input strip for the grace window.
+          if (RELAYED_CURSOR_QUERY.test(sanitized.liveText)) {
+            session.lastCursorQueryRelayedAt = Date.now();
+          }
           if (sanitized.historyText.length > 0) {
             session.history = capHistory(
               `${session.history}${sanitized.historyText}`,
@@ -2719,6 +2780,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         unsubscribeExit: null,
         hasRunningSubprocess: false,
         shellForeground: true,
+        lastCursorQueryRelayedAt: 0,
         childCommandLabel: null,
         runtimeEnv: normalizedRuntimeEnv(input.env),
       };
@@ -3054,7 +3116,12 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
     // `exec`'d over the shell keeps its pgid so it still looks like the shell —
     // both accepted next to the runaway flood the strip prevents.
     const data = session.shellForeground
-      ? stripTerminalResponsesFromInput(input.data)
+      ? stripTerminalResponsesFromInput(input.data, {
+          // CPR shares its byte shape with modified function keys; only strip
+          // it while a relayed cursor query makes a reply genuinely expected.
+          includeQueryGated:
+            Date.now() - session.lastCursorQueryRelayedAt < CURSOR_QUERY_REPLY_GRACE_MS,
+        })
       : input.data;
     if (data.length === 0) return;
     yield* Effect.try({
@@ -3147,6 +3214,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
             unsubscribeExit: null,
             hasRunningSubprocess: false,
             shellForeground: true,
+        lastCursorQueryRelayedAt: 0,
             childCommandLabel: null,
             runtimeEnv: normalizedRuntimeEnv(input.env),
           };

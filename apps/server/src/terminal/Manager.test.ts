@@ -950,8 +950,28 @@ it.layer(
       expect(process).toBeDefined();
       if (!process) return;
 
-      // Idle prompt (no subprocess): the emulator's CPR auto-reply is dropped —
-      // the shell would only echo it back (the `;1RR` flood).
+      // No relayed cursor query yet: `CSI 1;2R` is xterm's modified-F3
+      // keystroke, not a CPR reply — it must reach the PTY.
+      yield* manager.write({
+        threadId: "thread-1",
+        terminalId: DEFAULT_TERMINAL_ID,
+        data: "\x1b[1;2R",
+      });
+      expect(process.writes).toEqual(["\x1b[1;2R"]);
+      process.writes.length = 0;
+
+      // The prompt queries the cursor position — relaying it arms the CPR strip.
+      process.emitData("\x1b[6n");
+      yield* waitFor(
+        Effect.map(getEvents, (events) =>
+          events.some((event) => event.type === "output" && event.data.includes("\x1b[6n")),
+        ),
+        "1200 millis",
+      );
+
+      // Idle prompt (no subprocess) with an outstanding query: the emulator's
+      // CPR auto-reply is dropped — the shell would only echo it back (the
+      // `;1RR` flood).
       yield* manager.write({
         threadId: "thread-1",
         terminalId: DEFAULT_TERMINAL_ID,
@@ -1011,6 +1031,14 @@ it.layer(
       yield* waitFor(
         Effect.map(getEvents, (events) =>
           events.some((event) => event.type === "activity" && event.hasRunningSubprocess),
+        ),
+        "1200 millis",
+      );
+      // The prompt's cursor query arms the CPR strip (CPR is query-gated).
+      process.emitData("\x1b[6n");
+      yield* waitFor(
+        Effect.map(getEvents, (events) =>
+          events.some((event) => event.type === "output" && event.data.includes("\x1b[6n")),
         ),
         "1200 millis",
       );
@@ -1098,7 +1126,9 @@ it.layer(
 
       process.emitData("prompt ");
       process.emitData("\u001b[32mok\u001b[0m ");
-      process.emitData("\u001b]11;rgb:ffff/ffff/ffff\u0007");
+      // A colour QUERY is replay-unsafe (the emulator would re-answer it); the
+      // rgb SET form is legitimate output and covered by the grammar invariants.
+      process.emitData("\u001b]11;?\u0007");
       process.emitData("\u001b[1;1R");
       process.emitData("done\n");
 
@@ -1140,7 +1170,7 @@ it.layer(
         process.emitData("\u001b[H\u001b[2J");
         process.emitData("prompt ");
         process.emitData("\u001b]11;");
-        process.emitData("rgb:ffff/ffff/ffff\u0007\u001b[1;1");
+        process.emitData("?\u0007\u001b[1;1");
         process.emitData("R\u001b[36mdone\u001b[0m\n");
 
         yield* manager.close({ threadId: "thread-1" });
@@ -2044,9 +2074,17 @@ describe("sanitizeTerminalHistoryChunk", () => {
     const live = (data: string, pending = "") =>
       sanitizeTerminalHistoryChunk(pending, data, { responsesOnly: true });
 
-    it("strips terminal responses (DA, DECRPM, cursor, DSR, OSC colour) that leak as garbage", () => {
-      const responses = "\x1b[?1;2c\x1b[?2026;2$y\x1b[2;5R\x1b[0n\x1b]11;rgb:1616/1616/1616\x07";
+    it("strips terminal responses (DA, DECRPM, cursor, DSR) that leak as garbage", () => {
+      const responses = "\x1b[?1;2c\x1b[?2026;2$y\x1b[2;5R\x1b[0n";
       assert.equal(live(`a${responses}b`).visibleText, "ab");
+    });
+
+    it("keeps framed OSC 10/11/12 rgb output — the legitimate set-colour command", () => {
+      // In OUTPUT that shape is a host→terminal set (themes), not a response;
+      // the reply form only travels as client input, where it is stripped.
+      const set = "\x1b]11;rgb:1616/1616/1616\x07";
+      assert.equal(live(`a${set}b`).visibleText, `a${set}b`);
+      assert.equal(sanitize(`a${set}b`).visibleText, `a${set}b`);
     });
 
     it("keeps queries the client must still answer (DECRQM, DA, DSR, OSC colour)", () => {
@@ -2091,8 +2129,13 @@ describe("sanitizeTerminalHistoryChunk", () => {
       );
     });
 
-    it("strips an 8-bit OSC colour report (0x9d … BEL); relays the colour query live", () => {
-      assert.equal(sanitize("a\x9d11;rgb:1616/1616/1616\x07b").visibleText, "ab");
+    it("keeps an 8-bit OSC colour set (0x9d … BEL); relays the query live only", () => {
+      // The rgb form in output is the legitimate set-colour command — kept in
+      // both views, 8-bit framing included.
+      assert.equal(
+        sanitize("a\x9d11;rgb:1616/1616/1616\x07b").visibleText,
+        "a\x9d11;rgb:1616/1616/1616\x07b",
+      );
       // The `?` colour query is relayed live (the client must answer it) but
       // stripped from scrollback so a replay cannot re-trigger it.
       assert.equal(
@@ -2170,6 +2213,21 @@ describe("stripTerminalResponsesFromInput", () => {
     // matches the output strip so neither form can feed the echo loop.
     assert.equal(stripTerminalResponsesFromInput("\x1b[?1;1R"), "");
     assert.equal(stripTerminalResponsesFromInput("\x9b?5;10R"), "");
+  });
+
+  it("keeps CPR-shaped bytes when no cursor query is outstanding (modified F3)", () => {
+    // `CSI 1;2R` is byte-identical to xterm's Shift+F3 — without a recently
+    // relayed `CSI 6 n` the write path passes it through; the ungated reply
+    // shapes still strip.
+    assert.equal(
+      stripTerminalResponsesFromInput("\x1b[1;2R", { includeQueryGated: false }),
+      "\x1b[1;2R",
+    );
+    assert.equal(
+      stripTerminalResponsesFromInput("\x1b[?2026;2$y\x1b[1;2R", { includeQueryGated: false }),
+      "\x1b[1;2R",
+    );
+    assert.equal(stripTerminalResponsesFromInput("\x1b[1;2R", { includeQueryGated: true }), "");
   });
 
   it("keeps real user input, cursor moves, and bare query forms", () => {

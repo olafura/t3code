@@ -74,12 +74,14 @@ export function useSelectedThreadRequests() {
     () => (selectedThread ? derivePendingApprovals(selectedThread.activities) : []),
     [selectedThread],
   );
-  const activePendingApproval = activePendingApprovals[0] ?? null;
+  // Ascending sort — surface the NEWEST open request so older dangling
+  // requests can't hijack the current prompt.
+  const activePendingApproval = activePendingApprovals.at(-1) ?? null;
   const activePendingUserInputs = useMemo(
     () => (selectedThread ? derivePendingUserInputs(selectedThread.activities) : []),
     [selectedThread],
   );
-  const activePendingUserInput = activePendingUserInputs[0] ?? null;
+  const activePendingUserInput = activePendingUserInputs.at(-1) ?? null;
   const activePendingUserInputDrafts =
     activePendingUserInput && selectedThreadShell
       ? (userInputDraftsByRequestKey[
