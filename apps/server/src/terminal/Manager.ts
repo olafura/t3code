@@ -1014,7 +1014,12 @@ const FLATTENED_DECRPSS = "[01]\\$r[0-9;]{0,8}[a-zA-Z]";
 // so allow `[0-9]*;[0-9]+R+`. Only stripped in a RUN (like the DA `c` form) — a
 // lone `<n>;<n>R` is too ambiguous to drop on its own.
 const FLATTENED_CPR = "[0-9]*;[0-9]+R+";
-const FLATTENED_FRAGMENT = `(?:[0-9]+;[0-9]+\\$y|[0-9]+;[0-9]+c|${FLATTENED_CPR}|${FLATTENED_OSC_COLOUR}|${FLATTENED_DECRPSS})`;
+// Flattened device-attributes reply: the primary form flattens to "<m>;<v>c"
+// and the secondary (`CSI > Pp;Pv;Pc c`) to ">0;276;0c" — two or three params,
+// optionally keeping the ">" the shell echo sometimes preserves. Run-only, like
+// the other ambiguous forms.
+const FLATTENED_DA = ">?[0-9]+;[0-9]+(?:;[0-9]+)?c";
+const FLATTENED_FRAGMENT = `(?:[0-9]+;[0-9]+\\$y|${FLATTENED_DA}|${FLATTENED_CPR}|${FLATTENED_OSC_COLOUR}|${FLATTENED_DECRPSS})`;
 // Fragments in an echoed run are adjacent or separated by BEL/CR/a flattened
 // DSR "n" tail — never by a space (verified against the captured logs). A space
 // is ordinary text: including it would let a run bridge across real words and
@@ -1075,7 +1080,9 @@ const INPUT_TERMINAL_RESPONSE = new RegExp(
     `${INPUT_CSI}\\?[0-9;]*\\$y`,
     `${INPUT_CSI}[?>][0-9;]+c`,
     `${INPUT_CSI}\\??[03]n`,
-    `${INPUT_CSI}[0-9]*;[0-9]+R`,
+    // CPR reply — plain (`CSI r;c R`, answers CSI 6 n) and DEC-private
+    // (`CSI ? r;c R`, answers CSI ? 6 n / DECXCPR), matching the output strip.
+    `${INPUT_CSI}\\??[0-9]*;[0-9]+R`,
     `${INPUT_OSC}(?:1[012];|4;[0-9]+;)rgb:[0-9a-fA-F/]*${INPUT_ST}`,
     `${INPUT_DCS}[01]?\\$r[^\\x1b\\x07\\x9c]*${INPUT_ST}`,
   ].join("|"),
@@ -1115,12 +1122,12 @@ export function stripTerminalResponsesFromInput(data: string): string {
 // OSC/DCS introducer (a program killed mid-escape-write, or binary output
 // containing a stray 0x9d/0x90 byte) would otherwise swallow ALL subsequent
 // output into `pendingControlSequence` forever — freezing the live stream and
-// growing server memory unboundedly. Past this cap the remainder is flushed
-// VERBATIM to both views (raw passthrough, matching the pre-sanitizer
-// behaviour) and parsing restarts fresh on the next chunk. Sized to hold any
-// realistic legitimate cross-chunk sequence (OSC 52 clipboard payloads,
-// tmux-passthrough wrappers); a larger-than-cap sixel merely degrades to raw
-// passthrough of bytes the sanitizer would have kept anyway.
+// growing server memory unboundedly. Past this cap the stuck introducer is
+// emitted verbatim and the rest re-sanitized (see sanitizeTerminalChunkDual),
+// so the stream recovers and complete sequences after the introducer still get
+// stripped. Sized to hold any realistic legitimate cross-chunk sequence (OSC 52
+// clipboard payloads, tmux-passthrough wrappers); a larger-than-cap sixel
+// merely degrades to raw passthrough of bytes the sanitizer keeps anyway.
 const MAX_PENDING_CONTROL_SEQUENCE_LENGTH = 64 * 1024;
 
 /**
@@ -1134,11 +1141,11 @@ const MAX_PENDING_CONTROL_SEQUENCE_LENGTH = 64 * 1024;
  * only on byte structure (where an incomplete escape sequence ends), never on
  * which complete sequences are stripped, so it is identical for both views.
  */
-function sanitizeTerminalChunkDual(
-  pendingControlSequence: string,
-  data: string,
-): { historyText: string; liveText: string; pendingControlSequence: string } {
-  const input = `${pendingControlSequence}${data}`;
+function sanitizeTerminalChunkOnce(input: string): {
+  historyText: string;
+  liveText: string;
+  pendingControlSequence: string;
+} {
   let historyText = "";
   let liveText = "";
   let index = 0;
@@ -1161,24 +1168,11 @@ function sanitizeTerminalChunkDual(
     if (!shouldStripDcsSequence(content, false)) historyText += sequence;
     if (!shouldStripDcsSequence(content, true)) liveText += sequence;
   };
-  const pending = () => {
-    // Overflow guard: a remainder past the cap can never be a legitimate
-    // in-flight sequence — flush it verbatim (both views) instead of buffering,
-    // so an unterminated introducer can't freeze the stream or pin memory.
-    if (input.length - index > MAX_PENDING_CONTROL_SEQUENCE_LENGTH) {
-      const flushed = input.slice(index);
-      return {
-        historyText: stripFlattenedModeReplyResidue(historyText + flushed),
-        liveText: stripFlattenedModeReplyResidue(liveText + flushed),
-        pendingControlSequence: "",
-      };
-    }
-    return {
-      historyText: stripFlattenedModeReplyResidue(historyText),
-      liveText: stripFlattenedModeReplyResidue(liveText),
-      pendingControlSequence: input.slice(index),
-    };
-  };
+  const pending = () => ({
+    historyText: stripFlattenedModeReplyResidue(historyText),
+    liveText: stripFlattenedModeReplyResidue(liveText),
+    pendingControlSequence: input.slice(index),
+  });
 
   while (index < input.length) {
     const codePoint = input.charCodeAt(index);
@@ -1282,6 +1276,56 @@ function sanitizeTerminalChunkDual(
   return {
     historyText: stripFlattenedModeReplyResidue(historyText),
     liveText: stripFlattenedModeReplyResidue(liveText),
+    pendingControlSequence: "",
+  };
+}
+
+// Bounded number of overflow recoveries per chunk. Each recovery emits the
+// stuck introducer verbatim and RE-SANITIZES the rest of the remainder, so
+// complete sequences after an unterminated introducer still get stripped
+// instead of being flushed raw into history. The bound keeps an adversarial
+// introducer-flood from turning the walk quadratic; past it the remainder is
+// flushed verbatim (raw passthrough).
+const MAX_PENDING_OVERFLOW_RECOVERIES = 4;
+
+/**
+ * {@link sanitizeTerminalChunkOnce} plus overflow recovery: when the buffered
+ * incomplete-sequence remainder exceeds {@link MAX_PENDING_CONTROL_SEQUENCE_LENGTH}
+ * (an unterminated OSC/DCS introducer would otherwise swallow all subsequent
+ * output forever), the stuck introducer is emitted verbatim and the rest is
+ * re-walked so it is still properly sanitized.
+ */
+function sanitizeTerminalChunkDual(
+  pendingControlSequence: string,
+  data: string,
+): { historyText: string; liveText: string; pendingControlSequence: string } {
+  let historyText = "";
+  let liveText = "";
+  let input = `${pendingControlSequence}${data}`;
+  for (let recoveries = 0; recoveries < MAX_PENDING_OVERFLOW_RECOVERIES; recoveries += 1) {
+    const walk = sanitizeTerminalChunkOnce(input);
+    historyText += walk.historyText;
+    liveText += walk.liveText;
+    if (walk.pendingControlSequence.length <= MAX_PENDING_CONTROL_SEQUENCE_LENGTH) {
+      return {
+        historyText,
+        liveText,
+        pendingControlSequence: walk.pendingControlSequence,
+      };
+    }
+    // Overflowed: the remainder starts at an introducer that never terminated.
+    // Emit the introducer bytes verbatim and re-sanitize everything after them.
+    const stuck = walk.pendingControlSequence;
+    const introducerLength = stuck.charCodeAt(0) === 0x1b ? 2 : 1;
+    const introducer = stuck.slice(0, introducerLength);
+    historyText += introducer;
+    liveText += introducer;
+    input = stuck.slice(introducerLength);
+  }
+  // Recovery budget exhausted (adversarial introducer flood): flush raw.
+  return {
+    historyText: historyText + input,
+    liveText: liveText + input,
     pendingControlSequence: "",
   };
 }

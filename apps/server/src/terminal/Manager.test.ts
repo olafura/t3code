@@ -1818,6 +1818,15 @@ describe("sanitizeTerminalHistoryChunk", () => {
     assert.equal(sanitize("at 12;5R done").visibleText, "at 12;5R done"); // lone, kept
   });
 
+  it("drops a flattened secondary-DA (three-parameter) run", () => {
+    // `CSI > Pp;Pv;Pc c` flattens to ">0;276;0c" (the ">" is sometimes kept by
+    // the echo); stripped in a run like the two-parameter primary form.
+    assert.equal(sanitize("prompt$ >0;276;0c>0;276;0c").visibleText, "prompt$ ");
+    assert.equal(sanitize("a 0;276;0c1;2c b").visibleText, "a  b");
+    // A lone three-parameter token is ambiguous and kept.
+    assert.equal(sanitize("ver 0;276;0c here").visibleText, "ver 0;276;0c here");
+  });
+
   it("does not over-match ordinary text that merely looks reply-shaped", () => {
     // The colour alternative is pinned to OSC 10/11/12 and OSC 4 (`4;<idx>;`), so
     // an arbitrary "<n>;rgb:…" in program output survives.
@@ -1912,6 +1921,17 @@ describe("sanitizeTerminalHistoryChunk", () => {
     assert.equal(pending, "");
     // Later output flows normally again.
     assert.equal(sanitize("after", pending).visibleText, "after");
+  });
+
+  it("still strips framed replies inside an overflow-recovered tail", () => {
+    // The overflow recovery re-sanitizes the remainder after the stuck
+    // introducer instead of flushing it raw, so a framed capability reply
+    // buried past an unterminated introducer can't land in history and replay.
+    const junk = "j".repeat(70 * 1024);
+    const result = sanitize(`\x9d${junk}\x1b[?2026;2$yvisible`);
+    assert.equal(result.visibleText.includes("2026;2$y"), false);
+    assert.equal(result.visibleText.includes("visible"), true);
+    assert.equal(result.visibleText.includes(junk.slice(0, 1024)), true); // junk kept (raw text)
   });
 
   it("preserves scrollback after an unterminated introducer on whole-buffer load", () => {
@@ -2076,6 +2096,10 @@ describe("stripTerminalResponsesFromInput", () => {
     assert.equal(stripTerminalResponsesFromInput("\x1b[;1R"), ""); // empty-row CPR
     assert.equal(stripTerminalResponsesFromInput("\x1b[1;1R\x1b[1;1R\x1b[1;1R"), ""); // flood
     assert.equal(stripTerminalResponsesFromInput("\x9b5;10R"), ""); // 8-bit C1 CPR
+    // DEC-private CPR (`CSI ? r;c R`, the DECXCPR answer to `CSI ? 6 n`) —
+    // matches the output strip so neither form can feed the echo loop.
+    assert.equal(stripTerminalResponsesFromInput("\x1b[?1;1R"), "");
+    assert.equal(stripTerminalResponsesFromInput("\x9b?5;10R"), "");
   });
 
   it("keeps real user input, cursor moves, and bare query forms", () => {
