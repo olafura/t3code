@@ -213,6 +213,7 @@ interface CreateManagerOptions {
     readonly hasRunningSubprocess: boolean;
     readonly childCommand: string | null;
     readonly processIds: ReadonlyArray<number>;
+    readonly shellForeground?: boolean;
   }>;
   subprocessPollIntervalMs?: number;
   processKillGraceMs?: number;
@@ -964,6 +965,74 @@ it.layer(
         Effect.map(getEvents, (events) =>
           events.some((event) => event.type === "activity" && event.hasRunningSubprocess),
         ),
+        "1200 millis",
+      );
+      yield* manager.write({
+        threadId: "thread-1",
+        terminalId: DEFAULT_TERMINAL_ID,
+        data: "\x1b[1;1R",
+      });
+      expect(process.writes).toEqual(["\x1b[1;1R"]);
+    }),
+  );
+
+  it.effect("keeps stripping replies while only a BACKGROUND job runs (shell owns the PTY)", () =>
+    Effect.gen(function* () {
+      // `sleep 100 &` puts a child under the shell, but the shell still owns
+      // the PTY's foreground group (tpgid == shell pgid) and is at the prompt —
+      // the echo loop is live, so replies must still be stripped. The inspector
+      // reports the foreground signal explicitly.
+      let inspect: {
+        readonly hasRunningSubprocess: boolean;
+        readonly childCommand: string | null;
+        readonly processIds: ReadonlyArray<number>;
+        readonly shellForeground?: boolean;
+      } = { hasRunningSubprocess: false, childCommand: null, processIds: [], shellForeground: true };
+      let inspections = 0;
+      const { manager, ptyAdapter, getEvents } = yield* createManager(5, {
+        subprocessInspector: () => {
+          inspections += 1;
+          return Effect.succeed(inspect);
+        },
+        subprocessPollIntervalMs: 20,
+      });
+      yield* manager.open(openInput());
+      const process = ptyAdapter.processes[0];
+      expect(process).toBeDefined();
+      if (!process) return;
+
+      inspect = {
+        hasRunningSubprocess: true,
+        childCommand: "sleep",
+        processIds: [100],
+        shellForeground: true, // background job — the shell keeps the prompt
+      };
+      yield* waitFor(
+        Effect.map(getEvents, (events) =>
+          events.some((event) => event.type === "activity" && event.hasRunningSubprocess),
+        ),
+        "1200 millis",
+      );
+      yield* manager.write({
+        threadId: "thread-1",
+        terminalId: DEFAULT_TERMINAL_ID,
+        data: "\x1b[1;1R",
+      });
+      expect(process.writes).toEqual([]); // still stripped — echo loop stays broken
+
+      // The job moves to the foreground (`fg`): tpgid flips to the job's group
+      // even though the wire label doesn't change — replies must now pass.
+      inspect = {
+        hasRunningSubprocess: true,
+        childCommand: "sleep",
+        processIds: [100],
+        shellForeground: false,
+      };
+      // No activity event fires for a pure fg/bg flip; wait until the poller has
+      // demonstrably run with the flipped fixture instead of sleeping blind.
+      const inspectionsAtFlip = inspections;
+      yield* waitFor(
+        Effect.sync(() => inspections >= inspectionsAtFlip + 2),
         "1200 millis",
       );
       yield* manager.write({

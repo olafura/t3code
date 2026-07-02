@@ -192,6 +192,14 @@ interface TerminalSubprocessInspectResult {
   readonly hasRunningSubprocess: boolean;
   readonly childCommand: string | null;
   readonly processIds: ReadonlyArray<number>;
+  /**
+   * Whether the shell itself owns the PTY's foreground process group
+   * (`tpgid === pgid` of the terminal process) — i.e. the terminal is at an
+   * interactive prompt, even if background jobs (`… &`) exist. `undefined`
+   * when the platform/inspector can't tell (Windows, custom fixtures); the
+   * caller then falls back to `!hasRunningSubprocess`.
+   */
+  readonly shellForeground?: boolean;
 }
 
 interface TerminalSubprocessInspector {
@@ -251,6 +259,15 @@ export interface TerminalSessionState {
   unsubscribeData: (() => void) | null;
   unsubscribeExit: (() => void) | null;
   hasRunningSubprocess: boolean;
+  /**
+   * Whether the shell owns the PTY's foreground process group (idle prompt,
+   * possibly with background jobs). Drives the input reply-strip: strip only
+   * while true — a foreground job (vim, a CPR-based UI) is reading the replies
+   * to its own queries. Defaults true at spawn; refreshed by the subprocess
+   * poll (`tpgid === pgid`), falling back to `!hasRunningSubprocess` when the
+   * platform can't tell.
+   */
+  shellForeground: boolean;
   /** Normalized child command name when `hasRunningSubprocess`; cleared when idle. */
   childCommandLabel: string | null;
   runtimeEnv: Record<string, string> | null;
@@ -703,6 +720,32 @@ const posixInspectSubprocess = Effect.fn("terminal.posixInspectSubprocess")(func
   ProcessRunner.ProcessRunner
 > {
   const processRunner = yield* ProcessRunner.ProcessRunner;
+
+  // Foreground-ownership probe: the PTY's foreground process group (`tpgid`)
+  // equals the shell's own group (`pgid`) exactly when the shell is at an
+  // interactive prompt — background jobs (`… &`) keep tpgid on the shell while
+  // a foreground vim/fzf moves it to the job's group. `undefined` when `ps`
+  // fails or the fields don't parse (callers fall back to the child check).
+  let shellForeground: boolean | undefined;
+  const tpgidResult = yield* Effect.exit(
+    processRunner.run({
+      command: "ps",
+      args: ["-p", String(terminalPid), "-o", "tpgid=,pgid="],
+      timeout: "1 second",
+      maxOutputBytes: 8_192,
+      outputMode: "truncate",
+      timeoutBehavior: "timedOutResult",
+    }),
+  );
+  if (tpgidResult._tag === "Success" && tpgidResult.value.code === 0) {
+    const [tpgidRaw, pgidRaw] = tpgidResult.value.stdout.trim().split(/\s+/g);
+    const tpgid = Number(tpgidRaw);
+    const pgid = Number(pgidRaw);
+    if (Number.isInteger(tpgid) && Number.isInteger(pgid) && tpgid > 0 && pgid > 0) {
+      shellForeground = tpgid === pgid;
+    }
+  }
+
   const runPgrep = processRunner
     .run({
       command: "pgrep",
@@ -750,14 +793,24 @@ const posixInspectSubprocess = Effect.fn("terminal.posixInspectSubprocess")(func
     if (pgrepResult.value.code === 0) {
       childPid = parseFirstChildPidFromPgrep(pgrepResult.value.stdout);
     } else if (pgrepResult.value.code === 1) {
-      return { hasRunningSubprocess: false, childCommand: null, processIds: [] };
+      return {
+      hasRunningSubprocess: false,
+      childCommand: null,
+      processIds: [],
+      ...(shellForeground !== undefined ? { shellForeground } : {}),
+    };
     }
   }
 
   if (childPid === null) {
     const psResult = yield* Effect.exit(runPs);
     if (psResult._tag === "Failure" || psResult.value.code !== 0) {
-      return { hasRunningSubprocess: false, childCommand: null, processIds: [] };
+      return {
+      hasRunningSubprocess: false,
+      childCommand: null,
+      processIds: [],
+      ...(shellForeground !== undefined ? { shellForeground } : {}),
+    };
     }
     for (const line of psResult.value.stdout.split(/\r?\n/g)) {
       const [pidRaw, ppidRaw] = line.trim().split(/\s+/g);
@@ -772,7 +825,12 @@ const posixInspectSubprocess = Effect.fn("terminal.posixInspectSubprocess")(func
   }
 
   if (childPid === null) {
-    return { hasRunningSubprocess: false, childCommand: null, processIds: [] };
+    return {
+      hasRunningSubprocess: false,
+      childCommand: null,
+      processIds: [],
+      ...(shellForeground !== undefined ? { shellForeground } : {}),
+    };
   }
 
   const runComm = processRunner.run({
@@ -837,6 +895,7 @@ const posixInspectSubprocess = Effect.fn("terminal.posixInspectSubprocess")(func
     hasRunningSubprocess: true,
     childCommand: normalized ? truncateTerminalWireLabel(normalized) : null,
     processIds: [...processIds],
+    ...(shellForeground !== undefined ? { shellForeground } : {}),
   };
 });
 
@@ -2033,6 +2092,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         session.process = null;
         session.pid = null;
         session.hasRunningSubprocess = false;
+        session.shellForeground = true;
         session.childCommandLabel = null;
         session.status = "exited";
         session.pendingHistoryControlSequence = "";
@@ -2105,6 +2165,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       session.process = null;
       session.pid = null;
       session.hasRunningSubprocess = false;
+      session.shellForeground = true;
       session.childCommandLabel = null;
       session.status = "exited";
       session.pendingHistoryControlSequence = "";
@@ -2202,6 +2263,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       session.exitCode = null;
       session.exitSignal = null;
       session.hasRunningSubprocess = false;
+      session.shellForeground = true;
       session.childCommandLabel = null;
       session.pendingProcessEvents = [];
       session.pendingProcessEventIndex = 0;
@@ -2279,6 +2341,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         session.pid = null;
         session.process = null;
         session.hasRunningSubprocess = false;
+        session.shellForeground = true;
         session.childCommandLabel = null;
         session.pendingProcessEvents = [];
         session.pendingProcessEventIndex = 0;
@@ -2395,9 +2458,17 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         if (
           Option.isNone(liveSession) ||
           liveSession.value.status !== "running" ||
-          liveSession.value.pid !== terminalPid ||
-          (liveSession.value.hasRunningSubprocess === next.hasRunningSubprocess &&
-            liveSession.value.childCommandLabel === nextChildLabel)
+          liveSession.value.pid !== terminalPid
+        ) {
+          return [Option.none(), state] as const;
+        }
+        // Refresh the foreground-ownership signal even when nothing wire-label-
+        // worthy changed (a `fg`/`bg` flip of the same child alters what the
+        // input reply-strip must do without changing the activity event).
+        liveSession.value.shellForeground = next.shellForeground ?? !next.hasRunningSubprocess;
+        if (
+          liveSession.value.hasRunningSubprocess === next.hasRunningSubprocess &&
+          liveSession.value.childCommandLabel === nextChildLabel
         ) {
           return [Option.none(), state] as const;
         }
@@ -2510,6 +2581,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         unsubscribeData: null,
         unsubscribeExit: null,
         hasRunningSubprocess: false,
+        shellForeground: true,
         childCommandLabel: null,
         runtimeEnv: normalizedRuntimeEnv(input.env),
       };
@@ -2835,16 +2907,18 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
     }
     // The reply-strip exists to break the IDLE-PROMPT echo loop (a shell with
     // no reader echoes the emulator's auto-replies, and a prompt that re-queries
-    // on redraw turns that into a flood). When a foreground program is running
-    // it is presumed to be reading those replies — vim/neovim block on their
-    // OSC 11 background probe and DECRQM queries, CPR-based UIs on `CSI 6 n` —
-    // so relay input verbatim; stripping would starve the program of answers to
-    // its own queries. The ~1s subprocess-poll latency means a program's very
-    // first queries can still lose their reply; accepted next to the runaway
-    // flood the strip prevents.
-    const data = session.hasRunningSubprocess
-      ? input.data
-      : stripTerminalResponsesFromInput(input.data);
+    // on redraw turns that into a flood). The gate is PTY foreground ownership,
+    // not mere child existence: a background job (`sleep 100 &`) leaves the
+    // shell at the prompt (tpgid still the shell's — keep stripping), while a
+    // foreground vim/fzf/CPR-based UI owns the terminal and is reading the
+    // replies to its own queries — relay input verbatim; stripping would starve
+    // its capability negotiation. The ~1s subprocess-poll latency means a
+    // program's very first queries can still lose a reply, and a program
+    // `exec`'d over the shell keeps its pgid so it still looks like the shell —
+    // both accepted next to the runaway flood the strip prevents.
+    const data = session.shellForeground
+      ? stripTerminalResponsesFromInput(input.data)
+      : input.data;
     if (data.length === 0) return;
     yield* Effect.try({
       try: () => process.write(data),
@@ -2935,6 +3009,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
             unsubscribeData: null,
             unsubscribeExit: null,
             hasRunningSubprocess: false,
+            shellForeground: true,
             childCommandLabel: null,
             runtimeEnv: normalizedRuntimeEnv(input.env),
           };
