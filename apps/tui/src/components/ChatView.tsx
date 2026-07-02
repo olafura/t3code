@@ -12,6 +12,11 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import * as React from "react";
 
+import {
+  liveWindowOldestActivityId,
+  oldestActivityByChronology,
+} from "@t3tools/client-runtime/state/thread-reducer";
+
 import { derivePendingApprovals } from "../approvals.ts";
 import { normalizeEditedPrompt, resolveEditorCommand } from "../promptEditor.ts";
 import type { TuiClient } from "../connection.ts";
@@ -61,10 +66,6 @@ const RIGHT_PANEL_MIN_TERMINAL_WIDTH = 100;
 const SCROLL_STEP = 8;
 /** Cap on terminals per thread (mirrors the web's per-group limit). */
 const MAX_TERMINALS_PER_THREAD = 6;
-// The server caps a thread-detail snapshot at the most recent N activities; when
-// the live window is full there may be older history to lazy-load on scroll-up.
-const ACTIVITY_WINDOW = 500;
-
 // Top-level layout + state wiring (mirrors apps/web/src/components/ChatView.tsx):
 // owns the external store + UI state, derives the row window and pane heights,
 // routes key bindings to actions, and composes Sidebar / MessagesTimeline /
@@ -165,7 +166,8 @@ export function ChatView({
   // The right-side source-control panel (^L), auto-hidden on narrow terminals.
   const [rightPanelOpen, setRightPanelOpen] = React.useState(false);
   // Lazy-loaded older activity pages, prepended ahead of the windowed live view
-  // (server caps detail at the most recent ACTIVITY_WINDOW). Reset per thread.
+  // (the server windows detail to the most recent page and sets
+  // `hasMoreActivities`). Reset on thread switch or live-window reshape.
   const [olderActivities, setOlderActivities] = React.useState<
     ReadonlyArray<OrchestrationThreadActivity>
   >([]);
@@ -225,46 +227,93 @@ export function ChatView({
 
   // ── Older-history lazy-load ────────────────────────────────────────────────
   const detailId = detail?.id ?? null;
+  // Order-independent oldest boundary + count: a same-thread re-snapshot
+  // (reconnect) or checkpoint revert reshapes the live window and must clear the
+  // prepended pages; a plain append must not. Mirrors the web ChatView reset.
+  const liveOldestActivityId = React.useMemo(
+    () => liveWindowOldestActivityId(detail?.activities ?? []),
+    [detail?.activities],
+  );
+  const liveActivityCount = detail?.activities.length ?? 0;
+  const olderWindowRef = React.useRef({
+    id: detailId,
+    oldest: liveOldestActivityId,
+    count: liveActivityCount,
+  });
+  // The oldest row we've paged past — advances even when a page dedupes to
+  // nothing, so an all-overlap page can't dead-end paging. Reset on reshape.
+  const olderCursorRef = React.useRef<OrchestrationThreadActivity | null>(null);
   React.useEffect(() => {
+    const prev = olderWindowRef.current;
+    olderWindowRef.current = {
+      id: detailId,
+      oldest: liveOldestActivityId,
+      count: liveActivityCount,
+    };
+    const reshaped =
+      detailId !== prev.id ||
+      liveOldestActivityId !== prev.oldest ||
+      liveActivityCount < prev.count;
+    if (!reshaped) return;
+    olderCursorRef.current = null;
     setOlderActivities([]);
     setOlderLoaded(false);
     setOlderHasMore(false);
     setLoadingOlder(false);
+  }, [detailId, liveOldestActivityId, liveActivityCount]);
+  React.useEffect(() => {
     // Terminal focus is global but tabs are per-thread: dropping focus on a
     // thread switch stops keystrokes routing to whichever shell the new thread
     // happens to have, until the user re-focuses it (^P) explicitly.
     setTerminalFocused(false);
   }, [detailId]);
-  // Before any page is loaded, older history might exist iff the live window is
-  // full; afterwards the server's `hasMore` is authoritative.
-  const hasMoreOlder = olderLoaded
-    ? olderHasMore
-    : (detail?.activities.length ?? 0) >= ACTIVITY_WINDOW;
+  // Before any page is loaded, the server tells us whether older history exists
+  // beyond the windowed snapshot; afterwards the page `hasMore` is authoritative.
+  const hasMoreOlder = olderLoaded ? olderHasMore : (detail?.hasMoreActivities ?? false);
   // Activities shown in the timeline = lazy-loaded older pages + the live window.
   const timelineActivities = React.useMemo(
     () => (detail ? [...olderActivities, ...detail.activities] : []),
     [detail, olderActivities],
   );
+  // Latest merged set, read inside the async load handler so dedup runs against
+  // current state, not the snapshot captured when the load was dispatched.
+  const timelineActivitiesRef = React.useRef(timelineActivities);
+  timelineActivitiesRef.current = timelineActivities;
   const loadOlderActivities = React.useCallback(() => {
     if (!detail || loadingOlder || !hasMoreOlder) return;
-    const oldest = olderActivities[0] ?? detail.activities[0];
-    const cursor = oldest?.sequence;
-    if (cursor === undefined) return; // no sequence cursor → nothing to page from
+    // Page from the explicit cursor (oldest row already paged past) or, before
+    // any page, the chronologically-oldest loaded row — not index 0, which the
+    // reducer can fill with a newer row (unsequenced rows sort to the end).
+    const oldest =
+      olderCursorRef.current ?? oldestActivityByChronology(timelineActivitiesRef.current);
+    if (!oldest) return;
+    // Sequenced rows page by sequence; legacy/unsequenced rows (the common case)
+    // page by the (createdAt, activityId) keyset.
+    const cursor =
+      oldest.sequence !== undefined
+        ? { beforeSequence: oldest.sequence }
+        : { beforeCreatedAt: oldest.createdAt, beforeActivityId: oldest.id };
     setLoadingOlder(true);
     void client
       .getThreadActivities(detail.id, cursor)
       .then((page) => {
-        setOlderActivities((prev) => {
-          const seen = new Set(prev.map((activity) => activity.id));
-          const fresh = page.activities.filter((activity) => !seen.has(activity.id));
-          return [...fresh, ...prev];
-        });
+        // Advance the cursor even when every row dedupes away — the server
+        // cursor is strict, so it strictly decreases and paging can't loop.
+        const pageOldest = page.activities[0];
+        if (pageOldest) {
+          olderCursorRef.current = pageOldest;
+        }
+        const seen = new Set(timelineActivitiesRef.current.map((activity) => activity.id));
+        const fresh = page.activities.filter((activity) => !seen.has(activity.id));
+        if (fresh.length > 0) {
+          setOlderActivities((prev) => [...fresh, ...prev]);
+        }
         setOlderLoaded(true);
         setOlderHasMore(page.hasMore);
       })
       .catch(() => store.setStatus("Could not load older history.", "error"))
       .finally(() => setLoadingOlder(false));
-  }, [client, detail, loadingOlder, hasMoreOlder, olderActivities, store]);
+  }, [client, detail, loadingOlder, hasMoreOlder, store]);
 
   const actionablePlan = React.useMemo(
     () => (detail ? latestActionableProposedPlan(detail) : null),
