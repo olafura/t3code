@@ -1,3 +1,7 @@
+// @effect-diagnostics globalDateInEffect:off -- the CPR-gate grace window
+// (lastCursorQueryRelayedAt) is wall-clock session state shared between the
+// sync PTY drain and the write path; threading Clock through both is a
+// follow-up.
 /**
  * TerminalManager - Terminal session orchestration service interface.
  *
