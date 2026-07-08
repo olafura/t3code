@@ -1,3 +1,6 @@
+// @effect-diagnostics anyUnknownInErrorContext:off
+// @effect-diagnostics unknownInEffectCatch:off
+// @effect-diagnostics globalErrorInEffectFailure:off
 import * as NodeFS from "node:fs";
 
 import {
@@ -9,6 +12,7 @@ import {
   ORCHESTRATION_WS_METHODS,
   type OrchestrationShellSnapshot,
   type OrchestrationThread,
+  type OrchestrationThreadDetailSnapshot,
   type OrchestrationThreadActivity,
   OrchestrationProposedPlanId,
   type ProjectId,
@@ -47,7 +51,15 @@ import {
   unarchiveThread as unarchiveThreadOp,
   updateThreadMetadata,
 } from "@t3tools/client-runtime/operations";
-import { request, rpcSessionFactoryLayer, RpcSessionFactory, runStream, subscribe } from "@t3tools/client-runtime/rpc";
+import {
+  request,
+  rpcSessionFactoryLayer,
+  RpcSessionFactory,
+  runStream,
+  subscribe,
+} from "@t3tools/client-runtime/rpc";
+import { ShellSnapshotLoader } from "@t3tools/client-runtime/state/shell";
+import { ThreadSnapshotLoader } from "@t3tools/client-runtime/state/threads";
 import type { RpcSession } from "@t3tools/client-runtime/rpc";
 
 import { mergeVcsStatus } from "./gitActions.logic.ts";
@@ -171,7 +183,7 @@ const makeTuiSupervisor = (options: TuiOptions) =>
       yield* SubscriptionRef.set(sessionRef, Option.some(session));
       yield* SubscriptionRef.set(stateRef, CONNECTED_STATE);
       // `closed` fails when the socket drops; that unwinds the scope below.
-      yield* session.closed;
+      return yield* session.closed;
     });
 
     const loop = Effect.gen(function* () {
@@ -211,7 +223,11 @@ const fileLoggerLayer = (logPath: string) =>
   ]);
 
 export type TuiRuntime = ManagedRuntime.ManagedRuntime<
-  EnvironmentSupervisor | Crypto.Crypto | EnvironmentCacheStore,
+  | EnvironmentSupervisor
+  | Crypto.Crypto
+  | EnvironmentCacheStore
+  | ThreadSnapshotLoader
+  | ShellSnapshotLoader,
   never
 >;
 
@@ -222,9 +238,12 @@ export type TuiRuntime = ManagedRuntime.ManagedRuntime<
  * re-opens instantly from this cache before its live subscription re-establishes.
  */
 const inMemoryCacheStoreLayer = Layer.sync(EnvironmentCacheStore, () => {
-  const threads = new Map<string, OrchestrationThread>();
+  // Threads are cached as detail SNAPSHOTS ({ snapshotSequence, thread }) so a
+  // cache hit can resume live sync from the right projection sequence.
+  const threads = new Map<string, OrchestrationThreadDetailSnapshot>();
   const shells = new Map<string, OrchestrationShellSnapshot>();
-  const threadKey = (environmentId: string, threadId: string) => `${environmentId}\u0000${threadId}`;
+  const threadKey = (environmentId: string, threadId: string) =>
+    `${environmentId}\u0000${threadId}`;
   return EnvironmentCacheStore.of({
     loadShell: (environmentId) => Effect.succeed(Option.fromUndefinedOr(shells.get(environmentId))),
     saveShell: (environmentId, snapshot) =>
@@ -233,9 +252,9 @@ const inMemoryCacheStoreLayer = Layer.sync(EnvironmentCacheStore, () => {
       }),
     loadThread: (environmentId, threadId) =>
       Effect.succeed(Option.fromUndefinedOr(threads.get(threadKey(environmentId, threadId)))),
-    saveThread: (environmentId, thread) =>
+    saveThread: (environmentId, snapshot) =>
       Effect.sync(() => {
-        threads.set(threadKey(environmentId, thread.id), thread);
+        threads.set(threadKey(environmentId, snapshot.thread.id), snapshot);
       }),
     removeThread: (environmentId, threadId) =>
       Effect.sync(() => {
@@ -272,7 +291,25 @@ export function buildTuiRuntime(options: TuiOptions): TuiRuntime {
     Layer.provideMerge(services),
   );
 
-  const runtimeLayer = Layer.mergeAll(supervisorLayer, inMemoryCacheStoreLayer);
+  // HTTP snapshot preloading (web's fast-path before live sync) is an
+  // optimization the TUI doesn't need: Option.none() makes the state machines
+  // fall back to the socket-embedded snapshots, the TUI's existing sole path.
+  const noopSnapshotLoaders = Layer.mergeAll(
+    Layer.succeed(
+      ThreadSnapshotLoader,
+      ThreadSnapshotLoader.of({ load: () => Effect.succeed(Option.none()) }),
+    ),
+    Layer.succeed(
+      ShellSnapshotLoader,
+      ShellSnapshotLoader.of({ load: () => Effect.succeed(Option.none()) }),
+    ),
+  );
+
+  const runtimeLayer = Layer.mergeAll(
+    supervisorLayer,
+    inMemoryCacheStoreLayer,
+    noopSnapshotLoaders,
+  );
 
   return ManagedRuntime.make(runtimeLayer) as unknown as TuiRuntime;
 }
@@ -380,17 +417,16 @@ export interface TuiClient {
   readonly listModels: () => Promise<ModelOption[]>;
   readonly setModel: (threadId: ThreadId, instanceId: string, model: string) => Promise<void>;
   /** Reasoning/effort choices for a model (null if it exposes none). */
-  readonly getReasoningChoices: (instanceId: string, model: string) => Promise<ReasoningChoices | null>;
+  readonly getReasoningChoices: (
+    instanceId: string,
+    model: string,
+  ) => Promise<ReasoningChoices | null>;
   readonly setReasoning: (
     thread: Pick<OrchestrationThread, "id" | "modelSelection">,
     descriptorId: string,
     choiceId: string,
   ) => Promise<void>;
-  readonly terminalWrite: (
-    threadId: ThreadId,
-    terminalId: string,
-    data: string,
-  ) => Promise<void>;
+  readonly terminalWrite: (threadId: ThreadId, terminalId: string, data: string) => Promise<void>;
   readonly terminalResize: (
     threadId: ThreadId,
     terminalId: string,
@@ -445,7 +481,11 @@ export function makeTuiClient(runtime: TuiRuntime, origin = ""): TuiClient {
     build: Effect.Effect<
       SubscriptionRef.SubscriptionRef<S>,
       never,
-      EnvironmentSupervisor | EnvironmentCacheStore | Scope.Scope
+      | EnvironmentSupervisor
+      | EnvironmentCacheStore
+      | ThreadSnapshotLoader
+      | ShellSnapshotLoader
+      | Scope.Scope
     >,
   ): WarmRef<S> => {
     let resolveRef: (ref: SubscriptionRef.SubscriptionRef<S>) => void = () => {};
@@ -457,7 +497,7 @@ export function makeTuiClient(runtime: TuiRuntime, origin = ""): TuiClient {
         Effect.gen(function* () {
           const subscriptionRef = yield* build;
           resolveRef(subscriptionRef);
-          yield* Effect.never;
+          return yield* Effect.never;
         }),
       ),
     );
@@ -515,8 +555,9 @@ export function makeTuiClient(runtime: TuiRuntime, origin = ""): TuiClient {
     // watcher keeps `latestThreads` fresh (so peekThread is instant) and evicts the
     // entry if the thread is deleted — otherwise makeEnvironmentThreadState retries
     // its now-failing subscription every 250ms forever and hammers the server.
-    let resolveRef: (ref: SubscriptionRef.SubscriptionRef<EnvironmentThreadState>) => void =
-      () => {};
+    let resolveRef: (
+      ref: SubscriptionRef.SubscriptionRef<EnvironmentThreadState>,
+    ) => void = () => {};
     const ref = new Promise<SubscriptionRef.SubscriptionRef<EnvironmentThreadState>>((resolve) => {
       resolveRef = resolve;
     });
@@ -653,7 +694,10 @@ export function makeTuiClient(runtime: TuiRuntime, origin = ""): TuiClient {
             },
             runtimeMode: thread.runtimeMode,
             interactionMode: "default",
-            sourceProposedPlan: { threadId: thread.id, planId: OrchestrationProposedPlanId.make(planId) },
+            sourceProposedPlan: {
+              threadId: thread.id,
+              planId: OrchestrationProposedPlanId.make(planId),
+            },
           });
         }),
       ),

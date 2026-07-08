@@ -170,6 +170,8 @@ export interface ProjectionSnapshotQueryShape {
   readonly getThreadDetailSnapshot: (
     threadId: ThreadId,
   ) => Effect.Effect<Option.Option<OrchestrationThreadDetailSnapshot>, ProjectionRepositoryError>;
+
+  /**
    * Cursor-paginated load of a thread's older activities (lazy-load / infinite
    * scroll). Returns the page of activities immediately older than the provided
    * sequence or unsequenced activity cursor, ascending, plus whether older ones

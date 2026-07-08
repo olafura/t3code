@@ -1,3 +1,7 @@
+// @effect-diagnostics globalDateInEffect:off -- the CPR-gate grace window
+// (lastCursorQueryRelayedAt) is wall-clock session state shared between the
+// sync PTY drain and the write path; threading Clock through both is a
+// follow-up.
 /**
  * TerminalManager - Terminal session orchestration service interface.
  *
@@ -800,11 +804,11 @@ const posixInspectSubprocess = Effect.fn("terminal.posixInspectSubprocess")(func
       childPid = parseFirstChildPidFromPgrep(pgrepResult.value.stdout);
     } else if (pgrepResult.value.code === 1) {
       return {
-      hasRunningSubprocess: false,
-      childCommand: null,
-      processIds: [],
-      ...(shellForeground !== undefined ? { shellForeground } : {}),
-    };
+        hasRunningSubprocess: false,
+        childCommand: null,
+        processIds: [],
+        ...(shellForeground !== undefined ? { shellForeground } : {}),
+      };
     }
   }
 
@@ -812,11 +816,11 @@ const posixInspectSubprocess = Effect.fn("terminal.posixInspectSubprocess")(func
     const psResult = yield* Effect.exit(runPs);
     if (psResult._tag === "Failure" || psResult.value.code !== 0) {
       return {
-      hasRunningSubprocess: false,
-      childCommand: null,
-      processIds: [],
-      ...(shellForeground !== undefined ? { shellForeground } : {}),
-    };
+        hasRunningSubprocess: false,
+        childCommand: null,
+        processIds: [],
+        ...(shellForeground !== undefined ? { shellForeground } : {}),
+      };
     }
     for (const line of psResult.value.stdout.split(/\r?\n/g)) {
       const [pidRaw, ppidRaw] = line.trim().split(/\s+/g);
@@ -3214,7 +3218,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
             unsubscribeExit: null,
             hasRunningSubprocess: false,
             shellForeground: true,
-        lastCursorQueryRelayedAt: 0,
+            lastCursorQueryRelayedAt: 0,
             childCommandLabel: null,
             runtimeEnv: normalizedRuntimeEnv(input.env),
           };
