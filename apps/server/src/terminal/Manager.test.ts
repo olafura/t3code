@@ -7,15 +7,9 @@ import {
   type TerminalMetadataStreamEvent,
   type TerminalOpenInput,
   type TerminalRestartInput,
-  ProviderDriverKind,
-  ProviderInstanceId,
-  ServerSettingsError,
-  TerminalProviderInstanceNotFoundError,
 } from "@t3tools/contracts";
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import * as Data from "effect/Data";
-import * as Clock from "effect/Clock";
-import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Encoding from "effect/Encoding";
@@ -29,16 +23,11 @@ import * as Path from "effect/Path";
 import * as Ref from "effect/Ref";
 import * as Schedule from "effect/Schedule";
 import * as Scope from "effect/Scope";
-import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import { ChildProcessSpawner } from "effect/unstable/process";
 import { expect } from "vite-plus/test";
 
-import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
-import * as ServerConfig from "../config.ts";
-import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
 import * as ProcessRunner from "../processRunner.ts";
-import * as ServerSettings from "../serverSettings.ts";
 import * as TerminalManager from "./Manager.ts";
 import {
   sanitizePersistedTerminalHistory,
@@ -221,6 +210,7 @@ const multiTerminalHistoryLogPath = (
 
 interface CreateManagerOptions {
   shellResolver?: () => string;
+  historyCharLimit?: number;
   env?: NodeJS.ProcessEnv;
   subprocessInspector?: (terminalPid: number) => Effect.Effect<{
     readonly hasRunningSubprocess: boolean;
@@ -228,18 +218,10 @@ interface CreateManagerOptions {
     readonly processIds: ReadonlyArray<number>;
     readonly shellForeground?: boolean;
   }>;
-  processTable?: Effect.Effect<
-    ReadonlyArray<{ readonly pid: number; readonly ppid: number; readonly name: string }>,
-    never
-  >;
   subprocessPollIntervalMs?: number;
   processKillGraceMs?: number;
   maxRetainedInactiveSessions?: number;
-  historyByteLimit?: number;
   ptyAdapter?: FakePtyAdapter;
-  resolveProviderInstanceEnvironment?: Parameters<
-    typeof TerminalManager.makeWithOptions
-  >[0]["resolveProviderInstanceEnvironment"];
 }
 
 interface ManagerFixture {
@@ -268,25 +250,21 @@ const createManager = (
       const manager = yield* TerminalManager.makeWithOptions({
         logsDir,
         historyLineLimit,
-        ptyAdapter,
-        ...(options.historyByteLimit !== undefined
-          ? { historyByteLimit: options.historyByteLimit }
+        ...(options.historyCharLimit !== undefined
+          ? { historyCharLimit: options.historyCharLimit }
           : {}),
+        ptyAdapter,
         ...(options.shellResolver !== undefined ? { shellResolver: options.shellResolver } : {}),
         ...(options.env !== undefined ? { env: options.env } : {}),
         ...(options.subprocessInspector !== undefined
           ? { subprocessInspector: options.subprocessInspector }
           : {}),
-        ...(options.processTable !== undefined ? { processTable: options.processTable } : {}),
         ...(options.subprocessPollIntervalMs !== undefined
           ? { subprocessPollIntervalMs: options.subprocessPollIntervalMs }
           : {}),
         processKillGraceMs: options.processKillGraceMs ?? 1,
         ...(options.maxRetainedInactiveSessions !== undefined
           ? { maxRetainedInactiveSessions: options.maxRetainedInactiveSessions }
-          : {}),
-        ...(options.resolveProviderInstanceEnvironment !== undefined
-          ? { resolveProviderInstanceEnvironment: options.resolveProviderInstanceEnvironment }
           : {}),
       });
       const eventsRef = yield* Ref.make<ReadonlyArray<TerminalEvent>>([]);
@@ -308,105 +286,6 @@ const createManager = (
 
 const withHostPlatform = (platform: NodeJS.Platform) =>
   Layer.succeed(HostProcessPlatform, platform);
-
-// Apply the existing line policy, then find the longest code-point-aligned byte tail.
-function retainedHistory(text: string, maxLines: number, maxBytes = Infinity): string {
-  const terminated = text.endsWith("\n");
-  const lines = text.split("\n");
-  if (terminated) lines.pop();
-  const retained = lines.slice(Math.max(0, lines.length - maxLines)).join("\n");
-  const capped = terminated ? `${retained}\n` : retained;
-  if (Buffer.byteLength(capped) <= maxBytes) return capped;
-  const points = Array.from(capped);
-  let start = points.length;
-  let bytes = 0;
-  while (start > 0) {
-    const next = Buffer.byteLength(points[start - 1]!);
-    if (bytes + next > maxBytes) break;
-    bytes += next;
-    start -= 1;
-  }
-  return points.slice(start).join("");
-}
-
-it("preserves line and byte limits across arbitrary chunks, Unicode, ANSI sequences, and clear", () => {
-  let randomSeed = 0x20260904;
-  const fragments = [
-    "",
-    "a",
-    "\n",
-    "\n\n",
-    "\r",
-    "\r\n",
-    "café",
-    "名",
-    "🚀",
-    "\u001b[31m",
-    "\u001b[0m",
-    "\u001b]8;;url\u0007",
-    "\ud83d",
-    "\ude80",
-  ];
-  const nextFragment = () => {
-    randomSeed = (Math.imul(randomSeed, 1_664_525) + 1_013_904_223) >>> 0;
-    return fragments[randomSeed % fragments.length]!;
-  };
-
-  for (const maxBytes of [0, 3, 8, 64, Infinity]) {
-    for (const maxLines of [0, 1, 3, 5, 5_000]) {
-      let expected = retainedHistory("before\ninitial\n", maxLines, maxBytes);
-      const history = new TerminalManager.BoundedTerminalHistory(
-        maxLines,
-        "before\ninitial\n",
-        maxBytes,
-      );
-      expect(history.value()).toBe(expected);
-
-      for (let step = 0; step < 300; step += 1) {
-        if (step % 73 === 0) {
-          history.clear();
-          expected = "";
-          expect(history.value()).toBe(expected);
-        }
-        const chunk = nextFragment() + nextFragment();
-        history.append(chunk);
-        expected = retainedHistory(expected + chunk, maxLines, maxBytes);
-        expect(history.value()).toBe(expected);
-      }
-    }
-  }
-});
-
-it("bounds long partial lines and joins surrogate pairs across chunk boundaries", () => {
-  const maxBytes = 65_539;
-  let expected = "";
-  const history = new TerminalManager.BoundedTerminalHistory(5_000, "", maxBytes);
-  const writes = [
-    "a".repeat(16_383) + "😀" + "b".repeat(70_000),
-    "\r" + "c".repeat(70_000) + "\ud83d",
-    "\ude80" + "d".repeat(100),
-    "\uFEFF" + "名".repeat(30_000),
-  ];
-  for (const text of writes) {
-    history.append(text);
-    expected = retainedHistory(expected + text, 5_000, maxBytes);
-    expect(history.value()).toBe(expected);
-    expect(Buffer.byteLength(history.value())).toBeLessThanOrEqual(maxBytes);
-  }
-});
-
-it("preserves retained lines as older storage is compacted", () => {
-  for (const maxLines of [3, 5_000]) {
-    let expected = "";
-    const history = new TerminalManager.BoundedTerminalHistory(maxLines, expected);
-    for (let batch = 0; batch < 40; batch += 1) {
-      const chunk = Array.from({ length: 300 }, (_, line) => `${batch}:${line}\n`).join("");
-      history.append(chunk);
-      expected = retainedHistory(expected + chunk, maxLines);
-      expect(history.value()).toBe(expected);
-    }
-  }
-});
 
 it.layer(
   Layer.merge(NodeServices.layer, ProcessRunner.layer.pipe(Layer.provide(NodeServices.layer))),
@@ -1060,67 +939,69 @@ it.layer(
     }),
   );
 
-  it.effect("strips capability replies at an idle prompt but relays them to a foreground program", () =>
-    Effect.gen(function* () {
-      let inspect: {
-        readonly hasRunningSubprocess: boolean;
-        readonly childCommand: string | null;
-        readonly processIds: ReadonlyArray<number>;
-      } = { hasRunningSubprocess: false, childCommand: null, processIds: [] };
-      const { manager, ptyAdapter, getEvents } = yield* createManager(5, {
-        subprocessInspector: () => Effect.succeed(inspect),
-        subprocessPollIntervalMs: 20,
-      });
-      yield* manager.open(openInput());
-      const process = ptyAdapter.processes[0];
-      expect(process).toBeDefined();
-      if (!process) return;
+  it.effect(
+    "strips capability replies at an idle prompt but relays them to a foreground program",
+    () =>
+      Effect.gen(function* () {
+        let inspect: {
+          readonly hasRunningSubprocess: boolean;
+          readonly childCommand: string | null;
+          readonly processIds: ReadonlyArray<number>;
+        } = { hasRunningSubprocess: false, childCommand: null, processIds: [] };
+        const { manager, ptyAdapter, getEvents } = yield* createManager(5, {
+          subprocessInspector: () => Effect.succeed(inspect),
+          subprocessPollIntervalMs: 20,
+        });
+        yield* manager.open(openInput());
+        const process = ptyAdapter.processes[0];
+        expect(process).toBeDefined();
+        if (!process) return;
 
-      // No relayed cursor query yet: `CSI 1;2R` is xterm's modified-F3
-      // keystroke, not a CPR reply — it must reach the PTY.
-      yield* manager.write({
-        threadId: "thread-1",
-        terminalId: DEFAULT_TERMINAL_ID,
-        data: "\x1b[1;2R",
-      });
-      expect(process.writes).toEqual(["\x1b[1;2R"]);
-      process.writes.length = 0;
+        // No relayed cursor query yet: `CSI 1;2R` is xterm's modified-F3
+        // keystroke, not a CPR reply — it must reach the PTY.
+        yield* manager.write({
+          threadId: "thread-1",
+          terminalId: DEFAULT_TERMINAL_ID,
+          data: "\x1b[1;2R",
+        });
+        expect(process.writes).toEqual(["\x1b[1;2R"]);
+        process.writes.length = 0;
 
-      // The prompt queries the cursor position — relaying it arms the CPR strip.
-      process.emitData("\x1b[6n");
-      yield* waitFor(
-        Effect.map(getEvents, (events) =>
-          events.some((event) => event.type === "output" && event.data.includes("\x1b[6n")),
-        ),
-        "1200 millis",
-      );
+        // The prompt queries the cursor position — relaying it arms the CPR strip.
+        process.emitData("\x1b[6n");
+        yield* waitFor(
+          Effect.map(getEvents, (events) =>
+            events.some((event) => event.type === "output" && event.data.includes("\x1b[6n")),
+          ),
+          "1200 millis",
+        );
 
-      // Idle prompt (no subprocess) with an outstanding query: the emulator's
-      // CPR auto-reply is dropped — the shell would only echo it back (the
-      // `;1RR` flood).
-      yield* manager.write({
-        threadId: "thread-1",
-        terminalId: DEFAULT_TERMINAL_ID,
-        data: "\x1b[1;1R",
-      });
-      expect(process.writes).toEqual([]);
+        // Idle prompt (no subprocess) with an outstanding query: the emulator's
+        // CPR auto-reply is dropped — the shell would only echo it back (the
+        // `;1RR` flood).
+        yield* manager.write({
+          threadId: "thread-1",
+          terminalId: DEFAULT_TERMINAL_ID,
+          data: "\x1b[1;1R",
+        });
+        expect(process.writes).toEqual([]);
 
-      // Foreground program running (vim): it issued the query and is blocked
-      // reading the answer — input must pass through verbatim.
-      inspect = { hasRunningSubprocess: true, childCommand: "vim", processIds: [100] };
-      yield* waitFor(
-        Effect.map(getEvents, (events) =>
-          events.some((event) => event.type === "activity" && event.hasRunningSubprocess),
-        ),
-        "1200 millis",
-      );
-      yield* manager.write({
-        threadId: "thread-1",
-        terminalId: DEFAULT_TERMINAL_ID,
-        data: "\x1b[1;1R",
-      });
-      expect(process.writes).toEqual(["\x1b[1;1R"]);
-    }),
+        // Foreground program running (vim): it issued the query and is blocked
+        // reading the answer — input must pass through verbatim.
+        inspect = { hasRunningSubprocess: true, childCommand: "vim", processIds: [100] };
+        yield* waitFor(
+          Effect.map(getEvents, (events) =>
+            events.some((event) => event.type === "activity" && event.hasRunningSubprocess),
+          ),
+          "1200 millis",
+        );
+        yield* manager.write({
+          threadId: "thread-1",
+          terminalId: DEFAULT_TERMINAL_ID,
+          data: "\x1b[1;1R",
+        });
+        expect(process.writes).toEqual(["\x1b[1;1R"]);
+      }),
   );
 
   it.effect("keeps stripping replies while only a BACKGROUND job runs (shell owns the PTY)", () =>
@@ -1134,7 +1015,12 @@ it.layer(
         readonly childCommand: string | null;
         readonly processIds: ReadonlyArray<number>;
         readonly shellForeground?: boolean;
-      } = { hasRunningSubprocess: false, childCommand: null, processIds: [], shellForeground: true };
+      } = {
+        hasRunningSubprocess: false,
+        childCommand: null,
+        processIds: [],
+        shellForeground: true,
+      };
       let inspections = 0;
       const { manager, ptyAdapter, getEvents } = yield* createManager(5, {
         subprocessInspector: () => {
@@ -1230,9 +1116,11 @@ it.layer(
       const runCalls: Array<{ command: string; args: ReadonlyArray<string> }> = [];
       // FakePtyAdapter assigns pids starting at 9000, so the two terminals
       // opened below run as pids 9000 and 9001.
-      const psStdout = ["  100  9000 vim", "  101   100 git", "  200  9001 /usr/bin/python3"].join(
-        "\n",
-      );
+      const psStdout = [
+        "  100  9000  100  100 vim",
+        "  101   100  100  100 git",
+        "  200  9001  200  200 /usr/bin/python3",
+      ].join("\n");
       const processRunner: ProcessRunner.ProcessRunner["Service"] = {
         run: (input) =>
           Effect.sync(() => {
@@ -1286,7 +1174,11 @@ it.layer(
 
       // Every spawn is the shared table snapshot — no per-terminal `pgrep`
       // or per-child `ps -p` invocations.
-      expect(runCalls.every((call) => call.args.join(" ") === "-eo pid=,ppid=,comm=")).toBe(true);
+      expect(
+        runCalls.every(
+          (call) => call.args.join(" ") === "-eo pid=,ppid=,pgid=,tpgid=,comm=",
+        ),
+      ).toBe(true);
     }),
   );
 
@@ -1299,7 +1191,7 @@ it.layer(
           Effect.sync(() => {
             if (failSnapshots) failedCalls += 1;
             return {
-              stdout: failSnapshots ? "" : "  100  9000 vim",
+              stdout: failSnapshots ? "" : "  100  9000 100 100 vim",
               stderr: "",
               code: ChildProcessSpawner.ExitCode(failSnapshots ? 1 : 0),
               timedOut: false,
@@ -1344,93 +1236,29 @@ it.layer(
     }),
   );
 
-  it("calculates snapshot failure backoff and success reset delays", () => {
-    assert.equal(TerminalManager.subprocessSnapshotPollDelayMs(1_000, 0), 1_000);
-    assert.equal(TerminalManager.subprocessSnapshotPollDelayMs(1_000, 1), 2_000);
-    assert.equal(TerminalManager.subprocessSnapshotPollDelayMs(1_000, 2), 4_000);
-    assert.equal(TerminalManager.subprocessSnapshotPollDelayMs(1_000, 30), 60_000);
-  });
-
-  it.effect("uses process snapshots from the resource monitor", () =>
+  it.effect("caps history by characters when a redraw stream has no newlines", () =>
     Effect.gen(function* () {
-      let snapshotCalls = 0;
-      const { manager, getEvents } = yield* createManager(5, {
-        subprocessPollIntervalMs: 20,
-        processTable: Effect.sync(() => {
-          snapshotCalls += 1;
-          return [{ pid: 100, ppid: 9000, name: "ping.exe" }];
-        }),
-      }).pipe(Effect.provide(withHostPlatform("win32")));
-
+      // A full-screen program repainting with synchronized-output frames emits
+      // megabytes with almost no newlines — the line cap alone retains all of
+      // it (observed: 21 MB at 4,999 lines). The character cap bounds it.
+      const { manager, ptyAdapter } = yield* createManager(5_000, { historyCharLimit: 400 });
       yield* manager.open(openInput());
-      yield* waitFor(
-        Effect.map(getEvents, (events) =>
-          events.some(
-            (event) =>
-              event.type === "activity" && event.hasRunningSubprocess && event.label === "ping",
-          ),
-        ),
-        "1200 millis",
-      );
-      expect(snapshotCalls).toBeGreaterThan(0);
-    }),
-  );
+      const process = ptyAdapter.processes[0];
+      expect(process).toBeDefined();
+      if (!process) return;
 
-  it.effect("backs off the spawned fallback when the resource monitor snapshot fails", () =>
-    Effect.gen(function* () {
-      const fallbackCalls: Array<number> = [];
-      const processRunner: ProcessRunner.ProcessRunner["Service"] = {
-        run: () =>
-          Clock.currentTimeMillis.pipe(
-            Effect.map((now) => {
-              fallbackCalls.push(now);
-              return {
-                stdout: "  100  9000 vim",
-                stderr: "",
-                code: ChildProcessSpawner.ExitCode(0),
-                timedOut: false,
-                stdoutTruncated: false,
-                stderrInvalidUtf8: false,
-                stdoutInvalidUtf8: false,
-                stderrTruncated: false,
-              };
-            }),
-          ),
-      };
+      const frame = "\u001b[?2026h\u001b[18;2H\u001b[0m\u001b[49m\u001b[Kframe\u001b[?2026l";
+      for (let i = 0; i < 40; i += 1) {
+        process.emitData(frame);
+      }
+      process.emitData("tail-marker");
+      yield* manager.close({ threadId: "thread-1" });
 
-      const { manager, getEvents } = yield* createManager(5, {
-        subprocessPollIntervalMs: 20,
-        processTable: Effect.fail("sidecar unavailable").pipe(
-          Effect.mapError((cause) => cause as never),
-        ),
-      }).pipe(
-        Effect.provideService(ProcessRunner.ProcessRunner, processRunner),
-        Effect.provide(withHostPlatform("linux")),
-      );
-
-      yield* manager.open(openInput());
-      // The fallback data is still applied while the sidecar is down.
-      yield* waitFor(
-        Effect.map(getEvents, (events) =>
-          events.some(
-            (event) =>
-              event.type === "activity" &&
-              event.hasRunningSubprocess === true &&
-              event.label === "vim",
-          ),
-        ),
-        "1200 millis",
-      );
-
-      yield* waitFor(
-        Effect.sync(() => fallbackCalls.length >= 4),
-        "2000 millis",
-      );
-      // Four snapshots at the 20 ms base cadence would span ~60 ms. Backoff
-      // (40 + 80 + 160 ms) stretches the same four snapshots past 150 ms, so
-      // a stalled sidecar no longer hot-loops the spawned fallback.
-      const spanMs = fallbackCalls[3]! - fallbackCalls[0]!;
-      expect(spanMs).toBeGreaterThan(150);
+      const reopened = yield* manager.open(openInput());
+      expect(reopened.history.length).toBeLessThanOrEqual(400);
+      expect(reopened.history.includes("tail-marker")).toBe(true);
+      // The cut lands on an escape boundary, not mid-sequence.
+      expect(reopened.history.startsWith("\u001b")).toBe(true);
     }),
   );
 
@@ -1450,105 +1278,6 @@ it.layer(
       expect(nonEmptyLines).toEqual(["line2", "line3", "line4"]);
     }),
   );
-
-  it.effect("caps incrementally appended history without losing partial or empty lines", () =>
-    Effect.gen(function* () {
-      const { manager, ptyAdapter } = yield* createManager(3);
-      yield* manager.open(openInput());
-      const process = ptyAdapter.processes[0];
-      expect(process).toBeDefined();
-      if (!process) return;
-
-      process.emitData("line1\n");
-      process.emitData("\n");
-      process.emitData("line3");
-      process.emitData("-continued\nline4");
-      yield* manager.close({ threadId: "thread-1" });
-
-      const reopened = yield* manager.open(openInput());
-      expect(reopened.history).toBe("\nline3-continued\nline4");
-    }),
-  );
-
-  it.effect("bounds persisted and attached history without truncating live output", () =>
-    Effect.gen(function* () {
-      const { manager, ptyAdapter, logsDir } = yield* createManager(5, { historyByteLimit: 10 });
-      const attachEvents = yield* Ref.make<ReadonlyArray<TerminalAttachStreamEvent>>([]);
-      const unsubscribe = yield* manager.attachStream(openInput(), (event) =>
-        Ref.update(attachEvents, (events) => [...events, event]),
-      );
-      yield* Effect.addFinalizer(() => Effect.sync(unsubscribe));
-      const writes = ["a".repeat(32), "😀\rEND"];
-      const process = ptyAdapter.processes[0]!;
-      for (const text of writes) process.emitData(text);
-      yield* manager.close({ threadId: "thread-1" });
-      expect(yield* readFileString(yield* historyLogPath(logsDir))).toBe("aa😀\rEND");
-
-      const reopened = yield* manager.open(openInput());
-      const events = yield* Ref.get(attachEvents);
-      expect(events.filter((event) => event.type === "output").map((event) => event.data)).toEqual(
-        writes,
-      );
-      const snapshot = events.filter((event) => event.type === "snapshot").at(-1)?.snapshot;
-      expect(snapshot?.history).toBe("aa😀\rEND");
-      expect(snapshot?.sequence).toBe(reopened.sequence);
-    }),
-  );
-
-  for (const source of ["current", "legacy"] as const) {
-    it.effect(`reads only a Unicode-safe tail from oversized ${source} history`, () =>
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const path = yield* Path.Path;
-        let sourcePath: string | undefined;
-        let closedReads = 0;
-        const readRequests: number[] = [];
-        const trackedFileSystem = FileSystem.FileSystem.of({
-          ...fs,
-          readFileString: (candidate, encoding) =>
-            candidate === sourcePath
-              ? Effect.die("History restoration must not read the whole file")
-              : fs.readFileString(candidate, encoding),
-          open: (candidate, options) =>
-            Effect.gen(function* () {
-              if (candidate !== sourcePath) return yield* fs.open(candidate, options);
-              yield* Effect.addFinalizer(() =>
-                Effect.sync(() => {
-                  closedReads += 1;
-                }),
-              );
-              const file = yield* fs.open(candidate, options);
-              return new Proxy(file, {
-                get(target, key) {
-                  if (key === "read") {
-                    return (buffer: Uint8Array) => {
-                      readRequests.push(buffer.byteLength);
-                      return target.read(buffer.subarray(0, 5));
-                    };
-                  }
-                  return Reflect.get(target, key, target);
-                },
-              });
-            }),
-        });
-        const { manager, logsDir } = yield* createManager(5, { historyByteLimit: 15 }).pipe(
-          Effect.provideService(FileSystem.FileSystem, trackedFileSystem),
-        );
-        const nextPath = yield* historyLogPath(logsDir);
-        sourcePath = source === "current" ? nextPath : path.join(logsDir, "thread-1.log");
-        yield* fs.writeFileString(sourcePath, "old".repeat(32_768) + "😀\uFEFFnewest\ré");
-
-        const snapshot = yield* manager.open(openInput());
-        expect(snapshot.history).toBe("\uFEFFnewest\ré");
-        expect(readRequests).toEqual([15, 10, 5]);
-        expect(closedReads).toBe(1);
-        expect(Buffer.from(yield* fs.readFile(nextPath)).toString()).toBe("\uFEFFnewest\ré");
-        if (source === "legacy") expect(yield* fs.exists(sourcePath)).toBe(false);
-        yield* manager.close({ threadId: "thread-1" });
-        expect((yield* manager.open(openInput())).history).toBe("\uFEFFnewest\ré");
-      }),
-    );
-  }
 
   it.effect("strips replay-unsafe terminal query and reply sequences from persisted history", () =>
     Effect.gen(function* () {
@@ -1635,8 +1364,7 @@ it.layer(
       // A log an older build persisted without sanitizing: the exact repeating
       // DECRPM residue from #1238, ESC introducers intact. On load it must be
       // stripped so it cannot replay (and re-trigger) at the prompt.
-      const garble =
-        "[?69;0$y[?2026;2$y[?2027;0$y[?2031;0$y[?2048;0$y";
+      const garble = "[?69;0$y[?2026;2$y[?2027;0$y[?2031;0$y[?2048;0$y";
       yield* writeFileString(logPath, `prompt$ ${garble.repeat(15)}done\n`);
 
       const opened = yield* manager.open(openInput());
@@ -1964,32 +1692,6 @@ it.layer(
     }),
   );
 
-  it.effect.each(["linux", "darwin", "win32"] as const)(
-    "advertises truecolor before the PTY backend on %s without replacing explicit values",
-    (platform) =>
-      Effect.gen(function* () {
-        for (const [parentColor, runtimeColor, expected] of [
-          [undefined, undefined, "truecolor"],
-          ["", undefined, "truecolor"],
-          ["24bit", undefined, "24bit"],
-          ["24bit", "", ""],
-          [undefined, "", ""],
-          ["24bit", "custom", "custom"],
-        ] as const) {
-          const env = Object.freeze({ COLORTERM: parentColor });
-          const { manager, ptyAdapter } = yield* createManager(5, {
-            shellResolver: () => "/bin/sh",
-            env,
-          }).pipe(Effect.provide(withHostPlatform(platform)));
-          yield* manager.open(
-            openInput({ env: runtimeColor === undefined ? {} : { COLORTERM: runtimeColor } }),
-          );
-          expect(ptyAdapter.spawnInputs[0]?.env.COLORTERM).toBe(expected);
-          expect(env.COLORTERM).toBe(parentColor);
-        }
-      }),
-  );
-
   it.effect("filters app runtime env variables from terminal sessions", () =>
     Effect.gen(function* () {
       const { manager, ptyAdapter } = yield* createManager(5, {
@@ -2011,26 +1713,6 @@ it.layer(
       // Arbitrary host env vars must pass through — terminals inherit the
       // user's environment apart from the explicit blocklist.
       expect(spawnInput.env.TEST_TERMINAL_KEEP).toBe("keep-me");
-    }),
-  );
-
-  it.effect("expands provider home paths passed to setup terminals", () =>
-    Effect.gen(function* () {
-      const { manager, ptyAdapter } = yield* createManager(5);
-
-      yield* manager.open({
-        ...openInput(),
-        env: {
-          CODEX_HOME: "~/.codex-work",
-          CLAUDE_CONFIG_DIR: "~/.claude-work",
-          CUSTOM_ACCOUNT: "~/leave-this-value-alone",
-        },
-      });
-
-      const environment = ptyAdapter.spawnInputs[0]?.env;
-      expect(environment?.CODEX_HOME).toMatch(/[\\/][.]codex-work$/);
-      expect(environment?.CLAUDE_CONFIG_DIR).toMatch(/[\\/][.]claude-work$/);
-      expect(environment?.CUSTOM_ACCOUNT).toBe("~/leave-this-value-alone");
     }),
   );
 
@@ -2117,382 +1799,6 @@ it.layer(
       assert.equal(spawnInput.env.T3CODE_PROJECT_ROOT, "/repo");
       assert.equal(spawnInput.env.T3CODE_WORKTREE_PATH, "/repo/worktree-a");
       assert.equal(spawnInput.env.CUSTOM_FLAG, "1");
-    }),
-  );
-
-  it.effect("resolves a provider instance environment before spawning", () =>
-    Effect.gen(function* () {
-      const providerInstanceId = ProviderInstanceId.make("codex_work");
-      const { manager, ptyAdapter } = yield* createManager(5, {
-        env: { T3CODE_SECRET: "server-only" },
-        resolveProviderInstanceEnvironment: (requestedId, env) =>
-          Effect.succeed({
-            ...env,
-            PROVIDER_SECRET: requestedId === providerInstanceId ? "secret-value" : "wrong",
-            CODEX_HOME: "/accounts/codex-work",
-          }),
-      });
-
-      const snapshot = yield* manager.open(
-        openInput({ providerInstanceId, env: { CLIENT_FLAG: "1" } }),
-      );
-
-      expect(ptyAdapter.spawnInputs[0]?.env.PROVIDER_SECRET).toBe("secret-value");
-      expect(ptyAdapter.spawnInputs[0]?.env.CODEX_HOME).toBe("/accounts/codex-work");
-      expect(ptyAdapter.spawnInputs[0]?.env.CLIENT_FLAG).toBe("1");
-      expect(ptyAdapter.spawnInputs[0]?.env.T3CODE_SECRET).toBeUndefined();
-      expect(snapshot).not.toHaveProperty("env");
-      expect(snapshot).not.toHaveProperty("providerInstanceId");
-    }),
-  );
-
-  it.effect("fails closed when a provider instance is missing", () =>
-    Effect.gen(function* () {
-      const providerInstanceId = ProviderInstanceId.make("deleted_instance");
-      const { manager, ptyAdapter } = yield* createManager(5, {
-        resolveProviderInstanceEnvironment: (requestedId) =>
-          Effect.fail(
-            new TerminalProviderInstanceNotFoundError({
-              providerInstanceId: ProviderInstanceId.make(requestedId),
-            }),
-          ),
-      });
-
-      const error = yield* manager.open(openInput({ providerInstanceId })).pipe(Effect.flip);
-
-      assert.deepStrictEqual(
-        error,
-        new TerminalProviderInstanceNotFoundError({ providerInstanceId }),
-      );
-      expect(ptyAdapter.spawnInputs).toHaveLength(0);
-    }),
-  );
-
-  it.effect("preserves the settings failure when provider environment resolution fails", () =>
-    Effect.gen(function* () {
-      const path = yield* Path.Path;
-      const providerInstanceId = ProviderInstanceId.make("codex_work");
-      const settingsCause = new Error("secret store read failed");
-      const settingsError = new ServerSettingsError({
-        settingsPath: "/test/settings.json",
-        operation: "read-secret",
-        providerInstanceId,
-        environmentVariable: "OPENROUTER_API_KEY",
-        cause: settingsCause,
-      });
-      const serverSettings = ServerSettings.ServerSettingsService.of({
-        start: Effect.void,
-        ready: Effect.void,
-        getSettings: Effect.fail(settingsError),
-        updateSettings: () => Effect.fail(settingsError),
-        streamChanges: Stream.empty,
-        subscribeChanges: Effect.succeed(Stream.empty),
-      });
-
-      const error = yield* TerminalManager.resolveProviderInstanceTerminalEnvironment({
-        serverSettings,
-        path,
-        rawProviderInstanceId: providerInstanceId,
-        env: undefined,
-      }).pipe(Effect.flip);
-
-      expect(error).toMatchObject({
-        _tag: "TerminalProviderEnvironmentError",
-        providerInstanceId,
-      });
-      expect(error.cause).toBe(settingsError);
-      expect(error.message).not.toContain(settingsError.message);
-      expect(error.message).not.toContain("OPENROUTER_API_KEY");
-    }),
-  );
-
-  it.effect.each([
-    {
-      name: "Codex home",
-      driver: "codex",
-      variable: "CODEX_HOME",
-      config: { homePath: "/configured/codex" },
-      expectedHome: "/configured/codex",
-    },
-    {
-      name: "Codex shadow home",
-      driver: "codex",
-      variable: "CODEX_HOME",
-      config: { homePath: "/configured/codex", shadowHomePath: "/configured/codex-shadow" },
-      expectedHome: "/configured/codex-shadow",
-    },
-    {
-      name: "Claude home",
-      driver: "claudeAgent",
-      variable: "CLAUDE_CONFIG_DIR",
-      config: { homePath: "/configured/claude" },
-      expectedHome: "/configured/claude",
-    },
-  ])("prefers $name over the instance environment", ({ driver, variable, config, expectedHome }) =>
-    Effect.gen(function* () {
-      const path = yield* Path.Path;
-      const serverSettings = yield* ServerSettings.ServerSettingsService;
-      const environment = yield* TerminalManager.resolveProviderInstanceTerminalEnvironment({
-        serverSettings,
-        path,
-        rawProviderInstanceId: "configured_home",
-        env: undefined,
-      });
-
-      expect(environment[variable]).toBe(path.resolve(expectedHome));
-    }).pipe(
-      Effect.provide(
-        ServerSettings.layerTest({
-          providerInstances: {
-            [ProviderInstanceId.make("configured_home")]: {
-              driver: ProviderDriverKind.make(driver),
-              environment: [{ name: variable, value: "~/.environment-account", sensitive: false }],
-              config,
-            },
-          },
-        }),
-      ),
-    ),
-  );
-
-  it.effect("resolves the legacy Codex default instance", () =>
-    Effect.gen(function* () {
-      const path = yield* Path.Path;
-      const serverSettings = yield* ServerSettings.ServerSettingsService;
-      const environment = yield* TerminalManager.resolveProviderInstanceTerminalEnvironment({
-        serverSettings,
-        path,
-        rawProviderInstanceId: "codex",
-        env: undefined,
-      });
-
-      expect(environment.CODEX_HOME).toMatch(/[\\/][.]codex-legacy$/);
-    }).pipe(
-      Effect.provide(
-        ServerSettings.ServerSettingsService.layerTest({
-          providerInstances: {},
-          providers: { codex: { homePath: "~/.codex-legacy" } },
-        }),
-      ),
-    ),
-  );
-
-  it.effect("resolves the legacy Claude default instance", () =>
-    Effect.gen(function* () {
-      const path = yield* Path.Path;
-      const serverSettings = yield* ServerSettings.ServerSettingsService;
-      const environment = yield* TerminalManager.resolveProviderInstanceTerminalEnvironment({
-        serverSettings,
-        path,
-        rawProviderInstanceId: "claudeAgent",
-        env: undefined,
-      });
-
-      expect(environment.CLAUDE_CONFIG_DIR).toMatch(/[\\/][.]claude-legacy$/);
-    }).pipe(
-      Effect.provide(
-        ServerSettings.ServerSettingsService.layerTest({
-          providerInstances: {},
-          providers: { claudeAgent: { homePath: "~/.claude-legacy" } },
-        }),
-      ),
-    ),
-  );
-
-  it.effect("prefers an explicit default instance over legacy provider settings", () =>
-    Effect.gen(function* () {
-      const path = yield* Path.Path;
-      const serverSettings = yield* ServerSettings.ServerSettingsService;
-      const environment = yield* TerminalManager.resolveProviderInstanceTerminalEnvironment({
-        serverSettings,
-        path,
-        rawProviderInstanceId: "codex",
-        env: undefined,
-      });
-
-      expect(environment.CODEX_HOME).toMatch(/[\\/][.]codex-explicit$/);
-    }).pipe(
-      Effect.provide(
-        ServerSettings.ServerSettingsService.layerTest({
-          providers: { codex: { homePath: "~/.codex-legacy" } },
-          providerInstances: {
-            [ProviderInstanceId.make("codex")]: {
-              driver: "codex",
-              config: { homePath: "~/.codex-explicit" },
-            },
-          },
-        }),
-      ),
-    ),
-  );
-
-  it.effect("keeps unknown provider instance ids unavailable after legacy hydration", () =>
-    Effect.gen(function* () {
-      const path = yield* Path.Path;
-      const serverSettings = yield* ServerSettings.ServerSettingsService;
-      const error = yield* TerminalManager.resolveProviderInstanceTerminalEnvironment({
-        serverSettings,
-        path,
-        rawProviderInstanceId: "codex_unknown",
-        env: undefined,
-      }).pipe(Effect.flip);
-
-      expect(error).toMatchObject({
-        _tag: "TerminalProviderInstanceNotFoundError",
-        providerInstanceId: "codex_unknown",
-      });
-    }).pipe(Effect.provide(ServerSettings.ServerSettingsService.layerTest())),
-  );
-
-  it.effect("restarts a running terminal when the resolved provider environment changes", () =>
-    Effect.gen(function* () {
-      const providerInstanceId = ProviderInstanceId.make("codex_work");
-      let providerSecret = "first-secret";
-      const { manager, ptyAdapter } = yield* createManager(5, {
-        resolveProviderInstanceEnvironment: () =>
-          Effect.succeed({ PROVIDER_SECRET: providerSecret }),
-      });
-
-      yield* manager.open(openInput({ providerInstanceId }));
-      providerSecret = "second-secret";
-      yield* manager.open(openInput({ providerInstanceId }));
-
-      expect(ptyAdapter.processes[0]?.killed).toBe(true);
-      expect(ptyAdapter.spawnInputs).toHaveLength(2);
-      expect(ptyAdapter.spawnInputs[1]?.env.PROVIDER_SECRET).toBe("second-secret");
-    }),
-  );
-
-  it.effect("restarts with current provider secrets and clears bounded history", () =>
-    Effect.gen(function* () {
-      const serverSettings = yield* ServerSettings.ServerSettingsService;
-      const path = yield* Path.Path;
-      const providerInstanceId = ProviderInstanceId.make("codex_restart");
-      const { manager, ptyAdapter, logsDir } = yield* createManager(2, {
-        historyByteLimit: 8,
-        resolveProviderInstanceEnvironment: (rawProviderInstanceId, env) =>
-          TerminalManager.resolveProviderInstanceTerminalEnvironment({
-            serverSettings,
-            path,
-            rawProviderInstanceId,
-            env,
-          }),
-      });
-      const homePath = path.join(logsDir, "codex");
-      const updateSecret = (value: string) =>
-        serverSettings.updateSettings({
-          providerInstances: {
-            [providerInstanceId]: {
-              driver: ProviderDriverKind.make("codex"),
-              config: { homePath },
-              environment: [{ name: "PROVIDER_SECRET", value, sensitive: true }],
-            },
-          },
-        });
-      const input = {
-        providerInstanceId,
-        env: { CLIENT_FLAG: "1", PROVIDER_SECRET: "client-value" },
-      };
-      const outputProcessed = yield* Deferred.make<void>();
-      const unsubscribe = yield* manager.subscribe((event) =>
-        event.type === "output"
-          ? Deferred.succeed(outputProcessed, undefined).pipe(Effect.asVoid)
-          : Effect.void,
-      );
-      yield* Effect.addFinalizer(() => Effect.sync(unsubscribe));
-
-      yield* updateSecret("first-secret");
-      yield* manager.restart(restartInput(input));
-      const firstProcess = ptyAdapter.processes[0]!;
-      expect(ptyAdapter.spawnInputs[0]?.env.PROVIDER_SECRET).toBe("first-secret");
-      firstProcess.emitData("discarded\nold-one\nold-two\n");
-      yield* Deferred.await(outputProcessed);
-      expect((yield* manager.open(openInput(input))).history).toBe("old-two\n");
-
-      yield* updateSecret("second-secret");
-      const restarted = yield* manager.restart(restartInput(input));
-
-      expect(firstProcess.killed).toBe(true);
-      expect(ptyAdapter.spawnInputs).toHaveLength(2);
-      expect(ptyAdapter.spawnInputs[1]?.env).toMatchObject({
-        PROVIDER_SECRET: "second-secret",
-        CODEX_HOME: homePath,
-        CLIENT_FLAG: "1",
-      });
-      expect(restarted.history).toBe("");
-      expect(restarted.status).toBe("running");
-      expect(restarted).not.toHaveProperty("env");
-      expect(restarted).not.toHaveProperty("providerInstanceId");
-      const logPath = yield* historyLogPath(logsDir);
-      expect(yield* readFileString(logPath)).toBe("");
-
-      ptyAdapter.processes[1]!.emitData("discarded again\nnew-one\nnew-two\n");
-      yield* manager.close({ threadId: "thread-1" });
-      expect(yield* readFileString(logPath)).toBe("new-two\n");
-    }).pipe(
-      Effect.provide(
-        ServerSettings.layer.pipe(
-          Layer.provide(ServerSecretStore.layer),
-          Layer.provide(SqlitePersistenceMemory),
-          Layer.provide(
-            ServerConfig.layerTest(process.cwd(), { prefix: "t3code-terminal-provider-restart-" }),
-          ),
-        ),
-      ),
-    ),
-  );
-
-  it.effect("attaches to a running provider terminal without resolving the provider again", () =>
-    Effect.gen(function* () {
-      const providerInstanceId = ProviderInstanceId.make("codex_work");
-      let providerAvailable = true;
-      const { manager, ptyAdapter } = yield* createManager(5, {
-        resolveProviderInstanceEnvironment: (requestedId) =>
-          providerAvailable
-            ? Effect.succeed({ PROVIDER_SECRET: "secret-value" })
-            : Effect.fail(
-                new TerminalProviderInstanceNotFoundError({
-                  providerInstanceId: ProviderInstanceId.make(requestedId),
-                }),
-              ),
-      });
-      yield* manager.open(openInput({ providerInstanceId }));
-      providerAvailable = false;
-      const events: TerminalAttachStreamEvent[] = [];
-
-      const unsubscribe = yield* manager.attachStream(
-        { ...openInput({ providerInstanceId }), restartIfNotRunning: true },
-        (event) => Effect.sync(() => events.push(event)),
-      );
-      unsubscribe();
-
-      expect(events[0]?.type).toBe("snapshot");
-      expect(ptyAdapter.spawnInputs).toHaveLength(1);
-      expect(ptyAdapter.processes[0]?.killed).toBe(false);
-    }),
-  );
-
-  it.effect("fails closed when attaching would create a missing provider terminal", () =>
-    Effect.gen(function* () {
-      const providerInstanceId = ProviderInstanceId.make("deleted_instance");
-      const { manager, ptyAdapter } = yield* createManager(5, {
-        resolveProviderInstanceEnvironment: (requestedId) =>
-          Effect.fail(
-            new TerminalProviderInstanceNotFoundError({
-              providerInstanceId: ProviderInstanceId.make(requestedId),
-            }),
-          ),
-      });
-
-      const error = yield* manager
-        .attachStream(openInput({ providerInstanceId }), () => Effect.void)
-        .pipe(Effect.flip);
-
-      assert.deepStrictEqual(
-        error,
-        new TerminalProviderInstanceNotFoundError({ providerInstanceId }),
-      );
-      expect(ptyAdapter.spawnInputs).toHaveLength(0);
     }),
   );
 
@@ -2983,8 +2289,7 @@ describe("sanitizeTerminalHistoryChunk", () => {
     // restore: "2026;2$y2027;0$y2031;0$y2048;0$y1$r0m" — DECRPM mode reports
     // (CSI ? Pm ; Ps $ y) plus a DECRPSS status reply (DCS Ps $ r D…D ST),
     // reconstructed as the raw sequences the replayed history carried.
-    const residue =
-      "\x1b[?2026;2$y\x1b[?2027;0$y\x1b[?2031;0$y\x1b[?2048;0$y\x1bP1$r0m\x1b\\";
+    const residue = "\x1b[?2026;2$y\x1b[?2027;0$y\x1b[?2031;0$y\x1b[?2048;0$y\x1bP1$r0m\x1b\\";
     assert.equal(sanitize(`prompt$ ${residue}`).visibleText, "prompt$ ");
   });
 
@@ -3072,8 +2377,7 @@ describe("sanitizeTerminalHistoryChunk", () => {
   });
 
   describe("DCS status strings (DECRQSS / DECRPSS)", () => {
-    const live = (data: string) =>
-      sanitizeTerminalHistoryChunk("", data, { responsesOnly: true });
+    const live = (data: string) => sanitizeTerminalHistoryChunk("", data, { responsesOnly: true });
 
     it("strips a DECRPSS status reply (DCS Ps $ r D…D ST) from both views", () => {
       assert.equal(sanitize("a\x1bP1$r0m\x1b\\b").visibleText, "ab");
@@ -3208,10 +2512,18 @@ describe("terminal sequence grammar invariants", () => {
           for (const sample of response.samples) {
             for (const [label, framed] of framings(descriptor.kind, sample)) {
               if (response.stripFromOutput) {
-                assert.equal(strippedBy(historyView, framed), true, `history keeps ${label} ${sample}`);
+                assert.equal(
+                  strippedBy(historyView, framed),
+                  true,
+                  `history keeps ${label} ${sample}`,
+                );
                 assert.equal(strippedBy(liveView, framed), true, `live keeps ${label} ${sample}`);
               } else {
-                assert.equal(keptBy(historyView, framed), true, `history strips ${label} ${sample}`);
+                assert.equal(
+                  keptBy(historyView, framed),
+                  true,
+                  `history strips ${label} ${sample}`,
+                );
                 assert.equal(keptBy(liveView, framed), true, `live strips ${label} ${sample}`);
               }
             }
@@ -3240,7 +2552,11 @@ describe("terminal sequence grammar invariants", () => {
           for (const sample of response.samples) {
             for (const [label, framed] of framings(descriptor.kind, sample)) {
               if (response.input !== null && !exception) {
-                assert.equal(strippedBy(historyView, framed), true, `input-stripped ${label} ${sample} survives scrollback`);
+                assert.equal(
+                  strippedBy(historyView, framed),
+                  true,
+                  `input-stripped ${label} ${sample} survives scrollback`,
+                );
               }
             }
           }
@@ -3252,7 +2568,11 @@ describe("terminal sequence grammar invariants", () => {
         it("query: stripped from scrollback, relayed live, untouched in input", () => {
           for (const sample of query.samples) {
             for (const [label, framed] of framings(descriptor.kind, sample)) {
-              assert.equal(strippedBy(historyView, framed), true, `history keeps query ${label} ${sample}`);
+              assert.equal(
+                strippedBy(historyView, framed),
+                true,
+                `history keeps query ${label} ${sample}`,
+              );
               assert.equal(keptBy(liveView, framed), true, `live strips query ${label} ${sample}`);
               assert.equal(
                 stripTerminalResponsesFromInput(`a${framed}b`),
@@ -3274,17 +2594,18 @@ describe("terminal sequence grammar invariants", () => {
             if (flattened.loneStrippable) {
               assert.equal(historyView(`a ${sample} b`), "a  b", `lone token survives: ${sample}`);
             } else {
-              assert.equal(historyView(`a ${sample} b`), `a ${sample} b`, `ambiguous lone token stripped: ${sample}`);
+              assert.equal(
+                historyView(`a ${sample} b`),
+                `a ${sample} b`,
+                `ambiguous lone token stripped: ${sample}`,
+              );
             }
           }
         });
       }
 
       it("law: 7-bit and 8-bit framings behave identically in every layer", () => {
-        const bodies = [
-          ...(response?.samples ?? []),
-          ...(query?.samples ?? []),
-        ];
+        const bodies = [...(response?.samples ?? []), ...(query?.samples ?? [])];
         for (const sample of bodies) {
           const framed = framings(descriptor.kind, sample);
           const reference = framed[0];
@@ -3306,10 +2627,7 @@ describe("terminal sequence grammar invariants", () => {
       });
 
       it("law: sanitizing is idempotent over every framed sample", () => {
-        const bodies = [
-          ...(response?.samples ?? []),
-          ...(query?.samples ?? []),
-        ];
+        const bodies = [...(response?.samples ?? []), ...(query?.samples ?? [])];
         for (const sample of bodies) {
           for (const [label, framed] of framings(descriptor.kind, sample)) {
             const once = historyView(`a${framed}b`);
