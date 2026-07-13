@@ -210,6 +210,7 @@ const multiTerminalHistoryLogPath = (
 
 interface CreateManagerOptions {
   shellResolver?: () => string;
+  historyCharLimit?: number;
   env?: NodeJS.ProcessEnv;
   subprocessInspector?: (terminalPid: number) => Effect.Effect<{
     readonly hasRunningSubprocess: boolean;
@@ -249,6 +250,9 @@ const createManager = (
       const manager = yield* TerminalManager.makeWithOptions({
         logsDir,
         historyLineLimit,
+        ...(options.historyCharLimit !== undefined
+          ? { historyCharLimit: options.historyCharLimit }
+          : {}),
         ptyAdapter,
         ...(options.shellResolver !== undefined ? { shellResolver: options.shellResolver } : {}),
         ...(options.env !== undefined ? { env: options.env } : {}),
@@ -935,67 +939,69 @@ it.layer(
     }),
   );
 
-  it.effect("strips capability replies at an idle prompt but relays them to a foreground program", () =>
-    Effect.gen(function* () {
-      let inspect: {
-        readonly hasRunningSubprocess: boolean;
-        readonly childCommand: string | null;
-        readonly processIds: ReadonlyArray<number>;
-      } = { hasRunningSubprocess: false, childCommand: null, processIds: [] };
-      const { manager, ptyAdapter, getEvents } = yield* createManager(5, {
-        subprocessInspector: () => Effect.succeed(inspect),
-        subprocessPollIntervalMs: 20,
-      });
-      yield* manager.open(openInput());
-      const process = ptyAdapter.processes[0];
-      expect(process).toBeDefined();
-      if (!process) return;
+  it.effect(
+    "strips capability replies at an idle prompt but relays them to a foreground program",
+    () =>
+      Effect.gen(function* () {
+        let inspect: {
+          readonly hasRunningSubprocess: boolean;
+          readonly childCommand: string | null;
+          readonly processIds: ReadonlyArray<number>;
+        } = { hasRunningSubprocess: false, childCommand: null, processIds: [] };
+        const { manager, ptyAdapter, getEvents } = yield* createManager(5, {
+          subprocessInspector: () => Effect.succeed(inspect),
+          subprocessPollIntervalMs: 20,
+        });
+        yield* manager.open(openInput());
+        const process = ptyAdapter.processes[0];
+        expect(process).toBeDefined();
+        if (!process) return;
 
-      // No relayed cursor query yet: `CSI 1;2R` is xterm's modified-F3
-      // keystroke, not a CPR reply — it must reach the PTY.
-      yield* manager.write({
-        threadId: "thread-1",
-        terminalId: DEFAULT_TERMINAL_ID,
-        data: "\x1b[1;2R",
-      });
-      expect(process.writes).toEqual(["\x1b[1;2R"]);
-      process.writes.length = 0;
+        // No relayed cursor query yet: `CSI 1;2R` is xterm's modified-F3
+        // keystroke, not a CPR reply — it must reach the PTY.
+        yield* manager.write({
+          threadId: "thread-1",
+          terminalId: DEFAULT_TERMINAL_ID,
+          data: "\x1b[1;2R",
+        });
+        expect(process.writes).toEqual(["\x1b[1;2R"]);
+        process.writes.length = 0;
 
-      // The prompt queries the cursor position — relaying it arms the CPR strip.
-      process.emitData("\x1b[6n");
-      yield* waitFor(
-        Effect.map(getEvents, (events) =>
-          events.some((event) => event.type === "output" && event.data.includes("\x1b[6n")),
-        ),
-        "1200 millis",
-      );
+        // The prompt queries the cursor position — relaying it arms the CPR strip.
+        process.emitData("\x1b[6n");
+        yield* waitFor(
+          Effect.map(getEvents, (events) =>
+            events.some((event) => event.type === "output" && event.data.includes("\x1b[6n")),
+          ),
+          "1200 millis",
+        );
 
-      // Idle prompt (no subprocess) with an outstanding query: the emulator's
-      // CPR auto-reply is dropped — the shell would only echo it back (the
-      // `;1RR` flood).
-      yield* manager.write({
-        threadId: "thread-1",
-        terminalId: DEFAULT_TERMINAL_ID,
-        data: "\x1b[1;1R",
-      });
-      expect(process.writes).toEqual([]);
+        // Idle prompt (no subprocess) with an outstanding query: the emulator's
+        // CPR auto-reply is dropped — the shell would only echo it back (the
+        // `;1RR` flood).
+        yield* manager.write({
+          threadId: "thread-1",
+          terminalId: DEFAULT_TERMINAL_ID,
+          data: "\x1b[1;1R",
+        });
+        expect(process.writes).toEqual([]);
 
-      // Foreground program running (vim): it issued the query and is blocked
-      // reading the answer — input must pass through verbatim.
-      inspect = { hasRunningSubprocess: true, childCommand: "vim", processIds: [100] };
-      yield* waitFor(
-        Effect.map(getEvents, (events) =>
-          events.some((event) => event.type === "activity" && event.hasRunningSubprocess),
-        ),
-        "1200 millis",
-      );
-      yield* manager.write({
-        threadId: "thread-1",
-        terminalId: DEFAULT_TERMINAL_ID,
-        data: "\x1b[1;1R",
-      });
-      expect(process.writes).toEqual(["\x1b[1;1R"]);
-    }),
+        // Foreground program running (vim): it issued the query and is blocked
+        // reading the answer — input must pass through verbatim.
+        inspect = { hasRunningSubprocess: true, childCommand: "vim", processIds: [100] };
+        yield* waitFor(
+          Effect.map(getEvents, (events) =>
+            events.some((event) => event.type === "activity" && event.hasRunningSubprocess),
+          ),
+          "1200 millis",
+        );
+        yield* manager.write({
+          threadId: "thread-1",
+          terminalId: DEFAULT_TERMINAL_ID,
+          data: "\x1b[1;1R",
+        });
+        expect(process.writes).toEqual(["\x1b[1;1R"]);
+      }),
   );
 
   it.effect("keeps stripping replies while only a BACKGROUND job runs (shell owns the PTY)", () =>
@@ -1009,7 +1015,12 @@ it.layer(
         readonly childCommand: string | null;
         readonly processIds: ReadonlyArray<number>;
         readonly shellForeground?: boolean;
-      } = { hasRunningSubprocess: false, childCommand: null, processIds: [], shellForeground: true };
+      } = {
+        hasRunningSubprocess: false,
+        childCommand: null,
+        processIds: [],
+        shellForeground: true,
+      };
       let inspections = 0;
       const { manager, ptyAdapter, getEvents } = yield* createManager(5, {
         subprocessInspector: () => {
@@ -1105,9 +1116,11 @@ it.layer(
       const runCalls: Array<{ command: string; args: ReadonlyArray<string> }> = [];
       // FakePtyAdapter assigns pids starting at 9000, so the two terminals
       // opened below run as pids 9000 and 9001.
-      const psStdout = ["  100  9000 vim", "  101   100 git", "  200  9001 /usr/bin/python3"].join(
-        "\n",
-      );
+      const psStdout = [
+        "  100  9000  100  100 vim",
+        "  101   100  100  100 git",
+        "  200  9001  200  200 /usr/bin/python3",
+      ].join("\n");
       const processRunner: ProcessRunner.ProcessRunner["Service"] = {
         run: (input) =>
           Effect.sync(() => {
@@ -1161,7 +1174,11 @@ it.layer(
 
       // Every spawn is the shared table snapshot — no per-terminal `pgrep`
       // or per-child `ps -p` invocations.
-      expect(runCalls.every((call) => call.args.join(" ") === "-eo pid=,ppid=,comm=")).toBe(true);
+      expect(
+        runCalls.every(
+          (call) => call.args.join(" ") === "-eo pid=,ppid=,pgid=,tpgid=,comm=",
+        ),
+      ).toBe(true);
     }),
   );
 
@@ -1174,7 +1191,7 @@ it.layer(
           Effect.sync(() => {
             if (failSnapshots) failedCalls += 1;
             return {
-              stdout: failSnapshots ? "" : "  100  9000 vim",
+              stdout: failSnapshots ? "" : "  100  9000 100 100 vim",
               stderr: "",
               code: ChildProcessSpawner.ExitCode(failSnapshots ? 1 : 0),
               timedOut: false,
@@ -1216,6 +1233,32 @@ it.layer(
       const activityEvents = (yield* getEvents).filter((event) => event.type === "activity");
       expect(activityEvents.length).toBeGreaterThan(0);
       expect(activityEvents.every((event) => event.hasRunningSubprocess === true)).toBe(true);
+    }),
+  );
+
+  it.effect("caps history by characters when a redraw stream has no newlines", () =>
+    Effect.gen(function* () {
+      // A full-screen program repainting with synchronized-output frames emits
+      // megabytes with almost no newlines — the line cap alone retains all of
+      // it (observed: 21 MB at 4,999 lines). The character cap bounds it.
+      const { manager, ptyAdapter } = yield* createManager(5_000, { historyCharLimit: 400 });
+      yield* manager.open(openInput());
+      const process = ptyAdapter.processes[0];
+      expect(process).toBeDefined();
+      if (!process) return;
+
+      const frame = "\u001b[?2026h\u001b[18;2H\u001b[0m\u001b[49m\u001b[Kframe\u001b[?2026l";
+      for (let i = 0; i < 40; i += 1) {
+        process.emitData(frame);
+      }
+      process.emitData("tail-marker");
+      yield* manager.close({ threadId: "thread-1" });
+
+      const reopened = yield* manager.open(openInput());
+      expect(reopened.history.length).toBeLessThanOrEqual(400);
+      expect(reopened.history.includes("tail-marker")).toBe(true);
+      // The cut lands on an escape boundary, not mid-sequence.
+      expect(reopened.history.startsWith("\u001b")).toBe(true);
     }),
   );
 
@@ -1321,8 +1364,7 @@ it.layer(
       // A log an older build persisted without sanitizing: the exact repeating
       // DECRPM residue from #1238, ESC introducers intact. On load it must be
       // stripped so it cannot replay (and re-trigger) at the prompt.
-      const garble =
-        "[?69;0$y[?2026;2$y[?2027;0$y[?2031;0$y[?2048;0$y";
+      const garble = "[?69;0$y[?2026;2$y[?2027;0$y[?2031;0$y[?2048;0$y";
       yield* writeFileString(logPath, `prompt$ ${garble.repeat(15)}done\n`);
 
       const opened = yield* manager.open(openInput());
@@ -2247,8 +2289,7 @@ describe("sanitizeTerminalHistoryChunk", () => {
     // restore: "2026;2$y2027;0$y2031;0$y2048;0$y1$r0m" — DECRPM mode reports
     // (CSI ? Pm ; Ps $ y) plus a DECRPSS status reply (DCS Ps $ r D…D ST),
     // reconstructed as the raw sequences the replayed history carried.
-    const residue =
-      "\x1b[?2026;2$y\x1b[?2027;0$y\x1b[?2031;0$y\x1b[?2048;0$y\x1bP1$r0m\x1b\\";
+    const residue = "\x1b[?2026;2$y\x1b[?2027;0$y\x1b[?2031;0$y\x1b[?2048;0$y\x1bP1$r0m\x1b\\";
     assert.equal(sanitize(`prompt$ ${residue}`).visibleText, "prompt$ ");
   });
 
@@ -2336,8 +2377,7 @@ describe("sanitizeTerminalHistoryChunk", () => {
   });
 
   describe("DCS status strings (DECRQSS / DECRPSS)", () => {
-    const live = (data: string) =>
-      sanitizeTerminalHistoryChunk("", data, { responsesOnly: true });
+    const live = (data: string) => sanitizeTerminalHistoryChunk("", data, { responsesOnly: true });
 
     it("strips a DECRPSS status reply (DCS Ps $ r D…D ST) from both views", () => {
       assert.equal(sanitize("a\x1bP1$r0m\x1b\\b").visibleText, "ab");
@@ -2472,10 +2512,18 @@ describe("terminal sequence grammar invariants", () => {
           for (const sample of response.samples) {
             for (const [label, framed] of framings(descriptor.kind, sample)) {
               if (response.stripFromOutput) {
-                assert.equal(strippedBy(historyView, framed), true, `history keeps ${label} ${sample}`);
+                assert.equal(
+                  strippedBy(historyView, framed),
+                  true,
+                  `history keeps ${label} ${sample}`,
+                );
                 assert.equal(strippedBy(liveView, framed), true, `live keeps ${label} ${sample}`);
               } else {
-                assert.equal(keptBy(historyView, framed), true, `history strips ${label} ${sample}`);
+                assert.equal(
+                  keptBy(historyView, framed),
+                  true,
+                  `history strips ${label} ${sample}`,
+                );
                 assert.equal(keptBy(liveView, framed), true, `live strips ${label} ${sample}`);
               }
             }
@@ -2504,7 +2552,11 @@ describe("terminal sequence grammar invariants", () => {
           for (const sample of response.samples) {
             for (const [label, framed] of framings(descriptor.kind, sample)) {
               if (response.input !== null && !exception) {
-                assert.equal(strippedBy(historyView, framed), true, `input-stripped ${label} ${sample} survives scrollback`);
+                assert.equal(
+                  strippedBy(historyView, framed),
+                  true,
+                  `input-stripped ${label} ${sample} survives scrollback`,
+                );
               }
             }
           }
@@ -2516,7 +2568,11 @@ describe("terminal sequence grammar invariants", () => {
         it("query: stripped from scrollback, relayed live, untouched in input", () => {
           for (const sample of query.samples) {
             for (const [label, framed] of framings(descriptor.kind, sample)) {
-              assert.equal(strippedBy(historyView, framed), true, `history keeps query ${label} ${sample}`);
+              assert.equal(
+                strippedBy(historyView, framed),
+                true,
+                `history keeps query ${label} ${sample}`,
+              );
               assert.equal(keptBy(liveView, framed), true, `live strips query ${label} ${sample}`);
               assert.equal(
                 stripTerminalResponsesFromInput(`a${framed}b`),
@@ -2538,17 +2594,18 @@ describe("terminal sequence grammar invariants", () => {
             if (flattened.loneStrippable) {
               assert.equal(historyView(`a ${sample} b`), "a  b", `lone token survives: ${sample}`);
             } else {
-              assert.equal(historyView(`a ${sample} b`), `a ${sample} b`, `ambiguous lone token stripped: ${sample}`);
+              assert.equal(
+                historyView(`a ${sample} b`),
+                `a ${sample} b`,
+                `ambiguous lone token stripped: ${sample}`,
+              );
             }
           }
         });
       }
 
       it("law: 7-bit and 8-bit framings behave identically in every layer", () => {
-        const bodies = [
-          ...(response?.samples ?? []),
-          ...(query?.samples ?? []),
-        ];
+        const bodies = [...(response?.samples ?? []), ...(query?.samples ?? [])];
         for (const sample of bodies) {
           const framed = framings(descriptor.kind, sample);
           const reference = framed[0];
@@ -2570,10 +2627,7 @@ describe("terminal sequence grammar invariants", () => {
       });
 
       it("law: sanitizing is idempotent over every framed sample", () => {
-        const bodies = [
-          ...(response?.samples ?? []),
-          ...(query?.samples ?? []),
-        ];
+        const bodies = [...(response?.samples ?? []), ...(query?.samples ?? [])];
         for (const sample of bodies) {
           for (const [label, framed] of framings(descriptor.kind, sample)) {
             const once = historyView(`a${framed}b`);
