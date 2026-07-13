@@ -6,6 +6,7 @@ import {
   type RuntimeMode,
 } from "@t3tools/contracts";
 import { useRenderer, useTerminalDimensions } from "@opentui/react";
+import { getKittyImageManager } from "@t3tools/opentui-image";
 import * as NodeChildProcess from "node:child_process";
 import * as NodeFSP from "node:fs/promises";
 import * as NodeOS from "node:os";
@@ -898,6 +899,7 @@ export function ChatView({
           VISUAL: process.env.VISUAL,
           EDITOR: process.env.EDITOR,
         });
+        getKittyImageManager(renderer).clearImages();
         renderer.suspend();
         try {
           await new Promise<void>((resolve) => {
@@ -907,6 +909,7 @@ export function ChatView({
           });
         } finally {
           renderer.resume();
+          renderer.requestRender();
         }
         const edited = normalizeEditedPrompt(await NodeFSP.readFile(file, "utf8"));
         setReply(edited);
@@ -1471,6 +1474,7 @@ export function ChatView({
             scrollRef={scrollRef}
             onOpenDiff={openDiffAtTurn}
             getAttachmentUrl={client.getAttachmentUrl}
+            getAttachmentImage={client.getAttachmentImage}
             onOpenUrl={(url) => store.setStatus(url, "info")}
           />
         )}
