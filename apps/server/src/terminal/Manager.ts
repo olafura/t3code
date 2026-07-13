@@ -921,16 +921,45 @@ function defaultSubprocessInspectorForPlatform(platform: NodeJS.Platform) {
   });
 }
 
-function capHistory(history: string, maxLines: number): string {
+/**
+ * Upper bound on retained scrollback CHARACTERS, complementing the line limit.
+ *
+ * The line cap alone cannot bound a full-screen program: synchronized-output
+ * redraw frames (cursor addressing + `CSI K` clears, no newlines) make a
+ * single "line" arbitrarily large — observed 21 MB of history at only 4,999
+ * lines from a TUI repainting on a spinner tick. That bloats server memory
+ * (`session.history`), the persisted log, and the reattach snapshot shipped
+ * to clients. 2 MiB comfortably holds 5,000 lines of ordinary shell output.
+ */
+const DEFAULT_HISTORY_CHAR_LIMIT = 2 * 1024 * 1024;
+
+function capHistory(history: string, maxLines: number, maxChars: number): string {
   if (history.length === 0) return history;
   const hasTrailingNewline = history.endsWith("\n");
   const lines = history.split("\n");
   if (hasTrailingNewline) {
     lines.pop();
   }
-  if (lines.length <= maxLines) return history;
-  const capped = lines.slice(lines.length - maxLines).join("\n");
-  return hasTrailingNewline ? `${capped}\n` : capped;
+  let capped = history;
+  if (lines.length > maxLines) {
+    const joined = lines.slice(lines.length - maxLines).join("\n");
+    capped = hasTrailingNewline ? `${joined}\n` : joined;
+  }
+  if (capped.length > maxChars) {
+    // Cut from the head at the friendliest boundary inside the excess: the
+    // next line start if one exists, else the next escape introducer (a
+    // frame-ish boundary in redraw streams), else a hard cut. A torn leading
+    // sequence degrades exactly like the line cap tearing SGR state does.
+    const cut = capped.length - maxChars;
+    const newline = capped.indexOf("\n", cut);
+    if (newline !== -1 && newline < cut + 64 * 1024) {
+      capped = capped.slice(newline + 1);
+    } else {
+      const escape = capped.indexOf("\u001b", cut);
+      capped = capped.slice(escape !== -1 && escape < cut + 64 * 1024 ? escape : cut);
+    }
+  }
+  return capped;
 }
 
 function isCsiFinalByte(codePoint: number): boolean {
@@ -1724,6 +1753,7 @@ function normalizedRuntimeEnv(
 interface TerminalManagerOptions {
   logsDir: string;
   historyLineLimit?: number;
+  historyCharLimit?: number;
   ptyAdapter: PtyAdapter.PtyAdapter["Service"];
   shellResolver?: () => string;
   env?: NodeJS.ProcessEnv;
@@ -1764,6 +1794,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
 
   const logsDir = options.logsDir;
   const historyLineLimit = options.historyLineLimit ?? DEFAULT_HISTORY_LINE_LIMIT;
+  const historyCharLimit = options.historyCharLimit ?? DEFAULT_HISTORY_CHAR_LIMIT;
   const platform = yield* HostProcessPlatform;
   // Terminals must inherit the user's full environment (minus the blocklist
   // applied in createTerminalSpawnEnv) — an allowlist here silently strips
@@ -2037,7 +2068,11 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       // builds (the "…$y" / colour-report garble) is stripped from replayed
       // scrollback — not just from newly-written output. Idempotent for clean
       // logs; the rewrite below persists the cleanup.
-      const capped = capHistory(sanitizePersistedTerminalHistory(raw), historyLineLimit);
+      const capped = capHistory(
+        sanitizePersistedTerminalHistory(raw),
+        historyLineLimit,
+        historyCharLimit,
+      );
       if (capped !== raw) {
         yield* fileSystem
           .writeFileString(nextPath, capped)
@@ -2078,7 +2113,11 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         ),
       );
     // Sanitize while migrating so the new-path log starts clean (see above).
-    const capped = capHistory(sanitizePersistedTerminalHistory(raw), historyLineLimit);
+    const capped = capHistory(
+      sanitizePersistedTerminalHistory(raw),
+      historyLineLimit,
+      historyCharLimit,
+    );
     yield* fileSystem
       .writeFileString(nextPath, capped)
       .pipe(
@@ -2275,6 +2314,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
             session.history = capHistory(
               `${session.history}${sanitized.historyText}`,
               historyLineLimit,
+              historyCharLimit,
             );
           }
           const eventStamp = advanceEventSequence(session);
