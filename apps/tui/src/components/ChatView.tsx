@@ -2,6 +2,7 @@ import { type ScrollBoxRenderable, type SelectOption, SyntaxStyle } from "@opent
 import {
   type GitStackedAction,
   type OrchestrationThreadActivity,
+  PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
   type ProviderInteractionMode,
   type RuntimeMode,
 } from "@t3tools/contracts";
@@ -19,9 +20,16 @@ import {
 } from "@t3tools/client-runtime/state/older-thread-activities";
 
 import { derivePendingApprovals } from "../approvals.ts";
+import {
+  type ComposerImageAttachment,
+  isSupportedImagePath,
+  prepareComposerImage,
+  removeComposerImage,
+} from "../composerAttachments.ts";
 import { normalizeEditedPrompt, resolveEditorCommand } from "../promptEditor.ts";
 import type { TuiClient } from "../connection.ts";
 import { useKeyBindings } from "../hooks/useKeyBindings.ts";
+import { useKittyGraphicsSupport } from "../hooks/useKittyGraphicsSupport.ts";
 import { latestActionableProposedPlan } from "../proposedPlan.ts";
 import { createStore } from "../store.ts";
 import { statusGlyphColor, usePalette } from "../theme.ts";
@@ -71,6 +79,8 @@ const RIGHT_PANEL_MIN_TERMINAL_WIDTH = 100;
 const SCROLL_STEP = 8;
 /** Cap on terminals per thread (mirrors the web's per-group limit). */
 const MAX_TERMINALS_PER_THREAD = 6;
+const IMAGE_ONLY_PROMPT =
+  "[User attached one or more images without additional text. Respond using the conversation context and the attached image(s).]";
 // Top-level layout + state wiring (mirrors apps/web/src/components/ChatView.tsx):
 // owns the external store + UI state, derives the row window and pane heights,
 // routes key bindings to actions, and composes Sidebar / MessagesTimeline /
@@ -85,6 +95,7 @@ export function ChatView({
 }): React.ReactNode {
   const { width, height } = useTerminalDimensions();
   const renderer = useRenderer();
+  const inlineImagesSupported = useKittyGraphicsSupport();
   const palette = usePalette();
   const store = React.useMemo(() => createStore(client), [client]);
   const syntaxStyle = React.useMemo(() => SyntaxStyle.create(), []);
@@ -118,6 +129,7 @@ export function ChatView({
   // The workspace file browser (palette → Browse files): the entry index, the
   // selected row, collapsed dirs, and the currently-open file's contents.
   const [filesOpen, setFilesOpen] = React.useState(false);
+  const [filesPurpose, setFilesPurpose] = React.useState<"browse" | "attach-image">("browse");
   const [filesStatus, setFilesStatus] = React.useState<FilesStatus>("loading");
   const [fileEntries, setFileEntries] = React.useState<
     ReadonlyArray<{ readonly path: string; readonly kind: "file" | "directory" }>
@@ -149,6 +161,9 @@ export function ChatView({
   // web's "Type your own answer, or leave blank to use the selected option").
   const [customAnswer, setCustomAnswer] = React.useState("");
   const [reply, setReply] = React.useState("");
+  const [composerImages, setComposerImages] = React.useState<
+    ReadonlyArray<ComposerImageAttachment>
+  >([]);
   // Bumped to remount (clear) the uncontrolled multiline reply editor.
   const [composerEpoch, setComposerEpoch] = React.useState(0);
   const [draft, setDraft] = React.useState("");
@@ -544,14 +559,15 @@ export function ChatView({
   // A pending question renders a panel inside the composer (header + question +
   // options + hint + spacer), so the composer grows to fit it.
   const pendingPanelHeight = userInputActive && uiQuestion ? uiQuestion.options.length + 4 : 0;
+  const attachmentPreviewHeight = composerImages.length === 0 ? 0 : inlineImagesSupported ? 4 : 1;
   const composerHeight =
     focus === "new"
       ? 9
       : focus === "rename" || focus === "filter" || focus === "commit"
         ? 5
         : popoverOpen
-          ? 5 // compact: a one-line static input + the footer, under the popover
-          : promptLines + 4 + pendingPanelHeight;
+          ? 5 + attachmentPreviewHeight // compact input + attachments + footer
+          : promptLines + 4 + pendingPanelHeight + attachmentPreviewHeight;
   const defaultTerminalHeight = Math.floor(height * 0.4);
   const maxTerminalHeight = Math.max(6, height - composerHeight - 6);
   const terminalDrawerHeight = activeTerminal
@@ -607,12 +623,13 @@ export function ChatView({
 
   const clearReply = () => {
     setReply("");
+    setComposerImages([]);
     setComposerEpoch((epoch) => epoch + 1);
   };
 
   const sendReply = () => {
-    const text = reply.trim();
-    if (text.length === 0) {
+    const typedText = reply.trim();
+    if (typedText.length === 0 && composerImages.length === 0) {
       // Empty prompt → Enter activates the highlighted row.
       if (state.selection?.kind === "project") store.toggleProject(state.selection.id);
       else if (state.selection?.kind === "more") store.loadMore(state.selection.id);
@@ -622,8 +639,10 @@ export function ChatView({
       store.setStatus("Select a thread (↑/↓) to send a message.");
       return;
     }
+    const text = typedText.length > 0 ? typedText : IMAGE_ONLY_PROMPT;
+    const attachments = composerImages.map((image) => image.upload);
     void client
-      .sendReply(detail, text)
+      .sendReply(detail, text, attachments)
       .catch((error) => store.setStatus(`send failed: ${String(error)}`, "error"));
     store.setStatus("Reply sent.", "success");
     clearReply();
@@ -799,15 +818,20 @@ export function ChatView({
       flattenFileTree(
         buildFileTree(
           fileEntries
-            .filter((entry) => entry.kind === "file")
+            .filter(
+              (entry) =>
+                entry.kind === "file" &&
+                (filesPurpose === "browse" || isSupportedImagePath(entry.path)),
+            )
             .map((entry) => ({ path: entry.path, additions: 0, deletions: 0 })),
         ),
         filesCollapsedDirs,
       ),
-    [fileEntries, filesCollapsedDirs],
+    [fileEntries, filesCollapsedDirs, filesPurpose],
   );
 
-  const openFiles = () => {
+  const openFiles = (purpose: "browse" | "attach-image" = "browse") => {
+    setFilesPurpose(purpose);
     setFilesOpen(true);
     setViewingFile(null);
     setFilesIndex(0);
@@ -850,6 +874,41 @@ export function ChatView({
       });
       return;
     }
+    if (filesPurpose === "attach-image") {
+      if (composerImages.some((image) => image.relativePath === row.path)) {
+        store.setStatus(`${row.name} is already attached.`, "info");
+        closeFiles();
+        return;
+      }
+      if (composerImages.length >= PROVIDER_SEND_TURN_MAX_ATTACHMENTS) {
+        store.setStatus(
+          `You can attach up to ${PROVIDER_SEND_TURN_MAX_ATTACHMENTS} images.`,
+          "error",
+        );
+        closeFiles();
+        return;
+      }
+      setFilesStatus("loading");
+      void client
+        .readFileBase64(terminalCwd, row.path)
+        .then((file) => {
+          if (!file) throw new Error("Could not read the image.");
+          return prepareComposerImage(row.path, file);
+        })
+        .then((image) => {
+          setComposerImages((current) => [...current, image]);
+          closeFiles();
+          store.setStatus(`Attached ${image.upload.name}.`, "success");
+        })
+        .catch((error) => {
+          setFilesStatus("ready");
+          store.setStatus(
+            error instanceof Error ? error.message : "Could not attach image.",
+            "error",
+          );
+        });
+      return;
+    }
     setViewingFile({ path: row.path, status: "loading", content: "" });
     void client
       .readFile(terminalCwd, row.path)
@@ -865,6 +924,9 @@ export function ChatView({
   const filesBack = () => {
     if (viewingFile) setViewingFile(null);
     else closeFiles();
+  };
+  const removeStagedComposerImage = (relativePath: string) => {
+    setComposerImages((current) => removeComposerImage(current, relativePath));
   };
 
   const toggleFocus = () => {
@@ -1079,6 +1141,25 @@ export function ChatView({
         keywords: "workspace open file",
         run: () => runCommand(openFiles),
       });
+      if (!pendingUserInput && composerImages.length < PROVIDER_SEND_TURN_MAX_ATTACHMENTS) {
+        list.push({
+          id: "attach-image",
+          title: "Attach image",
+          keywords: "image picture workspace upload",
+          run: () => runCommand(() => openFiles("attach-image")),
+        });
+      }
+      if (composerImages.length > 0) {
+        list.push({
+          id: "remove-attachment",
+          title: "Remove last attachment",
+          keywords: "image clear",
+          run: () =>
+            runCommand(() => {
+              setComposerImages((current) => current.slice(0, -1));
+            }),
+        });
+      }
     }
     list.push({
       id: "settings",
@@ -1096,6 +1177,8 @@ export function ChatView({
     terminalOpen,
     rightPanelOpen,
     actionablePlan,
+    composerImages,
+    pendingUserInput,
   ]);
 
   const filteredCommands = React.useMemo(
@@ -1447,6 +1530,7 @@ export function ChatView({
             height={panesHeight}
             syntaxStyle={syntaxStyle}
             scrollRef={filesScrollRef}
+            purpose={filesPurpose}
           />
         ) : diffOpen ? (
           <DiffViewer
@@ -1569,6 +1653,8 @@ export function ChatView({
         composerEpoch={composerEpoch}
         controls={controls}
         working={working}
+        attachments={composerImages}
+        inlineImagesSupported={inlineImagesSupported}
         width={chatWidth}
         pendingUserInput={userInputActive ? pendingUserInput : null}
         uiQuestionIndex={uiQuestionIndex}
@@ -1589,6 +1675,7 @@ export function ChatView({
         onStop={stopTurn}
         onSend={sendReply}
         onSubmitAnswer={submitUserInput}
+        onRemoveAttachment={removeStagedComposerImage}
       />
 
       <box

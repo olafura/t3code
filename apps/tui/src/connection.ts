@@ -26,6 +26,7 @@ import {
   type ThreadId,
   ThreadId as ThreadIdSchema,
   TrimmedNonEmptyString,
+  type UploadChatImageAttachment,
   type ServerConfig,
   type VcsListRefsResult,
   type VcsStatusLocalResult,
@@ -367,6 +368,7 @@ export interface TuiClient {
   readonly sendReply: (
     thread: Pick<OrchestrationThread, "id" | "runtimeMode" | "interactionMode">,
     text: string,
+    attachments?: ReadonlyArray<UploadChatImageAttachment>,
   ) => Promise<void>;
   readonly createThread: (input: {
     readonly projectId: ProjectId;
@@ -480,6 +482,15 @@ export interface TuiClient {
   ) => Promise<ReadonlyArray<{ readonly path: string; readonly kind: "file" | "directory" }>>;
   /** Read a workspace file's contents, or null on failure. */
   readonly readFile: (cwd: string, relativePath: string) => Promise<string | null>;
+  /** Read a bounded workspace file as base64 for attachment preparation. */
+  readonly readFileBase64: (
+    cwd: string,
+    relativePath: string,
+  ) => Promise<{
+    readonly contents: string;
+    readonly byteLength: number;
+    readonly truncated: boolean;
+  } | null>;
   readonly dispose: () => Promise<void>;
 }
 
@@ -676,13 +687,13 @@ export function makeTuiClient(runtime: TuiRuntime, origin = ""): TuiClient {
       return forkUnsub(stream);
     },
 
-    sendReply: (thread, text) =>
+    sendReply: (thread, text, attachments = []) =>
       runtime.runPromise(
         Effect.gen(function* () {
           const messageId = MessageIdSchema.make(yield* newId);
           yield* startThreadTurn({
             threadId: thread.id,
-            message: { messageId, role: "user", text, attachments: [] },
+            message: { messageId, role: "user", text, attachments: [...attachments] },
             runtimeMode: thread.runtimeMode,
             interactionMode: thread.interactionMode,
           });
@@ -958,6 +969,19 @@ export function makeTuiClient(runtime: TuiRuntime, origin = ""): TuiClient {
         .runPromise(
           request(WS_METHODS.projectsReadFile, { cwd, relativePath }).pipe(
             Effect.map((r) => r.contents),
+          ),
+        )
+        .catch(() => null),
+
+    readFileBase64: (cwd, relativePath) =>
+      runtime
+        .runPromise(
+          request(WS_METHODS.projectsReadFile, { cwd, relativePath, encoding: "base64" }).pipe(
+            Effect.map(({ contents, byteLength, truncated }) => ({
+              contents,
+              byteLength,
+              truncated,
+            })),
           ),
         )
         .catch(() => null),
