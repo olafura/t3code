@@ -250,6 +250,8 @@ export interface TerminalSessionState {
   pid: number | null;
   history: string;
   pendingHistoryControlSequence: string;
+  /** Incomplete client-input control sequence held across terminal.write calls. */
+  pendingInputControlSequence: string;
   pendingProcessEvents: Array<PendingProcessEvent>;
   pendingProcessEventIndex: number;
   processEventDrainRunning: boolean;
@@ -1421,36 +1423,46 @@ const MAX_PENDING_CONTROL_SEQUENCE_LENGTH = 64 * 1024;
  * only on byte structure (where an incomplete escape sequence ends), never on
  * which complete sequences are stripped, so it is identical for both views.
  */
-function sanitizeTerminalChunkOnce(input: string): {
+function sanitizeTerminalChunkOnce(
+  input: string,
+  inputOptions: { readonly includeQueryGated: boolean } = { includeQueryGated: true },
+): {
   historyText: string;
   liveText: string;
+  inputText: string;
   pendingControlSequence: string;
 } {
   let historyText = "";
   let liveText = "";
+  let inputText = "";
   let index = 0;
 
   // Ordinary text and sequences neither view strips go to both buffers.
   const appendBoth = (value: string) => {
     historyText += value;
     liveText += value;
+    inputText += value;
   };
   // A CSI sequence: each view keeps it unless its own strip rule removes it.
   const appendCsi = (sequence: string, body: string, finalByte: string) => {
     if (!shouldStripCsiSequence(body, finalByte, false)) historyText += sequence;
     if (!shouldStripCsiSequence(body, finalByte, true)) liveText += sequence;
+    inputText += stripTerminalResponsesFromInput(sequence, inputOptions);
   };
   const appendOsc = (sequence: string, content: string) => {
     if (!shouldStripOscSequence(content, false)) historyText += sequence;
     if (!shouldStripOscSequence(content, true)) liveText += sequence;
+    inputText += stripTerminalResponsesFromInput(sequence, inputOptions);
   };
   const appendDcs = (sequence: string, content: string) => {
     if (!shouldStripDcsSequence(content, false)) historyText += sequence;
     if (!shouldStripDcsSequence(content, true)) liveText += sequence;
+    inputText += stripTerminalResponsesFromInput(sequence, inputOptions);
   };
   const pending = () => ({
     historyText: stripFlattenedModeReplyResidue(historyText),
     liveText: stripFlattenedModeReplyResidue(liveText),
+    inputText,
     pendingControlSequence: input.slice(index),
   });
 
@@ -1556,6 +1568,7 @@ function sanitizeTerminalChunkOnce(input: string): {
   return {
     historyText: stripFlattenedModeReplyResidue(historyText),
     liveText: stripFlattenedModeReplyResidue(liveText),
+    inputText,
     pendingControlSequence: "",
   };
 }
@@ -1626,6 +1639,46 @@ export function sanitizeTerminalHistoryChunk(
   return {
     visibleText: (options.responsesOnly ?? false) ? dual.liveText : dual.historyText,
     pendingControlSequence: dual.pendingControlSequence,
+  };
+}
+
+/**
+ * Stateful counterpart to {@link stripTerminalResponsesFromInput}. Client
+ * transports are allowed to split a terminal reply across multiple writes; the
+ * old stateless filter passed the first half to the PTY and could no longer
+ * recognize the suffix. This uses the same structural walk and declarative
+ * grammar as output sanitization, holding only an incomplete control sequence.
+ */
+export function sanitizeTerminalInputChunk(
+  pendingControlSequence: string,
+  data: string,
+  options: { readonly includeQueryGated?: boolean } = {},
+): { data: string; pendingControlSequence: string } {
+  const input = `${pendingControlSequence}${data}`;
+  const parsed = sanitizeTerminalChunkOnce(input, {
+    includeQueryGated: options.includeQueryGated ?? true,
+  });
+
+  // Escape is both a complete user keystroke and a possible introducer. Never
+  // hold a lone Esc waiting for another write; complete CSI/OSC/DCS prefixes are
+  // still buffered and reassembled across transport chunks.
+  if (parsed.pendingControlSequence === "\x1b") {
+    return { data: `${parsed.inputText}\x1b`, pendingControlSequence: "" };
+  }
+
+  // Match the live-output parser's memory bound. A malformed client must not
+  // grow session state forever by opening an OSC/DCS string without a
+  // terminator; beyond the cap, degrade to verbatim input and recover.
+  if (parsed.pendingControlSequence.length > MAX_PENDING_CONTROL_SEQUENCE_LENGTH) {
+    return {
+      data: `${parsed.inputText}${parsed.pendingControlSequence}`,
+      pendingControlSequence: "",
+    };
+  }
+
+  return {
+    data: parsed.inputText,
+    pendingControlSequence: parsed.pendingControlSequence,
   };
 }
 
@@ -2338,6 +2391,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         session.childCommandLabel = null;
         session.status = "exited";
         session.pendingHistoryControlSequence = "";
+        session.pendingInputControlSequence = "";
         session.pendingProcessEvents = [];
         session.pendingProcessEventIndex = 0;
         session.processEventDrainRunning = false;
@@ -2411,6 +2465,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       session.childCommandLabel = null;
       session.status = "exited";
       session.pendingHistoryControlSequence = "";
+      session.pendingInputControlSequence = "";
       session.pendingProcessEvents = [];
       session.pendingProcessEventIndex = 0;
       session.processEventDrainRunning = false;
@@ -2810,6 +2865,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         pid: null,
         history,
         pendingHistoryControlSequence: "",
+        pendingInputControlSequence: "",
         pendingProcessEvents: [],
         pendingProcessEventIndex: 0,
         processEventDrainRunning: false,
@@ -2873,6 +2929,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       liveSession.runtimeEnv = nextRuntimeEnv;
       liveSession.history = "";
       liveSession.pendingHistoryControlSequence = "";
+      liveSession.pendingInputControlSequence = "";
       liveSession.pendingProcessEvents = [];
       liveSession.pendingProcessEventIndex = 0;
       liveSession.processEventDrainRunning = false;
@@ -2882,6 +2939,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       liveSession.worktreePath = nextWorktreePath;
       liveSession.history = "";
       liveSession.pendingHistoryControlSequence = "";
+      liveSession.pendingInputControlSequence = "";
       liveSession.pendingProcessEvents = [];
       liveSession.pendingProcessEventIndex = 0;
       liveSession.processEventDrainRunning = false;
@@ -3160,13 +3218,23 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
     // `exec`'d over the shell keeps its pgid so it still looks like the shell —
     // both accepted next to the runaway flood the strip prevents.
     const data = session.shellForeground
-      ? stripTerminalResponsesFromInput(input.data, {
-          // CPR shares its byte shape with modified function keys; only strip
-          // it while a relayed cursor query makes a reply genuinely expected.
-          includeQueryGated:
-            Date.now() - session.lastCursorQueryRelayedAt < CURSOR_QUERY_REPLY_GRACE_MS,
-        })
-      : input.data;
+      ? (() => {
+          const sanitized = sanitizeTerminalInputChunk(
+            session.pendingInputControlSequence,
+            input.data,
+            {
+              // CPR shares its byte shape with modified function keys; only
+              // strip it while a relayed cursor query makes a reply expected.
+              includeQueryGated:
+                DateTime.nowUnsafe().epochMilliseconds - session.lastCursorQueryRelayedAt <
+                CURSOR_QUERY_REPLY_GRACE_MS,
+            },
+          );
+          session.pendingInputControlSequence = sanitized.pendingControlSequence;
+          return sanitized.data;
+        })()
+      : `${session.pendingInputControlSequence}${input.data}`;
+    if (!session.shellForeground) session.pendingInputControlSequence = "";
     if (data.length === 0) return;
     yield* Effect.try({
       try: () => process.write(data),
@@ -3207,6 +3275,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         const session = yield* requireSession(input.threadId, terminalId);
         session.history = "";
         session.pendingHistoryControlSequence = "";
+        session.pendingInputControlSequence = "";
         session.pendingProcessEvents = [];
         session.pendingProcessEventIndex = 0;
         session.processEventDrainRunning = false;
@@ -3244,6 +3313,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
             pid: null,
             history: "",
             pendingHistoryControlSequence: "",
+            pendingInputControlSequence: "",
             pendingProcessEvents: [],
             pendingProcessEventIndex: 0,
             processEventDrainRunning: false,
@@ -3282,6 +3352,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
 
         session.history = "";
         session.pendingHistoryControlSequence = "";
+        session.pendingInputControlSequence = "";
         session.pendingProcessEvents = [];
         session.pendingProcessEventIndex = 0;
         session.processEventDrainRunning = false;
