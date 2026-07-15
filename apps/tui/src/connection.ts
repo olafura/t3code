@@ -18,11 +18,13 @@ import {
   type ProjectId,
   type ProviderApprovalDecision,
   ProviderInstanceId,
+  PositiveInt,
   type ProviderInteractionMode,
   type RuntimeMode,
   type GitStackedAction,
   type TerminalAttachStreamEvent,
   type TerminalMetadataStreamEvent,
+  type ThreadTurnStartBootstrap,
   type ThreadId,
   ThreadId as ThreadIdSchema,
   TrimmedNonEmptyString,
@@ -42,7 +44,6 @@ import {
 } from "@t3tools/client-runtime/connection";
 import {
   archiveThread as archiveThreadOp,
-  createThread as createThreadOp,
   deleteThread as deleteThreadOp,
   interruptThreadTurn,
   respondToThreadApproval,
@@ -65,6 +66,7 @@ import {
 import { ShellSnapshotLoader } from "@t3tools/client-runtime/state/shell";
 import { ThreadSnapshotLoader } from "@t3tools/client-runtime/state/threads";
 import type { RpcSession } from "@t3tools/client-runtime/rpc";
+import { buildTemporaryWorktreeBranchName } from "@t3tools/shared/git";
 
 import { mergeVcsStatus } from "./gitActions.logic.ts";
 
@@ -84,6 +86,7 @@ import {
   makeEnvironmentThreadState,
 } from "@t3tools/client-runtime/state/threads";
 import * as Crypto from "effect/Crypto";
+import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -128,6 +131,54 @@ const toNullableTrimmed = (value: string | null) => {
   const trimmed = value?.trim() ?? "";
   return trimmed.length > 0 ? TrimmedNonEmptyString.make(trimmed) : null;
 };
+
+export interface TuiCreateThreadInput {
+  readonly projectId: ProjectId;
+  readonly projectCwd: string;
+  readonly title: string;
+  readonly modelSelection: ModelSelection;
+  readonly firstMessage: string;
+  readonly runtimeMode: RuntimeMode;
+  readonly interactionMode: ProviderInteractionMode;
+  readonly branch: string | null;
+  readonly worktreePath: string | null;
+  readonly createWorktree: boolean;
+  readonly startFromOrigin: boolean;
+}
+
+/** Build the web-compatible, server-cleaned-up bootstrap for a thread's first turn. */
+export function buildThreadCreationBootstrap(
+  input: TuiCreateThreadInput,
+  createdAt: string,
+  worktreeBranch: string | null,
+): ThreadTurnStartBootstrap {
+  if (input.createWorktree && (!input.branch?.trim() || !worktreeBranch?.trim())) {
+    throw new Error("A base branch is required to create a worktree");
+  }
+  return {
+    createThread: {
+      projectId: input.projectId,
+      title: TrimmedNonEmptyString.make(input.title),
+      modelSelection: input.modelSelection,
+      runtimeMode: input.runtimeMode,
+      interactionMode: input.interactionMode,
+      branch: toNullableTrimmed(input.branch),
+      worktreePath: toNullableTrimmed(input.worktreePath),
+      createdAt,
+    },
+    ...(input.createWorktree && input.branch && worktreeBranch
+      ? {
+          prepareWorktree: {
+            projectCwd: TrimmedNonEmptyString.make(input.projectCwd),
+            baseBranch: TrimmedNonEmptyString.make(input.branch),
+            branch: TrimmedNonEmptyString.make(worktreeBranch),
+            ...(input.startFromOrigin ? { startFromOrigin: true } : {}),
+          },
+          runSetupScript: true,
+        }
+      : {}),
+  };
+}
 
 const CONNECTING_STATE: SupervisorConnectionState = {
   desired: true,
@@ -370,16 +421,7 @@ export interface TuiClient {
     text: string,
     attachments?: ReadonlyArray<UploadChatImageAttachment>,
   ) => Promise<void>;
-  readonly createThread: (input: {
-    readonly projectId: ProjectId;
-    readonly title: string;
-    readonly modelSelection: ModelSelection;
-    readonly firstMessage: string;
-    readonly runtimeMode: RuntimeMode;
-    readonly interactionMode: ProviderInteractionMode;
-    readonly branch: string | null;
-    readonly worktreePath: string | null;
-  }) => Promise<void>;
+  readonly createThread: (input: TuiCreateThreadInput) => Promise<ThreadId>;
   readonly implementPlan: (
     thread: Pick<OrchestrationThread, "id" | "runtimeMode">,
     planId: string,
@@ -441,6 +483,10 @@ export interface TuiClient {
   }>;
   /** The selectable models reported by the server's configured providers. */
   readonly listModels: () => Promise<ModelOption[]>;
+  /** Current server settings, including new-thread workspace defaults. */
+  readonly getServerConfig: () => Promise<ServerConfig>;
+  /** Git refs available as base branches for a project's new worktree. */
+  readonly listRefs: (cwd: string) => Promise<VcsListRefsResult>;
   readonly setModel: (threadId: ThreadId, instanceId: string, model: string) => Promise<void>;
   /** Reasoning/effort choices for a model (null if it exposes none). */
   readonly getReasoningChoices: (
@@ -704,23 +750,25 @@ export function makeTuiClient(runtime: TuiRuntime, origin = ""): TuiClient {
       runtime.runPromise(
         Effect.gen(function* () {
           const threadId = ThreadIdSchema.make(yield* newId);
-          yield* createThreadOp({
-            threadId,
-            projectId: input.projectId,
-            title: input.title,
-            modelSelection: input.modelSelection,
-            runtimeMode: input.runtimeMode,
-            interactionMode: input.interactionMode,
-            branch: toNullableTrimmed(input.branch),
-            worktreePath: toNullableTrimmed(input.worktreePath),
-          });
           const messageId = MessageIdSchema.make(yield* newId);
+          const createdAt = yield* DateTime.now.pipe(Effect.map(DateTime.formatIso));
+          const worktreeToken = input.createWorktree ? yield* newId : null;
+          const worktreeBranch = worktreeToken
+            ? buildTemporaryWorktreeBranchName((byteLength) =>
+                worktreeToken.replaceAll("-", "").slice(0, byteLength * 2),
+              )
+            : null;
           yield* startThreadTurn({
             threadId,
             message: { messageId, role: "user", text: input.firstMessage, attachments: [] },
+            modelSelection: input.modelSelection,
+            titleSeed: TrimmedNonEmptyString.make(input.title),
             runtimeMode: input.runtimeMode,
             interactionMode: input.interactionMode,
+            bootstrap: buildThreadCreationBootstrap(input, createdAt, worktreeBranch),
+            createdAt,
           });
+          return threadId;
         }),
       ),
 
@@ -901,6 +949,16 @@ export function makeTuiClient(runtime: TuiRuntime, origin = ""): TuiClient {
         request(WS_METHODS.serverGetConfig, {}).pipe(
           Effect.map((config) => flattenModelOptions(config.providers)),
         ),
+      ),
+
+    getServerConfig: () => runtime.runPromise(request(WS_METHODS.serverGetConfig, {})),
+
+    listRefs: (cwd) =>
+      runtime.runPromise(
+        request(WS_METHODS.vcsListRefs, {
+          cwd,
+          limit: PositiveInt.make(100),
+        }),
       ),
 
     setModel: (threadId, instanceId, model) =>
