@@ -31,6 +31,7 @@ import * as TerminalManager from "./Manager.ts";
 import {
   sanitizePersistedTerminalHistory,
   sanitizeTerminalHistoryChunk,
+  sanitizeTerminalInputChunk,
   stripTerminalResponsesFromInput,
   TERMINAL_SEQUENCE_GRAMMAR,
 } from "./Manager.ts";
@@ -982,6 +983,21 @@ it.layer(
           threadId: "thread-1",
           terminalId: DEFAULT_TERMINAL_ID,
           data: "\x1b[1;1R",
+        });
+        expect(process.writes).toEqual([]);
+
+        // Transport chunking must not bypass the same filter. Previously the
+        // first half reached the shell before the stateless matcher could see
+        // the final `R`, leaving `;1R`/`R` residue in the persisted log.
+        yield* manager.write({
+          threadId: "thread-1",
+          terminalId: DEFAULT_TERMINAL_ID,
+          data: "\x1b[16",
+        });
+        yield* manager.write({
+          threadId: "thread-1",
+          terminalId: DEFAULT_TERMINAL_ID,
+          data: ";1R",
         });
         expect(process.writes).toEqual([]);
 
@@ -2275,6 +2291,53 @@ describe("stripTerminalResponsesFromInput", () => {
     assert.equal(stripTerminalResponsesFromInput("\x1b[c"), "\x1b[c"); // bare DA query kept
     assert.equal(stripTerminalResponsesFromInput("\x1b[>c"), "\x1b[>c"); // bare secondary DA query kept
     assert.equal(stripTerminalResponsesFromInput("\x1b[6n"), "\x1b[6n"); // DSR query kept
+  });
+});
+
+describe("sanitizeTerminalInputChunk", () => {
+  it("reassembles and strips replies split across client writes", () => {
+    const cprPrefix = sanitizeTerminalInputChunk("", "\x1b[16");
+    assert.equal(cprPrefix.data, "");
+    assert.equal(cprPrefix.pendingControlSequence, "\x1b[16");
+    assert.deepEqual(sanitizeTerminalInputChunk(cprPrefix.pendingControlSequence, ";1R"), {
+      data: "",
+      pendingControlSequence: "",
+    });
+
+    const oscPrefix = sanitizeTerminalInputChunk("", "\x1b]11;rgb:1616");
+    assert.equal(oscPrefix.data, "");
+    assert.deepEqual(
+      sanitizeTerminalInputChunk(oscPrefix.pendingControlSequence, "/1616/1616\x07"),
+      { data: "", pendingControlSequence: "" },
+    );
+  });
+
+  it("keeps query-gated CPR and real keys when no query is outstanding", () => {
+    const prefix = sanitizeTerminalInputChunk("", "\x1b[1", {
+      includeQueryGated: false,
+    });
+    assert.deepEqual(
+      sanitizeTerminalInputChunk(prefix.pendingControlSequence, ";2R", {
+        includeQueryGated: false,
+      }),
+      { data: "\x1b[1;2R", pendingControlSequence: "" },
+    );
+    assert.deepEqual(sanitizeTerminalInputChunk("", "\x1b"), {
+      data: "\x1b",
+      pendingControlSequence: "",
+    });
+    assert.deepEqual(sanitizeTerminalInputChunk("", "\x1b[A"), {
+      data: "\x1b[A",
+      pendingControlSequence: "",
+    });
+  });
+
+  it("bounds an unterminated string instead of growing session state forever", () => {
+    const malformed = `\x1b]11;rgb:${"a".repeat(64 * 1024)}`;
+    assert.deepEqual(sanitizeTerminalInputChunk("", malformed), {
+      data: malformed,
+      pendingControlSequence: "",
+    });
   });
 });
 
