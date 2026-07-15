@@ -143,7 +143,6 @@ export function useThreadComposerState() {
     loadPage: loadOlderActivitiesPage,
   });
 
-
   const selectedThreadFeed = useMemo(
     () =>
       selectedThreadDetail

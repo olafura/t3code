@@ -131,10 +131,6 @@
       "types": "./src/state/threads.ts",
       "default": "./src/state/threads.ts"
     },
-    "./state/thread-reducer": {
-      "types": "./src/state/threadReducer.ts",
-      "default": "./src/state/threadReducer.ts"
-    },
     "./state/older-thread-activities": {
       "types": "./src/state/olderThreadActivities.ts",
       "default": "./src/state/olderThreadActivities.ts"
@@ -157,6 +153,12 @@
     "@t3tools/shared": "workspace:*",
     "effect": "catalog:"
   },
+  "devDependencies": {
+    "@effect/vitest": "catalog:",
+    "@types/react": "~19.2.14",
+    "react": "19.2.6",
+    "vite-plus": "catalog:"
+  },
   "peerDependencies": {
     "react": "^19.0.0"
   },
@@ -164,11 +166,5 @@
     "react": {
       "optional": true
     }
-  },
-  "devDependencies": {
-    "@effect/vitest": "catalog:",
-    "@types/react": "~19.2.14",
-    "react": "19.2.6",
-    "vite-plus": "catalog:"
   }
 }

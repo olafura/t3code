@@ -39,7 +39,15 @@ async function render(node: React.ReactNode) {
 describe("RightPanel", () => {
   it("Given no git status, then it shows a placeholder", async () => {
     const t = await render(
-      <RightPanel status={null} busy={false} width={32} height={14} onRunAction={() => {}} onPull={() => {}} onOpenUrl={() => {}} />,
+      <RightPanel
+        status={null}
+        busy={false}
+        width={32}
+        height={14}
+        onRunAction={() => {}}
+        onPull={() => {}}
+        onOpenUrl={() => {}}
+      />,
     );
     expect(t.captureCharFrame()).toContain("no git status");
     t.renderer.destroy();

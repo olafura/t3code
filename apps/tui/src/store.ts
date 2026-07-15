@@ -80,7 +80,6 @@ export function createStore(client: TuiClient): Store {
   // The worktree currently subscribed for git status, so we only resubscribe on change.
   let vcsCwd: string | null = null;
 
-
   const selectedThreadId = () => (state.selection?.kind === "thread" ? state.selection.id : null);
   const rowsNow = () =>
     buildRows(state.shell, state.expanded, state.loadedInFull, selectedThreadId(), state.filter);

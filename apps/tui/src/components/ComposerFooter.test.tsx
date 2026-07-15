@@ -37,7 +37,11 @@ async function render(node: React.ReactNode) {
 describe("ComposerFooter", () => {
   it("Given control state, then it shows model, reasoning, mode and access — model first", async () => {
     const t = await render(<ComposerFooter {...base} controls={controls} />);
-    const line = t.captureCharFrame().split("\n").find((l) => l.includes("model")) ?? "";
+    const line =
+      t
+        .captureCharFrame()
+        .split("\n")
+        .find((l) => l.includes("model")) ?? "";
     expect(line).toContain("model gpt-5");
     expect(line).toContain("reasoning high");
     expect(line).toContain("^B Plan");

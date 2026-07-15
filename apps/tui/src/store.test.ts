@@ -33,10 +33,13 @@ const shell = (
   threads: ReadonlyArray<{ id: string; projectId: string; updatedAt: string; title?: string }>,
 ): OrchestrationShellSnapshot => ({ projects, threads }) as unknown as OrchestrationShellSnapshot;
 
-const oneProjectTwoThreads = shell([{ id: "p1", title: "P1" }], [
-  { id: "t1", projectId: "p1", updatedAt: "2020-01-02T00:00:00.000Z" },
-  { id: "t2", projectId: "p1", updatedAt: "2020-01-01T00:00:00.000Z" },
-]);
+const oneProjectTwoThreads = shell(
+  [{ id: "p1", title: "P1" }],
+  [
+    { id: "t1", projectId: "p1", updatedAt: "2020-01-02T00:00:00.000Z" },
+    { id: "t2", projectId: "p1", updatedAt: "2020-01-01T00:00:00.000Z" },
+  ],
+);
 
 describe("createStore", () => {
   it("Given a shell snapshot, when pushed, then it populates state and a project-count status", () => {
@@ -132,10 +135,13 @@ describe("createStore", () => {
     const store = createStore(f.client);
     store.start();
     f.pushShell(
-      shell([{ id: "p1", title: "P1" }], [
-        { id: "t1", projectId: "p1", updatedAt: "2020-01-02T00:00:00.000Z", title: "login" },
-        { id: "t2", projectId: "p1", updatedAt: "2020-01-01T00:00:00.000Z", title: "theme" },
-      ]),
+      shell(
+        [{ id: "p1", title: "P1" }],
+        [
+          { id: "t1", projectId: "p1", updatedAt: "2020-01-02T00:00:00.000Z", title: "login" },
+          { id: "t2", projectId: "p1", updatedAt: "2020-01-01T00:00:00.000Z", title: "theme" },
+        ],
+      ),
     );
     store.toggleProject("p1");
     store.select({ kind: "thread", id: "t1" });

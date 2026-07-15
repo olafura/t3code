@@ -109,7 +109,9 @@ export function buildRows(
   ].toSorted((a, b) => {
     const byTime = sortKey(b).localeCompare(sortKey(a));
     if (byTime !== 0) return byTime;
-    return (projectTitles.get(a) ?? a).localeCompare(projectTitles.get(b) ?? b) || a.localeCompare(b);
+    return (
+      (projectTitles.get(a) ?? a).localeCompare(projectTitles.get(b) ?? b) || a.localeCompare(b)
+    );
   });
 
   const rows: Row[] = [];

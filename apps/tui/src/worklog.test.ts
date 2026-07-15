@@ -95,7 +95,12 @@ describe("deriveWorkLogEntries", () => {
 
   it("Given a thinking activity (task.progress), then its tone is thinking", () => {
     const entries = deriveWorkLogEntries([
-      activity({ kind: "task.progress", tone: "info", summary: "", payload: { summary: "Pondering" } }),
+      activity({
+        kind: "task.progress",
+        tone: "info",
+        summary: "",
+        payload: { summary: "Pondering" },
+      }),
     ]);
     expect(entries[0]!.tone).toBe("thinking");
     expect(entries[0]!.label).toBe("Pondering");

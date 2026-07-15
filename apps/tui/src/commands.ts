@@ -27,10 +27,7 @@ function subsequenceMatch(query: string, text: string): boolean {
  * substring > subsequence, preserving the original order within a tier. An
  * empty query returns every command unchanged.
  */
-export function filterCommands(
-  commands: ReadonlyArray<Command>,
-  query: string,
-): Command[] {
+export function filterCommands(commands: ReadonlyArray<Command>, query: string): Command[] {
   const q = query.trim().toLowerCase();
   if (q.length === 0) return [...commands];
 

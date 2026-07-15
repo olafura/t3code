@@ -12,9 +12,7 @@ export interface ModelOption {
   readonly providerLabel: string;
 }
 
-export function flattenModelOptions(
-  providers: ReadonlyArray<ServerProvider>,
-): ModelOption[] {
+export function flattenModelOptions(providers: ReadonlyArray<ServerProvider>): ModelOption[] {
   const options: ModelOption[] = [];
   for (const provider of providers) {
     const providerLabel = provider.displayName ?? provider.driver ?? provider.instanceId;

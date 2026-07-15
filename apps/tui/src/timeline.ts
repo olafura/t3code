@@ -1,7 +1,4 @@
-import type {
-  OrchestrationCheckpointSummary,
-  OrchestrationMessage,
-} from "@t3tools/contracts";
+import type { OrchestrationCheckpointSummary, OrchestrationMessage } from "@t3tools/contracts";
 
 import type { OrchestrationThread } from "./connection.ts";
 import { deriveWorkLogEntries, type WorkLogEntry } from "./worklog.ts";
@@ -135,7 +132,8 @@ function groupRows(items: ReadonlyArray<OrderedItem>): FoldableRow[] {
       cursor += 1;
     }
     const first = group[0];
-    if (first) rows.push({ kind: "work", id: first.id, createdAt: first.createdAt, groupedEntries: group });
+    if (first)
+      rows.push({ kind: "work", id: first.id, createdAt: first.createdAt, groupedEntries: group });
     index = cursor;
   }
   return rows;
@@ -175,7 +173,12 @@ function deriveTurnFolds(
     if (!item.turnId) continue;
     let group = groups.get(item.turnId);
     if (!group) {
-      group = { items: [], startBoundary: pendingUserBoundary, terminalId: null, hasStreaming: false };
+      group = {
+        items: [],
+        startBoundary: pendingUserBoundary,
+        terminalId: null,
+        hasStreaming: false,
+      };
       pendingUserBoundary = null;
       groups.set(item.turnId, group);
     }
@@ -201,7 +204,10 @@ function deriveTurnFolds(
     const elapsedMs =
       latestTurn?.turnId === turnId && latestTurn.startedAt && latestTurn.completedAt
         ? computeElapsedMs(latestTurn.startedAt, latestTurn.completedAt)
-        : computeElapsedMs(group.startBoundary ?? first.createdAt, maxIso(terminalUpdatedAt, lastEnd));
+        : computeElapsedMs(
+            group.startBoundary ?? first.createdAt,
+            maxIso(terminalUpdatedAt, lastEnd),
+          );
     const duration = elapsedMs !== null ? formatDuration(elapsedMs) : null;
     const interrupted = latestTurn?.turnId === turnId && latestTurn.state === "interrupted";
     const label = interrupted

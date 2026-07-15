@@ -104,9 +104,11 @@ describe("applyTerminalColors", () => {
       defaultBackground: "#102030",
     } as never);
     const accent = THEME.accent;
-    expect([Math.round(accent.r * 255), Math.round(accent.g * 255), Math.round(accent.b * 255)]).toEqual([
-      255, 102, 204,
-    ]);
+    expect([
+      Math.round(accent.r * 255),
+      Math.round(accent.g * 255),
+      Math.round(accent.b * 255),
+    ]).toEqual([255, 102, 204]);
     // Intent is preserved (still an indexed slot 6), so it also themes correctly.
     expect(accent.intent).toBe("indexed");
     expect(accent.slot).toBe(6);

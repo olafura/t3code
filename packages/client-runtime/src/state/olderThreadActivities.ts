@@ -199,8 +199,7 @@ export function useOlderThreadActivities(
   }, [threadKey, liveOldestActivityId, liveActivityCount]);
 
   const mergedActivities = useMemo(
-    () =>
-      olderActivities.length > 0 ? [...olderActivities, ...liveActivities] : liveActivities,
+    () => (olderActivities.length > 0 ? [...olderActivities, ...liveActivities] : liveActivities),
     [olderActivities, liveActivities],
   );
   // Latest merged set, read inside the async load handler so dedup runs
@@ -210,9 +209,7 @@ export function useOlderThreadActivities(
 
   // Before any page is loaded the server flag is authoritative; afterwards
   // the latest page's `hasMore` is.
-  const hasMoreOlder = olderLoaded
-    ? olderHasMore
-    : threadKey !== null && hasMoreLiveActivities;
+  const hasMoreOlder = olderLoaded ? olderHasMore : threadKey !== null && hasMoreLiveActivities;
 
   const loadOlder = useCallback(() => {
     if (threadKey === null || !hasMoreOlder) {

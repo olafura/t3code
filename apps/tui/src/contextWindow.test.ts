@@ -64,7 +64,21 @@ describe("formatting", () => {
   });
 
   it("formats the full meter and falls back when the max is unknown", () => {
-    expect(formatContextWindow({ usedTokens: 144_000, maxTokens: 200_000, remainingTokens: 56_000, usedPercentage: 72 })).toContain("72% · 144k/200k");
-    expect(formatContextWindow({ usedTokens: 1234, maxTokens: null, remainingTokens: null, usedPercentage: null })).toBe("1.2k used");
+    expect(
+      formatContextWindow({
+        usedTokens: 144_000,
+        maxTokens: 200_000,
+        remainingTokens: 56_000,
+        usedPercentage: 72,
+      }),
+    ).toContain("72% · 144k/200k");
+    expect(
+      formatContextWindow({
+        usedTokens: 1234,
+        maxTokens: null,
+        remainingTokens: null,
+        usedPercentage: null,
+      }),
+    ).toBe("1.2k used");
   });
 });

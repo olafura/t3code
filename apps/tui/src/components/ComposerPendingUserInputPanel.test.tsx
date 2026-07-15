@@ -34,7 +34,13 @@ async function frameOf(node: React.ReactNode): Promise<string> {
 describe("ComposerPendingUserInputPanel", () => {
   it("Given a question, then it renders the prompt and its options with the cursor", async () => {
     const frame = await frameOf(
-      <ComposerPendingUserInputPanel pending={pending} questionIndex={0} optionIndex={0} selectedLabels={[]} width={60} />,
+      <ComposerPendingUserInputPanel
+        pending={pending}
+        questionIndex={0}
+        optionIndex={0}
+        selectedLabels={[]}
+        width={60}
+      />,
     );
     expect(frame).toContain("Database");
     expect(frame).toContain("Which database driver?");
@@ -64,7 +70,13 @@ describe("ComposerPendingUserInputPanel", () => {
       questions: [{ ...pending.questions[0]!, multiSelect: true }],
     };
     const frame = await frameOf(
-      <ComposerPendingUserInputPanel pending={multi} questionIndex={0} optionIndex={0} selectedLabels={["Postgres"]} width={60} />,
+      <ComposerPendingUserInputPanel
+        pending={multi}
+        questionIndex={0}
+        optionIndex={0}
+        selectedLabels={["Postgres"]}
+        width={60}
+      />,
     );
     expect(frame).toContain("[x] Postgres");
     expect(frame).toContain("[ ] SQLite");
