@@ -957,28 +957,18 @@ it.layer(
         expect(process).toBeDefined();
         if (!process) return;
 
-        // No relayed cursor query yet: `CSI 1;2R` is xterm's modified-F3
-        // keystroke, not a CPR reply — it must reach the PTY.
+        // Nested renderers issue cursor queries outside this PTY stream, so an
+        // idle shell must drop a CPR-shaped sequence even when the server did
+        // not observe the matching query. Otherwise it becomes the `;1RR` loop.
         yield* manager.write({
           threadId: "thread-1",
           terminalId: DEFAULT_TERMINAL_ID,
           data: "\x1b[1;2R",
         });
-        expect(process.writes).toEqual(["\x1b[1;2R"]);
-        process.writes.length = 0;
+        expect(process.writes).toEqual([]);
 
-        // The prompt queries the cursor position — relaying it arms the CPR strip.
-        process.emitData("\x1b[6n");
-        yield* waitFor(
-          Effect.map(getEvents, (events) =>
-            events.some((event) => event.type === "output" && event.data.includes("\x1b[6n")),
-          ),
-          "1200 millis",
-        );
-
-        // Idle prompt (no subprocess) with an outstanding query: the emulator's
-        // CPR auto-reply is dropped — the shell would only echo it back (the
-        // `;1RR` flood).
+        // Idle prompt (no subprocess): the emulator's CPR auto-reply is dropped
+        // because the shell would only echo it back.
         yield* manager.write({
           threadId: "thread-1",
           terminalId: DEFAULT_TERMINAL_ID,
@@ -1977,6 +1967,19 @@ describe("sanitizeTerminalHistoryChunk", () => {
     assert.equal(sanitize("at 12;5R done").visibleText, "at 12;5R done"); // lone, kept
   });
 
+  it("drops the BEL-fragmented CPR flood captured from the nested renderer", () => {
+    const captured = ";1R\x07R\x07R\x07;1R\x07R\x07R\x07;1R\x07R\x07R\x07";
+    assert.equal(sanitize(`prompt$ ${captured}`).visibleText, "prompt$ ");
+  });
+
+  it("drops the collapsed palette-reply run captured from the terminal log", () => {
+    const captured =
+      "6e6e/7878/8888;RR;;;rgb:1616/1616/1616;rgb:f5f5/f5f5/f5f5;" +
+      "2;rgb:8686/e7e7/9595;5;rgb:d0d0/b0b0/ffff;RR;;;rgb:1616/1616/1616;" +
+      "rgb:f5f5/f5f5/f5f5;2;rgb:8686/e7e7/9595;5;rgb:d0d0/b0b0/ffff";
+    assert.equal(sanitize(`prompt$ ${captured}`).visibleText, "prompt$ ");
+  });
+
   it("drops shell caret notation for the captured reply flood", () => {
     const captured = "^[[I^[[I^[[?^[[?^[[?1;2c^[]^[\\^[[0n^[]^[\\^[[0n^[[16;1R^[[1;1R";
     assert.equal(sanitize(`before${captured}after`).visibleText, "beforeafter");
@@ -2282,19 +2285,12 @@ describe("stripTerminalResponsesFromInput", () => {
     assert.equal(stripTerminalResponsesFromInput("\x9b?5;10R"), "");
   });
 
-  it("keeps CPR-shaped bytes when no cursor query is outstanding (modified F3)", () => {
-    // `CSI 1;2R` is byte-identical to xterm's Shift+F3 — without a recently
-    // relayed `CSI 6 n` the write path passes it through; the ungated reply
-    // shapes still strip.
-    assert.equal(
-      stripTerminalResponsesFromInput("\x1b[1;2R", { includeQueryGated: false }),
-      "\x1b[1;2R",
-    );
-    assert.equal(
-      stripTerminalResponsesFromInput("\x1b[?2026;2$y\x1b[1;2R", { includeQueryGated: false }),
-      "\x1b[1;2R",
-    );
-    assert.equal(stripTerminalResponsesFromInput("\x1b[1;2R", { includeQueryGated: true }), "");
+  it("strips CPR-shaped bytes without requiring an observable query", () => {
+    // `CSI 1;2R` also encodes Shift+F3, but the idle-shell filter cannot know
+    // about queries issued by an outer renderer. Foreground programs bypass the
+    // filter and still receive the same bytes verbatim.
+    assert.equal(stripTerminalResponsesFromInput("\x1b[1;2R"), "");
+    assert.equal(stripTerminalResponsesFromInput("\x1b[?2026;2$y\x1b[1;2R"), "");
   });
 
   it("keeps real user input, cursor moves, and bare query forms", () => {
@@ -2329,16 +2325,12 @@ describe("sanitizeTerminalInputChunk", () => {
     );
   });
 
-  it("keeps query-gated CPR and real keys when no query is outstanding", () => {
-    const prefix = sanitizeTerminalInputChunk("", "\x1b[1", {
-      includeQueryGated: false,
+  it("strips split CPR while keeping real keys", () => {
+    const prefix = sanitizeTerminalInputChunk("", "\x1b[1");
+    assert.deepEqual(sanitizeTerminalInputChunk(prefix.pendingControlSequence, ";2R"), {
+      data: "",
+      pendingControlSequence: "",
     });
-    assert.deepEqual(
-      sanitizeTerminalInputChunk(prefix.pendingControlSequence, ";2R", {
-        includeQueryGated: false,
-      }),
-      { data: "\x1b[1;2R", pendingControlSequence: "" },
-    );
     assert.deepEqual(sanitizeTerminalInputChunk("", "\x1b"), {
       data: "\x1b",
       pendingControlSequence: "",
