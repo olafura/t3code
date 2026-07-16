@@ -1015,7 +1015,12 @@ it.layer(
           terminalId: DEFAULT_TERMINAL_ID,
           data: "\x1b[1;1R",
         });
-        expect(process.writes).toEqual(["\x1b[1;1R"]);
+        yield* manager.write({
+          threadId: "thread-1",
+          terminalId: DEFAULT_TERMINAL_ID,
+          data: "\x1b[I",
+        });
+        expect(process.writes).toEqual(["\x1b[1;1R", "\x1b[I"]);
       }),
   );
 
@@ -1956,6 +1961,8 @@ describe("sanitizeTerminalHistoryChunk", () => {
     // Lone DECRPM / OSC-colour / DECRPSS tokens are distinctive enough on their own.
     assert.equal(sanitize("x 2026;2$y y").visibleText, "x  y");
     assert.equal(sanitize("c 4;0;rgb:1818/1e1e/2626 d").visibleText, "c  d");
+    assert.equal(sanitize("c ;0;rgb:1818/1e1e/2626 d").visibleText, "c  d");
+    assert.equal(sanitize("c ;rgb:1616/1616/1616 d").visibleText, "c  d");
     assert.equal(sanitize("tail 1$r0m end").visibleText, "tail  end"); // flattened DECRPSS (#1238)
     // Ambiguous lone tokens and ordinary words are preserved.
     assert.equal(sanitize("see commit 1;2c now").visibleText, "see commit 1;2c now");
@@ -1968,6 +1975,11 @@ describe("sanitizeTerminalHistoryChunk", () => {
     assert.equal(sanitize(`prompt$ ${";1RR".repeat(40)}`).visibleText, "prompt$ ");
     assert.equal(sanitize(`x ${"1;1R".repeat(20)} y`).visibleText, "x  y");
     assert.equal(sanitize("at 12;5R done").visibleText, "at 12;5R done"); // lone, kept
+  });
+
+  it("drops shell caret notation for the captured reply flood", () => {
+    const captured = "^[[I^[[I^[[?^[[?^[[?1;2c^[]^[\\^[[0n^[]^[\\^[[0n^[[16;1R^[[1;1R";
+    assert.equal(sanitize(`before${captured}after`).visibleText, "beforeafter");
   });
 
   it("drops a flattened secondary-DA (three-parameter) run", () => {
@@ -2249,9 +2261,14 @@ describe("stripTerminalResponsesFromInput", () => {
     assert.equal(stripTerminalResponsesFromInput("\x901$r0m\x9c"), ""); // C1 DCS DECRPSS
   });
 
-  it("keeps focus events so DECSET ?1004 programs (vim/tmux) still receive them", () => {
-    assert.equal(stripTerminalResponsesFromInput("\x1b[I"), "\x1b[I"); // focus in
-    assert.equal(stripTerminalResponsesFromInput("\x1b[O"), "\x1b[O"); // focus out
+  it("strips focus events before they redraw an idle prompt", () => {
+    assert.equal(stripTerminalResponsesFromInput("\x1b[I"), ""); // focus in
+    assert.equal(stripTerminalResponsesFromInput("\x1b[O"), ""); // focus out
+  });
+
+  it("strips empty OSC/DCS frames left by a fragmented response", () => {
+    assert.equal(stripTerminalResponsesFromInput("\x1b]\x1b\\"), "");
+    assert.equal(stripTerminalResponsesFromInput("\x1bP\x1b\\"), "");
   });
 
   it("strips cursor-position report (CPR) replies that drive the prompt redraw flood", () => {
@@ -2336,6 +2353,18 @@ describe("sanitizeTerminalInputChunk", () => {
     const malformed = `\x1b]11;rgb:${"a".repeat(64 * 1024)}`;
     assert.deepEqual(sanitizeTerminalInputChunk("", malformed), {
       data: malformed,
+      pendingControlSequence: "",
+    });
+  });
+
+  it("drops the captured focus and abandoned private-CSI flood", () => {
+    const captured =
+      "\x1b[I\x1b[I" +
+      "\x1b[?\x1b[?\x1b[?\x1b[?\x1b[?\x1b[?1;2c" +
+      "\x1b]\x1b\\\x1b[0n\x1b]\x1b\\\x1b[0n\x1b[I\x1b[?1;2c";
+
+    assert.deepEqual(sanitizeTerminalInputChunk("", captured), {
+      data: "",
       pendingControlSequence: "",
     });
   });
