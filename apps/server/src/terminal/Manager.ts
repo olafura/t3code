@@ -1094,6 +1094,41 @@ export const TERMINAL_SEQUENCE_GRAMMAR: ReadonlyArray<TerminalSequenceDescriptor
     },
   },
   {
+    name: "terminal focus report",
+    kind: "csi",
+    response: {
+      // Focus reports are terminal-generated input. The manager applies this
+      // filter only while the shell owns the foreground PTY; vim/tmux and other
+      // foreground programs still receive focus reports verbatim.
+      body: "[IO]",
+      stripFromOutput: false,
+      input: "[IO]",
+      samples: ["I", "O"],
+    },
+  },
+  {
+    name: "empty OSC response fragment",
+    kind: "osc",
+    response: {
+      // A response split badly by a client parser can collapse to OSC + ST.
+      // It has no keyboard meaning and must not reach an idle shell.
+      body: "",
+      stripFromOutput: false,
+      input: "",
+      samples: [""],
+    },
+  },
+  {
+    name: "empty DCS response fragment",
+    kind: "dcs",
+    response: {
+      body: "",
+      stripFromOutput: false,
+      input: "",
+      samples: [""],
+    },
+  },
+  {
     name: "OSC 10/11/12 colour",
     kind: "osc",
     response: {
@@ -1113,7 +1148,7 @@ export const TERMINAL_SEQUENCE_GRAMMAR: ReadonlyArray<TerminalSequenceDescriptor
       // that both over-matched ordinary "<n>;rgb:…" text and was a ReDoS). The
       // lookbehind skips a colour run still inside an intact OSC frame the
       // escape walk chose to keep.
-      source: "(?<!\\x1b\\]|\\x9d)1[012];rgb:[0-9a-fA-F/]+",
+      source: "(?<!\\x1b\\]|\\x9d)(?:1[012];rgb:[0-9a-fA-F/]+|(?<![0-9]);rgb:[0-9a-fA-F/]+)",
       loneStrippable: true,
       samples: ["11;rgb:1616/1616/1616"],
     },
@@ -1134,7 +1169,7 @@ export const TERMINAL_SEQUENCE_GRAMMAR: ReadonlyArray<TerminalSequenceDescriptor
     flattened: {
       // Same framed-lookbehind guard as OSC 10/11/12: a kept framed OSC 4
       // set-palette command must not have its inner payload deleted.
-      source: "(?<!\\x1b\\]|\\x9d)4;[0-9]+;rgb:[0-9a-fA-F/]+",
+      source: "(?<!\\x1b\\]|\\x9d)(?:4;[0-9]+|(?<![0-9]);[0-9]+);rgb:[0-9a-fA-F/]+",
       loneStrippable: true,
       samples: ["4;0;rgb:1818/1e1e/2626"],
     },
@@ -1283,6 +1318,16 @@ const FLATTENED_REPLY_TOKEN = new RegExp(
     .join("|")})`,
   "g",
 );
+// Readline renders control input it cannot consume using caret notation. These
+// are the visible forms captured in the corrupted terminal log, not live ESC
+// sequences: `^[[I`, `^[[?1;2c`, `^[[0n`, and empty `^[]^[\` OSC frames.
+const CARET_NOTATION_TERMINAL_REPLY = new RegExp(
+  [
+    "\\^\\[\\[(?:\\??[0-9]*;[0-9]+R|[?>][0-9;]+c|\\??[03]n|\\?[0-9;]*\\$y|[IO]|\\?)",
+    "\\^\\[\\]\\^\\[\\\\",
+  ].join("|"),
+  "g",
+);
 /**
  * Drop the flattened terminal-reply residue a shell echoes at the prompt.
  *
@@ -1294,12 +1339,13 @@ const FLATTENED_REPLY_TOKEN = new RegExp(
  * "<m>;<v>c" / "n" forms and ordinary words (e.g. "running", "1;2c") are kept.
  */
 function stripFlattenedModeReplyResidue(text: string): string {
+  const withoutCaretNotation = text.replace(CARET_NOTATION_TERMINAL_REPLY, "");
   // Every fragment contains either ";" (DECRPM/DA/OSC) or "$r" (DECRPSS), so text
   // with neither can't hold residue — skip the regexes.
-  if (!text.includes(";") && !text.includes("$r")) {
-    return text;
+  if (!withoutCaretNotation.includes(";") && !withoutCaretNotation.includes("$r")) {
+    return withoutCaretNotation;
   }
-  return text.replace(FLATTENED_REPLY_RUN, "").replace(FLATTENED_REPLY_TOKEN, "");
+  return withoutCaretNotation.replace(FLATTENED_REPLY_RUN, "").replace(FLATTENED_REPLY_TOKEN, "");
 }
 
 // Matches the terminal→host response sequences the browser emulator
@@ -1318,18 +1364,23 @@ function stripFlattenedModeReplyResidue(text: string): string {
 // kept — the DA alternation requires a parameter so `CSI ? c` / `CSI > c` and
 // `CSI 6 n` queries pass through.
 //
-// Focus in/out (CSI I / CSI O) are NOT stripped: a program that enabled focus
-// reporting (DECSET ?1004 — vim, tmux) legitimately expects them, and they are
-// user-action-driven so they never feed the runaway redraw-requery loop the
-// capability responses do.
+// Focus in/out (CSI I / CSI O) are stripped at an idle shell too: the captured
+// flood showed repeated focus-in reports redrawing the prompt and re-triggering
+// its capability queries. The manager bypasses this entire filter for a
+// foreground program, so vim/tmux still receive legitimate focus events.
 const INPUT_CSI = "(?:\\x1b\\[|\\x9b)";
 const INPUT_OSC = "(?:\\x1b\\]|\\x9d)";
 const INPUT_DCS = "(?:\\x1bP|\\x90)";
 const INPUT_ST = "(?:\\x07|\\x1b\\\\|\\x9c)";
+const INPUT_CONTROL_INTRODUCER = "(?:\\x1b[\\[\\]P]|[\\x90\\x9b\\x9d])";
+const ABANDONED_PRIVATE_CSI_INPUT_PREFIX = new RegExp(
+  `${INPUT_CSI}\\?[0-9;]*(?=${INPUT_CONTROL_INTRODUCER})`,
+  "g",
+);
 function composeInputMatcher(gated: boolean): RegExp | null {
   const sources = TERMINAL_SEQUENCE_GRAMMAR.flatMap((descriptor) => {
     const response = descriptor.response;
-    if (!response?.input) return [];
+    if (!response || response.input === null) return [];
     if ((response.inputRequiresRecentQuery ?? false) !== gated) return [];
     switch (descriptor.kind) {
       case "csi":
@@ -1654,7 +1705,11 @@ export function sanitizeTerminalInputChunk(
   data: string,
   options: { readonly includeQueryGated?: boolean } = {},
 ): { data: string; pendingControlSequence: string } {
-  const input = `${pendingControlSequence}${data}`;
+  // A client parser can time out after `CSI ?`, then begin the next response
+  // with a fresh introducer. Treat the abandoned private-CSI prefix as residue;
+  // otherwise the second `[` is mistaken for the first sequence's final byte
+  // and both prefixes leak to the shell as visible `^[[?` text.
+  const input = `${pendingControlSequence}${data}`.replace(ABANDONED_PRIVATE_CSI_INPUT_PREFIX, "");
   const parsed = sanitizeTerminalChunkOnce(input, {
     includeQueryGated: options.includeQueryGated ?? true,
   });
