@@ -1426,21 +1426,19 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
       }),
   );
 
-  it.effect(
-    "unsequenced cursor reaches all older rows without stranding sequenced ones",
-    () =>
-      // Regression for the "unsequenced cursor hides sequenced history" concern:
-      // sequenced rows always sort newer than NULL-sequence (legacy) rows, so when
-      // the oldest loaded row is unsequenced every sequenced row is already in the
-      // window — the `sequence IS NULL` cursor can't strand sequenced rows.
-      Effect.gen(function* () {
-        const snapshotQuery = yield* ProjectionSnapshotQuery;
-        const sql = yield* SqlClient.SqlClient;
-        yield* sql`DELETE FROM projection_projects`;
-        yield* sql`DELETE FROM projection_threads`;
-        yield* sql`DELETE FROM projection_thread_activities`;
-        yield* sql`DELETE FROM projection_state`;
-        yield* sql`
+  it.effect("unsequenced cursor reaches all older rows without stranding sequenced ones", () =>
+    // Regression for the "unsequenced cursor hides sequenced history" concern:
+    // sequenced rows always sort newer than NULL-sequence (legacy) rows, so when
+    // the oldest loaded row is unsequenced every sequenced row is already in the
+    // window — the `sequence IS NULL` cursor can't strand sequenced rows.
+    Effect.gen(function* () {
+      const snapshotQuery = yield* ProjectionSnapshotQuery;
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`DELETE FROM projection_projects`;
+      yield* sql`DELETE FROM projection_threads`;
+      yield* sql`DELETE FROM projection_thread_activities`;
+      yield* sql`DELETE FROM projection_state`;
+      yield* sql`
           INSERT INTO projection_projects (
             project_id, title, workspace_root, default_model_selection_json,
             scripts_json, created_at, updated_at, deleted_at
@@ -1450,7 +1448,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
             '2026-04-01T00:00:00.000Z', '2026-04-01T00:00:01.000Z', NULL
           )
         `;
-        yield* sql`
+      yield* sql`
           INSERT INTO projection_threads (
             thread_id, project_id, title, model_selection_json, runtime_mode,
             interaction_mode, branch, worktree_path, latest_turn_id,
@@ -1463,13 +1461,13 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
             '2026-04-01T00:00:02.000Z', '2026-04-01T00:00:03.000Z', NULL, NULL
           )
         `;
-        // 600 legacy unsequenced rows (older) + 3 sequenced rows (newer). The
-        // window keeps the 3 sequenced + the most-recent 497 unsequenced, so the
-        // oldest loaded row is unsequenced and 103 older unsequenced remain.
-        yield* Effect.forEach(
-          Array.from({ length: 600 }, (_u, index) => index + 1),
-          (n) =>
-            sql`
+      // 600 legacy unsequenced rows (older) + 3 sequenced rows (newer). The
+      // window keeps the 3 sequenced + the most-recent 497 unsequenced, so the
+      // oldest loaded row is unsequenced and 103 older unsequenced remain.
+      yield* Effect.forEach(
+        Array.from({ length: 600 }, (_u, index) => index + 1),
+        (n) =>
+          sql`
               INSERT INTO projection_thread_activities (
                 activity_id, thread_id, turn_id, tone, kind, summary, payload_json,
                 sequence, created_at
@@ -1479,12 +1477,12 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
                 ${`2026-04-01T00:00:01.${String(n).padStart(3, "0")}Z`}
               )
             `,
-          { discard: true },
-        );
-        yield* Effect.forEach(
-          [1, 2, 3],
-          (seq) =>
-            sql`
+        { discard: true },
+      );
+      yield* Effect.forEach(
+        [1, 2, 3],
+        (seq) =>
+          sql`
               INSERT INTO projection_thread_activities (
                 activity_id, thread_id, turn_id, tone, kind, summary, payload_json,
                 sequence, created_at
@@ -1493,34 +1491,34 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
                 ${`seq-${seq}`}, '{}', ${seq}, ${`2026-04-01T09:00:0${seq}.000Z`}
               )
             `,
-          { discard: true },
-        );
+        { discard: true },
+      );
 
-        const detail = yield* snapshotQuery.getThreadDetailById(ThreadId.make("thread-1"));
-        assert.equal(detail._tag, "Some");
-        if (detail._tag !== "Some") return;
-        const windowed = detail.value.activities;
-        assert.equal(windowed.length, 500);
-        // Sequenced rows are the newest (end of the ascending window); the oldest
-        // loaded row is unsequenced — exactly the case the concern is about.
-        assert.equal(windowed.at(-1)?.summary, "seq-3");
-        assert.equal(windowed[0]?.sequence, undefined);
+      const detail = yield* snapshotQuery.getThreadDetailById(ThreadId.make("thread-1"));
+      assert.equal(detail._tag, "Some");
+      if (detail._tag !== "Some") return;
+      const windowed = detail.value.activities;
+      assert.equal(windowed.length, 500);
+      // Sequenced rows are the newest (end of the ascending window); the oldest
+      // loaded row is unsequenced — exactly the case the concern is about.
+      assert.equal(windowed.at(-1)?.summary, "seq-3");
+      assert.equal(windowed[0]?.sequence, undefined);
 
-        // The client pages with the unsequenced cursor of the oldest loaded row.
-        const oldest = windowed[0];
-        assert.ok(oldest);
-        const olderPage = yield* snapshotQuery.getThreadActivitiesPage({
-          threadId: ThreadId.make("thread-1"),
-          beforeCreatedAt: oldest.createdAt,
-          beforeActivityId: oldest.id,
-          limit: 500,
-        });
-        // The 103 older unsequenced rows come back, none are sequenced, and no
-        // sequenced row was stranded (all 3 are already in the window).
-        assert.equal(olderPage.activities.length, 103);
-        assert.equal(olderPage.hasMore, false);
-        assert.ok(olderPage.activities.every((a) => a.sequence === undefined));
-      }),
+      // The client pages with the unsequenced cursor of the oldest loaded row.
+      const oldest = windowed[0];
+      assert.ok(oldest);
+      const olderPage = yield* snapshotQuery.getThreadActivitiesPage({
+        threadId: ThreadId.make("thread-1"),
+        beforeCreatedAt: oldest.createdAt,
+        beforeActivityId: oldest.id,
+        limit: 500,
+      });
+      // The 103 older unsequenced rows come back, none are sequenced, and no
+      // sequenced row was stranded (all 3 are already in the window).
+      assert.equal(olderPage.activities.length, 103);
+      assert.equal(olderPage.hasMore, false);
+      assert.ok(olderPage.activities.every((a) => a.sequence === undefined));
+    }),
   );
 
   it.effect("uses projection_threads.latest_turn_id for bulk command and shell snapshots", () =>
