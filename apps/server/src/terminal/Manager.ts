@@ -1,7 +1,3 @@
-// @effect-diagnostics globalDateInEffect:off -- the CPR-gate grace window
-// (lastCursorQueryRelayedAt) is wall-clock session state shared between the
-// sync PTY drain and the write path; threading Clock through both is a
-// follow-up.
 /**
  * TerminalManager - Terminal session orchestration service interface.
  *
@@ -274,12 +270,6 @@ export interface TerminalSessionState {
    * platform can't tell.
    */
   shellForeground: boolean;
-  /**
-   * When a cursor-position query (`CSI 6 n`) was last relayed in the live
-   * stream (epoch ms; 0 = never). Arms the query-gated CPR strip in `write`
-   * for {@link CURSOR_QUERY_REPLY_GRACE_MS}.
-   */
-  lastCursorQueryRelayedAt: number;
   /** Normalized child command name when `hasRunningSubprocess`; cleared when idle. */
   childCommandLabel: string | null;
   runtimeEnv: Record<string, string> | null;
@@ -1001,14 +991,6 @@ export interface TerminalSequenceDescriptor {
     readonly stripFromOutput: boolean;
     /** Input-filter body (null = relayed in input). */
     readonly input: string | null;
-    /**
-     * Only strip this reply from input while a matching query was recently
-     * relayed in the live stream. Needed when the reply's byte shape collides
-     * with real keyboard input (CPR `CSI 1;2R` == xterm's modified F3): the
-     * keystroke passes at a quiet prompt, while the query-driven echo flood is
-     * still broken because the querying prompt re-arms the gate every redraw.
-     */
-    readonly inputRequiresRecentQuery?: boolean;
     readonly samples: ReadonlyArray<string>;
   };
   readonly query?: {
@@ -1079,11 +1061,11 @@ export const TERMINAL_SEQUENCE_GRAMMAR: ReadonlyArray<TerminalSequenceDescriptor
       body: "[0-9;?]*R",
       stripFromOutput: true,
       // Input requires the two-parameter reply shape so a bare `CSI R` or
-      // anything keystroke-like is never eaten — and is additionally gated on a
-      // recently-relayed `CSI 6 n` query, because `CSI 1;<mod>R` is also
-      // xterm's encoding for modified F3.
+      // anything keystroke-like is never eaten. `CSI 1;<mod>R` also encodes a
+      // modified F3 key, but this filter runs only while the shell owns the PTY;
+      // nested renderers issue CPR queries the server cannot observe, so leaving
+      // that collision unfiltered lets their replies feed a runaway prompt loop.
       input: "\\??[0-9]*;[0-9]+R",
-      inputRequiresRecentQuery: true,
       samples: ["1;1R", "?5;10R", ";1R"],
     },
     flattened: {
@@ -1309,7 +1291,7 @@ const FLATTENED_SOURCES = TERMINAL_SEQUENCE_GRAMMAR.flatMap((descriptor) =>
 );
 const FLATTENED_FRAGMENT = `(?:${FLATTENED_SOURCES.map((f) => `(?:${f.source})`).join("|")})`;
 const FLATTENED_REPLY_RUN = new RegExp(
-  `${FLATTENED_FRAGMENT}(?:[\\x07\\rn]{0,8}${FLATTENED_FRAGMENT})+`,
+  `${FLATTENED_FRAGMENT}(?:[\\x07\\rnR]{0,8}${FLATTENED_FRAGMENT})+[\\x07R]{0,8}`,
   "g",
 );
 const FLATTENED_REPLY_TOKEN = new RegExp(
@@ -1328,6 +1310,66 @@ const CARET_NOTATION_TERMINAL_REPLY = new RegExp(
   ].join("|"),
   "g",
 );
+function isPaletteReplyResidueCharacter(codePoint: number): boolean {
+  return (
+    (codePoint >= 0x30 && codePoint <= 0x39) ||
+    (codePoint >= 0x41 && codePoint <= 0x46) ||
+    (codePoint >= 0x61 && codePoint <= 0x66) ||
+    codePoint === 0x2f ||
+    codePoint === 0x3a ||
+    codePoint === 0x3b ||
+    codePoint === 0x24 ||
+    codePoint === 0x52 ||
+    codePoint === 0x62 ||
+    codePoint === 0x67 ||
+    codePoint === 0x72 ||
+    codePoint === 0x79
+  );
+}
+
+/**
+ * Drop a multiplexer-flattened palette run in linear time.
+ *
+ * OpenTUI's palette probe can be fragmented so aggressively that several OSC
+ * replies collapse into one introducer-less token. A maximal token made only
+ * from reply characters is corruption when it contains at least three `rgb:`
+ * bodies. The threshold avoids deleting ordinary output with one CSS colour,
+ * and the explicit scan avoids a nested-regex ReDoS on long `;` input.
+ */
+function stripCorruptedPaletteReplyRuns(text: string): string {
+  if (!text.includes("rgb:")) return text;
+
+  let output = "";
+  let copiedThrough = 0;
+  let cursor = 0;
+  while (cursor < text.length) {
+    if (!isPaletteReplyResidueCharacter(text.charCodeAt(cursor))) {
+      cursor += 1;
+      continue;
+    }
+
+    const tokenStart = cursor;
+    let rgbCount = 0;
+    let removalStart = -1;
+    while (cursor < text.length && isPaletteReplyResidueCharacter(text.charCodeAt(cursor))) {
+      if (removalStart === -1) {
+        const codePoint = text.charCodeAt(cursor);
+        if ((codePoint >= 0x30 && codePoint <= 0x39) || codePoint === 0x3b) {
+          removalStart = cursor;
+        }
+      }
+      if (text.startsWith("rgb:", cursor)) rgbCount += 1;
+      cursor += 1;
+    }
+
+    if (rgbCount >= 3) {
+      const start = removalStart === -1 ? tokenStart : removalStart;
+      output += text.slice(copiedThrough, start);
+      copiedThrough = cursor;
+    }
+  }
+  return copiedThrough === 0 ? text : output + text.slice(copiedThrough);
+}
 /**
  * Drop the flattened terminal-reply residue a shell echoes at the prompt.
  *
@@ -1339,7 +1381,9 @@ const CARET_NOTATION_TERMINAL_REPLY = new RegExp(
  * "<m>;<v>c" / "n" forms and ordinary words (e.g. "running", "1;2c") are kept.
  */
 function stripFlattenedModeReplyResidue(text: string): string {
-  const withoutCaretNotation = text.replace(CARET_NOTATION_TERMINAL_REPLY, "");
+  const withoutCaretNotation = stripCorruptedPaletteReplyRuns(
+    text.replace(CARET_NOTATION_TERMINAL_REPLY, ""),
+  );
   // Every fragment contains either ";" (DECRPM/DA/OSC) or "$r" (DECRPSS), so text
   // with neither can't hold residue — skip the regexes.
   if (!withoutCaretNotation.includes(";") && !withoutCaretNotation.includes("$r")) {
@@ -1377,11 +1421,10 @@ const ABANDONED_PRIVATE_CSI_INPUT_PREFIX = new RegExp(
   `${INPUT_CSI}\\?[0-9;]*(?=${INPUT_CONTROL_INTRODUCER})`,
   "g",
 );
-function composeInputMatcher(gated: boolean): RegExp | null {
+function composeInputMatcher(): RegExp | null {
   const sources = TERMINAL_SEQUENCE_GRAMMAR.flatMap((descriptor) => {
     const response = descriptor.response;
     if (!response || response.input === null) return [];
-    if ((response.inputRequiresRecentQuery ?? false) !== gated) return [];
     switch (descriptor.kind) {
       case "csi":
         return [`${INPUT_CSI}(?:${response.input})`];
@@ -1394,17 +1437,7 @@ function composeInputMatcher(gated: boolean): RegExp | null {
   return sources.length === 0 ? null : new RegExp(sources.join("|"), "g");
 }
 
-const INPUT_TERMINAL_RESPONSE = composeInputMatcher(false);
-const INPUT_QUERY_GATED_RESPONSE = composeInputMatcher(true);
-// A relayed cursor-position query in the LIVE stream (`CSI 6 n` / `CSI ? 6 n`,
-// 7-bit or 8-bit) — arms the query-gated input strip for a grace window.
-const RELAYED_CURSOR_QUERY = new RegExp(`${INPUT_CSI}\\??6n`);
-/**
- * How long after relaying a cursor-position query the CPR reply strip stays
- * armed. A prompt that re-queries on every redraw (the flood scenario)
- * constantly re-arms it; a quiet prompt lets modified-F3 keystrokes through.
- */
-export const CURSOR_QUERY_REPLY_GRACE_MS = 5_000;
+const INPUT_TERMINAL_RESPONSE = composeInputMatcher();
 /**
  * Strip the browser emulator's auto-generated terminal responses from client
  * input before it reaches the PTY.
@@ -1424,18 +1457,7 @@ export const CURSOR_QUERY_REPLY_GRACE_MS = 5_000;
  * presumed to be reading the replies to its own queries, and stripping them
  * would stall its capability negotiation. Exported for unit testing.
  */
-export function stripTerminalResponsesFromInput(
-  data: string,
-  options: {
-    /**
-     * Include the query-gated reply shapes (CPR). Defaults true (the full
-     * strip); the write path passes whether a cursor query was recently
-     * relayed, so an idle prompt with no outstanding query lets the
-     * byte-identical modified-F3 keystrokes through.
-     */
-    readonly includeQueryGated?: boolean;
-  } = {},
-): string {
+export function stripTerminalResponsesFromInput(data: string): string {
   // Skip the regexes unless the data carries a 7-bit ESC or one of the 8-bit C1
   // introducers (CSI 0x9b, OSC 0x9d, DCS 0x90) a response could start with.
   const hasIntroducer =
@@ -1444,11 +1466,7 @@ export function stripTerminalResponsesFromInput(
     data.includes("\x9d") ||
     data.includes("\x90");
   if (!hasIntroducer) return data;
-  let stripped = INPUT_TERMINAL_RESPONSE ? data.replace(INPUT_TERMINAL_RESPONSE, "") : data;
-  if ((options.includeQueryGated ?? true) && INPUT_QUERY_GATED_RESPONSE) {
-    stripped = stripped.replace(INPUT_QUERY_GATED_RESPONSE, "");
-  }
-  return stripped;
+  return INPUT_TERMINAL_RESPONSE ? data.replace(INPUT_TERMINAL_RESPONSE, "") : data;
 }
 
 // Upper bound on the buffered incomplete-sequence remainder. An unterminated
@@ -1474,10 +1492,7 @@ const MAX_PENDING_CONTROL_SEQUENCE_LENGTH = 64 * 1024;
  * only on byte structure (where an incomplete escape sequence ends), never on
  * which complete sequences are stripped, so it is identical for both views.
  */
-function sanitizeTerminalChunkOnce(
-  input: string,
-  inputOptions: { readonly includeQueryGated: boolean } = { includeQueryGated: true },
-): {
+function sanitizeTerminalChunkOnce(input: string): {
   historyText: string;
   liveText: string;
   inputText: string;
@@ -1498,17 +1513,17 @@ function sanitizeTerminalChunkOnce(
   const appendCsi = (sequence: string, body: string, finalByte: string) => {
     if (!shouldStripCsiSequence(body, finalByte, false)) historyText += sequence;
     if (!shouldStripCsiSequence(body, finalByte, true)) liveText += sequence;
-    inputText += stripTerminalResponsesFromInput(sequence, inputOptions);
+    inputText += stripTerminalResponsesFromInput(sequence);
   };
   const appendOsc = (sequence: string, content: string) => {
     if (!shouldStripOscSequence(content, false)) historyText += sequence;
     if (!shouldStripOscSequence(content, true)) liveText += sequence;
-    inputText += stripTerminalResponsesFromInput(sequence, inputOptions);
+    inputText += stripTerminalResponsesFromInput(sequence);
   };
   const appendDcs = (sequence: string, content: string) => {
     if (!shouldStripDcsSequence(content, false)) historyText += sequence;
     if (!shouldStripDcsSequence(content, true)) liveText += sequence;
-    inputText += stripTerminalResponsesFromInput(sequence, inputOptions);
+    inputText += stripTerminalResponsesFromInput(sequence);
   };
   const pending = () => ({
     historyText: stripFlattenedModeReplyResidue(historyText),
@@ -1703,16 +1718,13 @@ export function sanitizeTerminalHistoryChunk(
 export function sanitizeTerminalInputChunk(
   pendingControlSequence: string,
   data: string,
-  options: { readonly includeQueryGated?: boolean } = {},
 ): { data: string; pendingControlSequence: string } {
   // A client parser can time out after `CSI ?`, then begin the next response
   // with a fresh introducer. Treat the abandoned private-CSI prefix as residue;
   // otherwise the second `[` is mistaken for the first sequence's final byte
   // and both prefixes leak to the shell as visible `^[[?` text.
   const input = `${pendingControlSequence}${data}`.replace(ABANDONED_PRIVATE_CSI_INPUT_PREFIX, "");
-  const parsed = sanitizeTerminalChunkOnce(input, {
-    includeQueryGated: options.includeQueryGated ?? true,
-  });
+  const parsed = sanitizeTerminalChunkOnce(input);
 
   // Escape is both a complete user keystroke and a possible introducer. Never
   // hold a lone Esc waiting for another write; complete CSI/OSC/DCS prefixes are
@@ -2413,11 +2425,6 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
             nextEvent.data,
           );
           session.pendingHistoryControlSequence = sanitized.pendingControlSequence;
-          // A relayed cursor query means a CPR reply is genuinely expected —
-          // arm the query-gated input strip for the grace window.
-          if (RELAYED_CURSOR_QUERY.test(sanitized.liveText)) {
-            session.lastCursorQueryRelayedAt = Date.now();
-          }
           if (sanitized.historyText.length > 0) {
             session.history = capHistory(
               `${session.history}${sanitized.historyText}`,
@@ -2935,7 +2942,6 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         unsubscribeExit: null,
         hasRunningSubprocess: false,
         shellForeground: true,
-        lastCursorQueryRelayedAt: 0,
         childCommandLabel: null,
         runtimeEnv: normalizedRuntimeEnv(input.env),
       };
@@ -3277,13 +3283,6 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
           const sanitized = sanitizeTerminalInputChunk(
             session.pendingInputControlSequence,
             input.data,
-            {
-              // CPR shares its byte shape with modified function keys; only
-              // strip it while a relayed cursor query makes a reply expected.
-              includeQueryGated:
-                DateTime.nowUnsafe().epochMilliseconds - session.lastCursorQueryRelayedAt <
-                CURSOR_QUERY_REPLY_GRACE_MS,
-            },
           );
           session.pendingInputControlSequence = sanitized.pendingControlSequence;
           return sanitized.data;
@@ -3383,7 +3382,6 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
             unsubscribeExit: null,
             hasRunningSubprocess: false,
             shellForeground: true,
-            lastCursorQueryRelayedAt: 0,
             childCommandLabel: null,
             runtimeEnv: normalizedRuntimeEnv(input.env),
           };
