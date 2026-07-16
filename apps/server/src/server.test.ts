@@ -5890,6 +5890,52 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
+  it.effect("subscribeThread replaces a stale cursor with a fresh snapshot", () =>
+    Effect.gen(function* () {
+      const snapshotSequence = 5_000;
+      const thread = makeDefaultOrchestrationReadModel().threads[0]!;
+      let replayCalls = 0;
+
+      yield* buildAppUnderTest({
+        layers: {
+          projectionSnapshotQuery: {
+            getSnapshotSequence: () => Effect.succeed({ snapshotSequence }),
+            getThreadDetailSnapshot: () =>
+              Effect.succeed(
+                Option.some({
+                  snapshotSequence,
+                  thread,
+                }),
+              ),
+          },
+          orchestrationEngine: {
+            readEvents: () => {
+              replayCalls += 1;
+              return Stream.empty;
+            },
+          },
+        },
+      });
+
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const result = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[ORCHESTRATION_WS_METHODS.subscribeThread]({
+            threadId: defaultThreadId,
+            afterSequence: 1,
+          }).pipe(Stream.take(1), Stream.runCollect),
+        ),
+      );
+
+      assert.equal(replayCalls, 0);
+      assert.equal(result[0]?.kind, "snapshot");
+      if (result[0]?.kind === "snapshot") {
+        assert.equal(result[0].snapshot.snapshotSequence, snapshotSequence);
+        assert.equal(result[0].snapshot.thread.id, defaultThreadId);
+      }
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
   it.effect("subscribeShell coalesces a per-thread burst without stalling other threads", () =>
     Effect.gen(function* () {
       const busyThreadId = ThreadId.make("thread-busy");
