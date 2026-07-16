@@ -17,11 +17,7 @@ import {
   oldestActivityByChronology,
 } from "./threadReducer.ts";
 
-const activity = (
-  id: string,
-  createdAt: string,
-  sequence?: number,
-): OrchestrationThreadActivity =>
+const activity = (id: string, createdAt: string, sequence?: number): OrchestrationThreadActivity =>
   ({
     id,
     tone: "tool",
@@ -807,10 +803,7 @@ describe("applyThreadDetailEvent", () => {
       ];
       // A live append is the newest activity and is unsequenced in the payload;
       // it must not change the detected oldest boundary.
-      const after = [
-        ...before,
-        activity("appended", "2026-04-01T11:00:00.000Z"),
-      ];
+      const after = [...before, activity("appended", "2026-04-01T11:00:00.000Z")];
       expect(liveWindowOldestActivityId(after)).toBe(liveWindowOldestActivityId(before));
       expect(liveWindowOldestActivityId(after)).toBe("legacy");
     });

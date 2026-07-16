@@ -153,6 +153,12 @@
     "@t3tools/shared": "workspace:*",
     "effect": "catalog:"
   },
+  "devDependencies": {
+    "@effect/vitest": "catalog:",
+    "@types/react": "~19.2.14",
+    "react": "19.2.6",
+    "vite-plus": "catalog:"
+  },
   "peerDependencies": {
     "react": "^19.0.0"
   },
@@ -160,11 +166,5 @@
     "react": {
       "optional": true
     }
-  },
-  "devDependencies": {
-    "@effect/vitest": "catalog:",
-    "@types/react": "~19.2.14",
-    "react": "19.2.6",
-    "vite-plus": "catalog:"
   }
 }

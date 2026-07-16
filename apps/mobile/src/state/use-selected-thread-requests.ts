@@ -68,9 +68,7 @@ function setUserInputDraftCustomAnswer(
  * merged set is sound — resolutions are always newer than their requests, so a
  * loaded request whose resolution exists always has that resolution loaded too.
  */
-export function useSelectedThreadRequests(
-  activities?: ReadonlyArray<OrchestrationThreadActivity>,
-) {
+export function useSelectedThreadRequests(activities?: ReadonlyArray<OrchestrationThreadActivity>) {
   const respondToApproval = useAtomCommand(
     threadEnvironment.respondToApproval,
     "thread approval response",

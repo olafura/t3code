@@ -1,5 +1,5 @@
 import { useAtomValue } from "@effect/atom-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo } from "react";
 
 import {
   CommandId,
@@ -142,7 +142,6 @@ export function useThreadComposerState() {
     hasMoreLiveActivities: selectedThreadDetail?.hasMoreActivities ?? false,
     loadPage: loadOlderActivitiesPage,
   });
-
 
   const selectedThreadFeed = useMemo(
     () =>
