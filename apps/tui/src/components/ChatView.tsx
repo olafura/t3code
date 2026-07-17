@@ -1757,9 +1757,13 @@ export function ChatView({
         loadOlderActivities();
         return;
       }
+      getKittyImageManager(renderer).pauseForScroll();
       box?.scrollBy({ x: 0, y: -SCROLL_STEP });
     },
-    onScrollDown: () => scrollRef.current?.scrollBy({ x: 0, y: SCROLL_STEP }),
+    onScrollDown: () => {
+      getKittyImageManager(renderer).pauseForScroll();
+      scrollRef.current?.scrollBy({ x: 0, y: SCROLL_STEP });
+    },
     onNewThread: openNewThread,
     onToggleTerminal: toggleTerminal,
     onGrowTerminal: () => resizeTerminal(2),
