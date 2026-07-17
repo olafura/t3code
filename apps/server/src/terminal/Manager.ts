@@ -820,6 +820,24 @@ const windowsProcessTableSnapshot = Effect.fn("terminal.windowsProcessTableSnaps
 );
 
 /**
+ * Resolve whether the shell owns the PTY from the best signal available.
+ *
+ * POSIX inspectors report foreground process-group ownership directly. When
+ * that probe is unavailable, unknown is the conservative choice: ordinary keys
+ * still pass, but capability replies are filtered. Windows has no equivalent
+ * ownership probe, so preserve its previous behavior and treat a running child
+ * as foreground; otherwise full-screen programs lose their terminal replies.
+ */
+function resolveShellForeground(
+  platform: NodeJS.Platform,
+  inspection: TerminalSubprocessInspectResult,
+): boolean | null {
+  if (inspection.shellForeground !== undefined) return inspection.shellForeground;
+  if (!inspection.hasRunningSubprocess) return true;
+  return platform === "win32" ? false : null;
+}
+
+/**
  * Upper bound on retained scrollback CHARACTERS, complementing the line limit.
  *
  * The line cap alone cannot bound a full-screen program: synchronized-output
@@ -854,7 +872,11 @@ function capHistory(history: string, maxLines: number, maxChars: number): string
       capped = capped.slice(newline + 1);
     } else {
       const escape = capped.indexOf("\u001b", cut);
-      capped = capped.slice(escape !== -1 && escape < cut + 64 * 1024 ? escape : cut);
+      const sliceAt = escape !== -1 && escape < cut + 64 * 1024 ? escape : cut;
+      const codePoint = capped.charCodeAt(sliceAt);
+      const unicodeSafeSliceAt =
+        sliceAt > 0 && codePoint >= 0xdc00 && codePoint <= 0xdfff ? sliceAt - 1 : sliceAt;
+      capped = capped.slice(unicodeSafeSliceAt);
     }
   }
   return capped;
@@ -1354,8 +1376,8 @@ const INPUT_OSC = "(?:\\x1b\\]|\\x9d)";
 const INPUT_DCS = "(?:\\x1bP|\\x90)";
 const INPUT_ST = "(?:\\x07|\\x1b\\\\|\\x9c)";
 const INPUT_CONTROL_INTRODUCER = "(?:\\x1b[\\[\\]P]|[\\x90\\x9b\\x9d])";
-const ABANDONED_PRIVATE_CSI_INPUT_PREFIX = new RegExp(
-  `${INPUT_CSI}\\?[0-9;]*(?=${INPUT_CONTROL_INTRODUCER})`,
+const ABANDONED_CSI_INPUT_PREFIX = new RegExp(
+  `${INPUT_CSI}[\\x20-\\x3f]*(?=${INPUT_CONTROL_INTRODUCER})`,
   "g",
 );
 function composeInputMatcher(): RegExp | null {
@@ -1656,11 +1678,11 @@ export function sanitizeTerminalInputChunk(
   pendingControlSequence: string,
   data: string,
 ): { data: string; pendingControlSequence: string } {
-  // A client parser can time out after `CSI ?`, then begin the next response
-  // with a fresh introducer. Treat the abandoned private-CSI prefix as residue;
-  // otherwise the second `[` is mistaken for the first sequence's final byte
-  // and both prefixes leak to the shell as visible `^[[?` text.
-  const input = `${pendingControlSequence}${data}`.replace(ABANDONED_PRIVATE_CSI_INPUT_PREFIX, "");
+  // A client parser can time out after a partial CSI parameter sequence, then
+  // begin the next response with a fresh introducer. Treat the abandoned prefix
+  // as residue; otherwise the second `[` is mistaken for the first sequence's
+  // final byte and both prefixes leak to the shell as visible text.
+  const input = `${pendingControlSequence}${data}`.replace(ABANDONED_CSI_INPUT_PREFIX, "");
   const parsed = sanitizeTerminalChunkOnce(input);
 
   // Match the live-output parser's memory bound. A malformed client must not
@@ -2801,7 +2823,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
           }
           return [undefined, state] as const;
         });
-        return;
+        return Option.none<TerminalEvent>();
       }
 
       const next = inspectResult.value;
@@ -2825,8 +2847,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         // Refresh the foreground-ownership signal even when nothing wire-label-
         // worthy changed (a `fg`/`bg` flip of the same child alters what the
         // input reply-strip must do without changing the activity event).
-        liveSession.value.shellForeground =
-          next.shellForeground ?? (next.hasRunningSubprocess ? null : true);
+        liveSession.value.shellForeground = resolveShellForeground(platform, next);
         if (liveSession.value.shellForeground === false) {
           // A prefix buffered while the shell owned the PTY is unsolicited
           // reply residue, not input for the newly foreground application.
@@ -2856,15 +2877,25 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         ] as const;
       });
 
-      if (Option.isSome(event)) {
-        yield* publishEvent(event.value);
-      }
+      return event;
     });
 
-    yield* Effect.forEach(runningSessions, checkSubprocessActivity, {
-      concurrency: "unbounded",
-      discard: true,
-    });
+    yield* Effect.forEach(
+      runningSessions,
+      (session) =>
+        Effect.gen(function* () {
+          const event = yield* withThreadLock(session.threadId, checkSubprocessActivity(session));
+          // Listener callbacks stay outside the session lock so a subscriber
+          // can safely trigger another terminal operation for this thread.
+          if (Option.isSome(event)) {
+            yield* publishEvent(event.value);
+          }
+        }),
+      {
+        concurrency: "unbounded",
+        discard: true,
+      },
+    );
   });
 
   const hasRunningSessions = readManagerState.pipe(
@@ -3263,7 +3294,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
     );
   };
 
-  const write: TerminalManager["Service"]["write"] = Effect.fn("terminal.write")(function* (input) {
+  const writeLocked = Effect.fn("terminal.writeLocked")(function* (input: TerminalWriteInput) {
     const terminalId = input.terminalId;
     const session = yield* requireSession(input.threadId, terminalId);
     const process = session.process;
@@ -3285,8 +3316,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
     ) {
       const refreshed = yield* Effect.exit(subprocessInspector(process.pid));
       if (refreshed._tag === "Success") {
-        session.shellForeground =
-          refreshed.value.shellForeground ?? (refreshed.value.hasRunningSubprocess ? null : true);
+        session.shellForeground = resolveShellForeground(platform, refreshed.value);
       } else {
         session.shellForeground = null;
       }
@@ -3327,6 +3357,9 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         }),
     });
   });
+
+  const write: TerminalManager["Service"]["write"] = (input) =>
+    withThreadLock(input.threadId, writeLocked(input));
 
   const resizeLocked = Effect.fn("terminal.resize")(function* (input: TerminalResizeInput) {
     const session = yield* getSession(input.threadId, input.terminalId);
