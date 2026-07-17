@@ -947,7 +947,13 @@ it.layer(
           readonly hasRunningSubprocess: boolean;
           readonly childCommand: string | null;
           readonly processIds: ReadonlyArray<number>;
-        } = { hasRunningSubprocess: false, childCommand: null, processIds: [] };
+          readonly shellForeground?: boolean;
+        } = {
+          hasRunningSubprocess: false,
+          childCommand: null,
+          processIds: [],
+          shellForeground: true,
+        };
         const { manager, ptyAdapter, getEvents } = yield* createManager(5, {
           subprocessInspector: () => Effect.succeed(inspect),
           subprocessPollIntervalMs: 20,
@@ -993,7 +999,12 @@ it.layer(
 
         // Foreground program running (vim): it issued the query and is blocked
         // reading the answer — input must pass through verbatim.
-        inspect = { hasRunningSubprocess: true, childCommand: "vim", processIds: [100] };
+        inspect = {
+          hasRunningSubprocess: true,
+          childCommand: "vim",
+          processIds: [100],
+          shellForeground: false,
+        };
         yield* waitFor(
           Effect.map(getEvents, (events) =>
             events.some((event) => event.type === "activity" && event.hasRunningSubprocess),
@@ -1158,6 +1169,96 @@ it.layer(
         data: "\x1b[1;1R",
       });
       expect(process.writes).toEqual(["\x1b[1;1R"]);
+    }),
+  );
+
+  it.effect("treats missing foreground ownership as unknown instead of foreground", () =>
+    Effect.gen(function* () {
+      let inspect: {
+        readonly hasRunningSubprocess: boolean;
+        readonly childCommand: string | null;
+        readonly processIds: ReadonlyArray<number>;
+      } = {
+        hasRunningSubprocess: false,
+        childCommand: null,
+        processIds: [],
+      };
+      const { manager, ptyAdapter, getEvents } = yield* createManager(5, {
+        subprocessInspector: () => Effect.succeed(inspect),
+        subprocessPollIntervalMs: 20,
+      });
+      yield* manager.open(openInput());
+      const process = ptyAdapter.processes[0];
+      expect(process).toBeDefined();
+      if (!process) return;
+
+      inspect = {
+        hasRunningSubprocess: true,
+        childCommand: "sleep",
+        processIds: [100],
+      };
+      yield* waitFor(
+        Effect.map(getEvents, (events) =>
+          events.some((event) => event.type === "activity" && event.hasRunningSubprocess),
+        ),
+        "1200 millis",
+      );
+
+      yield* manager.write({
+        threadId: "thread-1",
+        terminalId: DEFAULT_TERMINAL_ID,
+        data: "\x1b[?1;2c",
+      });
+      expect(process.writes).toEqual([]);
+    }),
+  );
+
+  it.effect("drops an idle-shell reply prefix before relaying foreground input", () =>
+    Effect.gen(function* () {
+      let inspect: {
+        readonly hasRunningSubprocess: boolean;
+        readonly childCommand: string | null;
+        readonly processIds: ReadonlyArray<number>;
+        readonly shellForeground?: boolean;
+      } = {
+        hasRunningSubprocess: false,
+        childCommand: null,
+        processIds: [],
+        shellForeground: true,
+      };
+      const { manager, ptyAdapter, getEvents } = yield* createManager(5, {
+        subprocessInspector: () => Effect.succeed(inspect),
+        subprocessPollIntervalMs: 20,
+      });
+      yield* manager.open(openInput());
+      const process = ptyAdapter.processes[0];
+      expect(process).toBeDefined();
+      if (!process) return;
+
+      yield* manager.write({
+        threadId: "thread-1",
+        terminalId: DEFAULT_TERMINAL_ID,
+        data: "\x1b",
+      });
+      inspect = {
+        hasRunningSubprocess: true,
+        childCommand: "vim",
+        processIds: [100],
+        shellForeground: false,
+      };
+      yield* waitFor(
+        Effect.map(getEvents, (events) =>
+          events.some((event) => event.type === "activity" && event.hasRunningSubprocess),
+        ),
+        "1200 millis",
+      );
+
+      yield* manager.write({
+        threadId: "thread-1",
+        terminalId: DEFAULT_TERMINAL_ID,
+        data: "x",
+      });
+      expect(process.writes).toEqual(["x"]);
     }),
   );
 
@@ -2391,14 +2492,18 @@ describe("sanitizeTerminalInputChunk", () => {
     );
   });
 
-  it("strips split CPR while keeping real keys", () => {
+  it("strips CPR split immediately after ESC while keeping complete real keys", () => {
     const prefix = sanitizeTerminalInputChunk("", "\x1b[1");
     assert.deepEqual(sanitizeTerminalInputChunk(prefix.pendingControlSequence, ";2R"), {
       data: "",
       pendingControlSequence: "",
     });
     assert.deepEqual(sanitizeTerminalInputChunk("", "\x1b"), {
-      data: "\x1b",
+      data: "",
+      pendingControlSequence: "\x1b",
+    });
+    assert.deepEqual(sanitizeTerminalInputChunk("\x1b", "[1;2R"), {
+      data: "",
       pendingControlSequence: "",
     });
     assert.deepEqual(sanitizeTerminalInputChunk("", "\x1b[A"), {
