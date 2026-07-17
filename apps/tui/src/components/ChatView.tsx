@@ -62,6 +62,7 @@ import { type DiffStatus, type DiffView, DiffViewer } from "./DiffViewer.tsx";
 import { type Command, filterCommands } from "../commands.ts";
 import { buildFileTree, flattenFileTree } from "../fileTree.ts";
 import { CommandPalette } from "./CommandPalette.tsx";
+import { ComposerDock, type ComposerDockContext } from "./ComposerDock.tsx";
 import { FilesView, type FilesStatus, type ViewingFile } from "./FilesView.tsx";
 import { SettingsView } from "./SettingsView.tsx";
 import { MessagesTimeline } from "./MessagesTimeline.tsx";
@@ -99,6 +100,7 @@ const LIST_PANE_WIDTH = 34;
 /** Width of the docked source-control panel. Narrow terminals show it in the main pane. */
 const RIGHT_PANEL_WIDTH = 32;
 const RIGHT_PANEL_MIN_TERMINAL_WIDTH = 100;
+const COMPOSER_MAX_WIDTH = 96;
 /** Conversation lines scrolled per page key. */
 const SCROLL_STEP = 8;
 /** Cap on terminals per thread (mirrors the web's per-group limit). */
@@ -767,6 +769,19 @@ export function ChatView({
     state.selection?.kind === "project"
       ? (projects.find((project) => project.id === state.selection?.id)?.title ?? null)
       : null;
+  const rightPanelVisible =
+    rightPanelOpen && !diffOpen && !filesOpen && !settingsOpen && !expandedImage;
+  const rightPanelAsMain = rightPanelVisible && width < RIGHT_PANEL_MIN_TERMINAL_WIDTH;
+  const rightWidth = rightPanelVisible && !rightPanelAsMain ? RIGHT_PANEL_WIDTH : 0;
+  const chatWidth = Math.max(20, width - listWidth - rightWidth);
+  const composerSurfaceWidth = Math.max(20, Math.min(COMPOSER_MAX_WIDTH, chatWidth - 2));
+  const composerContext: ComposerDockContext | null =
+    detail && state.vcsStatus?.isRepo
+      ? {
+          workspace: detail.worktreePath ? "Worktree checkout" : "Local checkout",
+          branch: state.vcsStatus.refName ?? detail.branch ?? "(detached)",
+        }
+      : null;
 
   // Deterministic viewport heights. The terminal drawer (when open) and the
   // composer are both shown, so the top panes shrink to fit both. The reply editor
@@ -784,6 +799,12 @@ export function ChatView({
   // options + hint + spacer), so the composer grows to fit it.
   const pendingPanelHeight = userInputActive && uiQuestion ? uiQuestion.options.length + 4 : 0;
   const attachmentPreviewHeight = composerImages.length === 0 ? 0 : inlineImagesSupported ? 4 : 1;
+  const compactComposerFooter =
+    focus !== "new" &&
+    focus !== "rename" &&
+    focus !== "filter" &&
+    focus !== "commit" &&
+    composerSurfaceWidth < 64;
   const composerHeight =
     focus === "new"
       ? 10
@@ -792,8 +813,10 @@ export function ChatView({
         : popoverOpen
           ? 5 + attachmentPreviewHeight // compact input + attachments + footer
           : promptLines + 4 + pendingPanelHeight + attachmentPreviewHeight;
+  const composerDockHeight =
+    composerHeight + (compactComposerFooter ? 1 : 0) + (composerContext ? 1 : 0);
   const defaultTerminalHeight = Math.floor(height * 0.4);
-  const maxTerminalHeight = Math.max(6, height - composerHeight - 6);
+  const maxTerminalHeight = Math.max(6, height - composerDockHeight - 6);
   const terminalDrawerHeight = activeTerminal
     ? Math.min(Math.max(terminalHeight ?? defaultTerminalHeight, 6), maxTerminalHeight)
     : 0;
@@ -803,23 +826,18 @@ export function ChatView({
   const commandWanted = overlay === "command" ? Math.floor(height * 0.5) : 0;
   const revertWanted = overlay === "revert" ? Math.min(checkpoints.length, 8) + 3 : 0;
   const confirmWanted = overlay === "confirmDelete" ? 4 : 0;
-  const popoverCap = Math.max(0, height - terminalDrawerHeight - composerHeight - 6);
+  const popoverCap = Math.max(0, height - terminalDrawerHeight - composerDockHeight - 6);
   const popoverHeight = Math.min(
     pickerWanted + commandWanted + revertWanted + confirmWanted,
     popoverCap,
   );
   const pickerContentRows = Math.max(2, popoverHeight - 3);
-  const bottomReserve = terminalDrawerHeight + popoverHeight + composerHeight + 1;
+  const bottomReserve = terminalDrawerHeight + popoverHeight + composerDockHeight + 1;
   const panesHeight = Math.max(4, height - bottomReserve);
   const listViewport = Math.max(1, panesHeight - 3);
   const termCols = Math.max(2, width - 4);
   // header + tab bar + frame + border(2) = frame rows + 4.
   const termRows = Math.max(2, terminalDrawerHeight - 4);
-  const rightPanelVisible =
-    rightPanelOpen && !diffOpen && !filesOpen && !settingsOpen && !expandedImage;
-  const rightPanelAsMain = rightPanelVisible && width < RIGHT_PANEL_MIN_TERMINAL_WIDTH;
-  const rightWidth = rightPanelVisible && !rightPanelAsMain ? RIGHT_PANEL_WIDTH : 0;
-  const chatWidth = Math.max(20, width - listWidth - rightWidth);
 
   // Window the list around the selection so the highlighted row stays on screen.
   const selectedIndex = Math.max(
@@ -1831,7 +1849,7 @@ export function ChatView({
   });
 
   const placeholder = detail
-    ? "Type a reply, Enter to send"
+    ? "Ask anything, @tag files/folders, $use skills, or / for commands"
     : state.selection?.kind === "project"
       ? "Enter to expand · Alt+↑/↓ to pick a thread"
       : "Select a thread with Alt+↑/↓ or click";
@@ -1968,23 +1986,6 @@ export function ChatView({
         ) : null}
       </box>
 
-      {activeTerminal && detailTabs ? (
-        <ThreadTerminalDrawer
-          client={client}
-          info={activeTerminal}
-          cols={termCols}
-          rows={termRows}
-          focused={terminalFocused}
-          copyRef={terminalCopyRef}
-          scrollRef={terminalScrollRef}
-          tabIds={detailTabs.ids}
-          activeTabId={detailTabs.activeId}
-          onSelectTab={selectTerminal}
-          onNewTab={newTerminal}
-          onCloseTab={closeTerminal}
-        />
-      ) : null}
-
       {/* Popovers float ABOVE the still-present composer (mirroring the web's
           dropdowns), rather than replacing it. */}
       {picker ? (
@@ -2019,73 +2020,98 @@ export function ChatView({
         <ConfirmDeleteMenu title={detail.title} />
       ) : null}
 
-      <ChatComposer
-        // Search/filter now lives in the sidebar; the composer never owns it.
-        mode={focus === "filter" ? "compose" : focus}
-        reply={reply}
-        draft={draft}
-        auxValue={focus === "rename" ? renameDraft : focus === "commit" ? commitDraft : ""}
-        placeholder={placeholder}
-        projectName={projects[activeProjectIndex]?.title ?? "(none)"}
-        interactionMode={
-          focus === "new" ? newInteractionMode : (detail?.interactionMode ?? "default")
-        }
-        newRuntimeMode={newRuntimeMode}
-        newModel={resolvedNewModelSelection?.model ?? null}
-        newReasoning={newReasoning?.selectedId ?? null}
-        newBranch={newBranch}
-        newWorkspaceMode={newWorkspaceMode}
-        newWorkspaceLabel={
-          newWorkspaceMode === "new-worktree"
-            ? "New worktree"
-            : newContextWorktreePath
-              ? "Current worktree"
-              : "Project workspace"
-        }
-        newBranchStatus={newBranchStatus}
-        newField={newField}
-        editorRows={promptLines}
-        inputFocused={
-          !terminalFocused &&
-          !replySubmissionPending &&
-          !newSubmissionPending &&
-          !diffOpen &&
-          !filesOpen &&
-          !settingsOpen &&
-          !expandedImage &&
-          !popoverOpen &&
-          !rightPanelFocused &&
-          focus !== "filter"
-        }
-        composerEpoch={composerEpoch}
-        controls={controls}
-        working={working}
-        attachments={composerImages}
-        inlineImagesSupported={inlineImagesSupported}
-        width={chatWidth}
-        pendingUserInput={userInputActive ? pendingUserInput : null}
-        uiQuestionIndex={uiQuestionIndex}
-        uiOptionIndex={uiOptionIndex}
-        uiSelectedLabels={uiSelectedLabels}
-        answerDraft={customAnswer}
-        onAnswerInput={setCustomAnswer}
-        onReplyInput={setReply}
-        onReplySubmit={sendReply}
-        onDraftInput={(value) => setDraft(value.replace(/\t/g, ""))}
-        onNewFieldActivate={(field) => {
-          setNewField(field);
-          if (field !== "message") navigateNewThreadControl(field, 1);
-        }}
-        onAuxInput={focus === "commit" ? setCommitDraft : setRenameDraft}
-        onTogglePlan={togglePlanMode}
-        onOpenAccess={openRuntimePicker}
-        onOpenModel={openModelPicker}
-        onOpenReasoning={openReasoningPicker}
-        onStop={stopTurn}
-        onSend={sendReply}
-        onSubmitAnswer={submitUserInput}
-        onRemoveAttachment={removeStagedComposerImage}
-      />
+      <ComposerDock
+        leftWidth={listWidth}
+        mainWidth={chatWidth}
+        rightWidth={rightWidth}
+        surfaceWidth={composerSurfaceWidth}
+        context={composerContext}
+      >
+        <ChatComposer
+          // Search/filter now lives in the sidebar; the composer never owns it.
+          mode={focus === "filter" ? "compose" : focus}
+          reply={reply}
+          draft={draft}
+          auxValue={focus === "rename" ? renameDraft : focus === "commit" ? commitDraft : ""}
+          placeholder={placeholder}
+          projectName={projects[activeProjectIndex]?.title ?? "(none)"}
+          interactionMode={
+            focus === "new" ? newInteractionMode : (detail?.interactionMode ?? "default")
+          }
+          newRuntimeMode={newRuntimeMode}
+          newModel={resolvedNewModelSelection?.model ?? null}
+          newReasoning={newReasoning?.selectedId ?? null}
+          newBranch={newBranch}
+          newWorkspaceMode={newWorkspaceMode}
+          newWorkspaceLabel={
+            newWorkspaceMode === "new-worktree"
+              ? "New worktree"
+              : newContextWorktreePath
+                ? "Current worktree"
+                : "Project workspace"
+          }
+          newBranchStatus={newBranchStatus}
+          newField={newField}
+          editorRows={promptLines}
+          inputFocused={
+            !terminalFocused &&
+            !replySubmissionPending &&
+            !newSubmissionPending &&
+            !diffOpen &&
+            !filesOpen &&
+            !settingsOpen &&
+            !expandedImage &&
+            !popoverOpen &&
+            !rightPanelFocused &&
+            focus !== "filter"
+          }
+          composerEpoch={composerEpoch}
+          controls={controls}
+          working={working}
+          attachments={composerImages}
+          inlineImagesSupported={inlineImagesSupported}
+          width={composerSurfaceWidth}
+          pendingUserInput={userInputActive ? pendingUserInput : null}
+          uiQuestionIndex={uiQuestionIndex}
+          uiOptionIndex={uiOptionIndex}
+          uiSelectedLabels={uiSelectedLabels}
+          answerDraft={customAnswer}
+          onAnswerInput={setCustomAnswer}
+          onReplyInput={setReply}
+          onReplySubmit={sendReply}
+          onDraftInput={(value) => setDraft(value.replace(/\t/g, ""))}
+          onNewFieldActivate={(field) => {
+            setNewField(field);
+            if (field !== "message") navigateNewThreadControl(field, 1);
+          }}
+          onAuxInput={focus === "commit" ? setCommitDraft : setRenameDraft}
+          onTogglePlan={togglePlanMode}
+          onOpenAccess={openRuntimePicker}
+          onOpenModel={openModelPicker}
+          onOpenReasoning={openReasoningPicker}
+          onStop={stopTurn}
+          onSend={sendReply}
+          onSubmitAnswer={submitUserInput}
+          onRemoveAttachment={removeStagedComposerImage}
+        />
+      </ComposerDock>
+
+      {activeTerminal && detailTabs ? (
+        <ThreadTerminalDrawer
+          client={client}
+          info={activeTerminal}
+          cols={termCols}
+          rows={termRows}
+          focused={terminalFocused}
+          copyRef={terminalCopyRef}
+          scrollRef={terminalScrollRef}
+          tabIds={detailTabs.ids}
+          activeTabId={detailTabs.activeId}
+          onSelectTab={selectTerminal}
+          onNewTab={newTerminal}
+          onCloseTab={closeTerminal}
+        />
+      ) : null}
 
       <box
         flexDirection="row"
