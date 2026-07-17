@@ -35,6 +35,7 @@ import {
   type VcsStatusLocalResult,
   type VcsStatusRemoteResult,
   type VcsStatusResult,
+  type VcsSwitchRefResult,
   WS_METHODS,
 } from "@t3tools/contracts";
 import {
@@ -506,6 +507,8 @@ export interface TuiClient {
   readonly getServerConfig: () => Promise<ServerConfig>;
   /** Git refs available as base branches for a project's new worktree. */
   readonly listRefs: (cwd: string) => Promise<VcsListRefsResult>;
+  /** Switch the selected checkout to a ref before creating a thread in it. */
+  readonly switchRef: (cwd: string, refName: string) => Promise<VcsSwitchRefResult>;
   readonly terminalWrite: (threadId: ThreadId, terminalId: string, data: string) => Promise<void>;
   readonly terminalResize: (
     threadId: ThreadId,
@@ -984,6 +987,14 @@ export function makeTuiClient(runtime: TuiRuntime, origin = ""): TuiClient {
         request(WS_METHODS.vcsListRefs, {
           cwd,
           limit: PositiveInt.make(100),
+        }),
+      ),
+
+    switchRef: (cwd, refName) =>
+      runtime.runPromise(
+        request(WS_METHODS.vcsSwitchRef, {
+          cwd: TrimmedNonEmptyString.make(cwd),
+          refName: TrimmedNonEmptyString.make(refName),
         }),
       ),
 

@@ -13,6 +13,7 @@ import {
   PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
   type ProviderInteractionMode,
   type RuntimeMode,
+  type VcsRef,
 } from "@t3tools/contracts";
 import { truncate } from "@t3tools/shared/String";
 import { useRenderer, useTerminalDimensions } from "@opentui/react";
@@ -43,6 +44,7 @@ import {
   type NewThreadWorkspaceMode,
   newThreadValidationMessage,
   resolveInitialBranch,
+  resolveNewThreadBranchSelection,
   resolveNewThreadContext,
   validateNewThread,
 } from "../newThread.logic.ts";
@@ -112,6 +114,23 @@ const SCROLL_STEP = 8;
 const MAX_TERMINALS_PER_THREAD = 6;
 const IMAGE_ONLY_PROMPT =
   "[User attached one or more images without additional text. Respond using the conversation context and the attached image(s).]";
+
+function branchPickerOptions(refs: ReadonlyArray<VcsRef>): ReadonlyArray<SelectOption> {
+  return refs.map((ref) => {
+    const badges = [
+      ref.current ? "current" : null,
+      ref.isDefault ? "default" : null,
+      ref.worktreePath ? "worktree" : null,
+      ref.isRemote ? "remote" : null,
+    ].filter((badge): badge is string => badge !== null);
+    return {
+      name: ref.name,
+      description: badges.length > 0 ? badges.join(" · ") : "local branch",
+      value: ref.name,
+    };
+  });
+}
+
 // Top-level layout + state wiring (mirrors apps/web/src/components/ChatView.tsx):
 // owns the external store + UI state, derives the row window and pane heights,
 // routes key bindings to actions, and composes Sidebar / MessagesTimeline /
@@ -205,10 +224,9 @@ export function ChatView({
   // The settings / reference overlay (palette → Settings).
   const [settingsOpen, setSettingsOpen] = React.useState(false);
   const settingsScrollRef = React.useRef<ScrollBoxRenderable | null>(null);
-  // Model picker (^K → m): fetched lazily on open.
-  // A native-<select> picker for the composer controls (model / runtime / reasoning).
+  // Shared popover picker for composer controls and new-thread checkout context.
   const [picker, setPicker] = React.useState<{
-    readonly kind: "model" | "runtime" | "reasoning";
+    readonly kind: "model" | "runtime" | "reasoning" | "workspace" | "branch";
     readonly target: "thread" | "new";
     readonly title: string;
     readonly status: SelectStatus;
@@ -268,7 +286,14 @@ export function ChatView({
     React.useState<ProviderInteractionMode>("default");
   const [newWorkspaceMode, setNewWorkspaceMode] = React.useState<NewThreadWorkspaceMode>("current");
   const [newBranch, setNewBranch] = React.useState<string | null>(null);
+  const newBranchRef = React.useRef<string | null>(newBranch);
+  newBranchRef.current = newBranch;
   const [newContextWorktreePath, setNewContextWorktreePath] = React.useState<string | null>(null);
+  const [newBranchRefs, setNewBranchRefs] = React.useState<ReadonlyArray<VcsRef>>([]);
+  const [newBranchRefsStatus, setNewBranchRefsStatus] = React.useState<SelectStatus>("loading");
+  const newContextMutationPendingRef = React.useRef(false);
+  const newContextMutationTokenRef = React.useRef(0);
+  const [newContextMutationPending, setNewContextMutationPending] = React.useState(false);
   const newSubmissionPendingRef = React.useRef(false);
   const newDraftOriginSelectionRef = React.useRef<string | null>(null);
   const [newSubmissionPending, setNewSubmissionPending] = React.useState(false);
@@ -349,6 +374,9 @@ export function ChatView({
       return;
     }
     newDraftOriginSelectionRef.current = null;
+    newContextMutationTokenRef.current += 1;
+    newContextMutationPendingRef.current = false;
+    setNewContextMutationPending(false);
     setDraft("");
     setNewComposerImages([]);
     setNewBranch(null);
@@ -361,15 +389,44 @@ export function ChatView({
     if (focus !== "new") return;
     const project = projects[activeProjectIndex];
     if (!project) {
+      setNewBranchRefs([]);
+      setNewBranchRefsStatus("empty");
       return;
     }
     let cancelled = false;
+    setNewBranchRefs([]);
+    setNewBranchRefsStatus("loading");
     void client.listRefs(project.workspaceRoot).then(
       (result) => {
         if (cancelled) return;
-        setNewBranch((branch) => resolveInitialBranch(result.refs, branch));
+        const status = result.refs.length > 0 ? "ready" : "empty";
+        const resolvedBranch = resolveInitialBranch(result.refs, newBranchRef.current);
+        setNewBranchRefs(result.refs);
+        setNewBranchRefsStatus(status);
+        setNewBranch(resolvedBranch);
+        setPicker((current) =>
+          current?.kind === "branch" && current.target === "new"
+            ? {
+                ...current,
+                status,
+                options: branchPickerOptions(result.refs),
+                selectedIndex: Math.max(
+                  0,
+                  result.refs.findIndex((ref) => ref.name === resolvedBranch),
+                ),
+              }
+            : current,
+        );
       },
-      () => {},
+      () => {
+        if (cancelled) return;
+        setNewBranchRefsStatus("error");
+        setPicker((current) =>
+          current?.kind === "branch" && current.target === "new"
+            ? { ...current, status: "error", options: [] }
+            : current,
+        );
+      },
     );
     return () => {
       cancelled = true;
@@ -384,7 +441,9 @@ export function ChatView({
     : process.cwd();
   const composerCwd =
     focus === "new"
-      ? (newContextWorktreePath ?? projects[activeProjectIndex]?.workspaceRoot ?? process.cwd())
+      ? ((newWorkspaceMode === "current" ? newContextWorktreePath : null) ??
+        projects[activeProjectIndex]?.workspaceRoot ??
+        process.cwd())
       : terminalCwd;
   const detailTabs = detail ? (terminalTabs.get(detail.id) ?? null) : null;
   const activeTerminal: TerminalInfo | null =
@@ -676,6 +735,48 @@ export function ChatView({
     store.setStatus("Interrupt sent.", "success");
   };
 
+  const openWorkspacePicker = () => {
+    if (focus !== "new") return;
+    const currentWorkspaceLabel = newContextWorktreePath ? "Current worktree" : "Current checkout";
+    setPicker({
+      kind: "workspace",
+      target: "new",
+      title: "workspace",
+      status: "ready",
+      options: [
+        {
+          name: currentWorkspaceLabel,
+          description: newContextWorktreePath
+            ? "Reuse the selected existing worktree."
+            : "Run in the project's current checkout.",
+          value: "current",
+        },
+        {
+          name: "New worktree",
+          description: `Create an isolated worktree from ${newBranch ?? "the selected base"}.`,
+          value: "new-worktree",
+        },
+      ],
+      selectedIndex: newWorkspaceMode === "current" ? 0 : 1,
+    });
+  };
+
+  const openBranchPicker = () => {
+    if (focus !== "new") return;
+    const options = branchPickerOptions(newBranchRefs);
+    setPicker({
+      kind: "branch",
+      target: "new",
+      title: newWorkspaceMode === "new-worktree" ? "base branch" : "branch",
+      status: newBranchRefsStatus,
+      options,
+      selectedIndex: Math.max(
+        0,
+        newBranchRefs.findIndex((ref) => ref.name === newBranch),
+      ),
+    });
+  };
+
   const openRuntimePicker = () => {
     const target = focus === "new" ? "new" : "thread";
     if (target === "thread" && !detail) return;
@@ -784,15 +885,92 @@ export function ChatView({
       return { ...current, selectedIndex: (current.selectedIndex + delta + count) % count };
     });
 
+  const applyNewThreadBranch = (ref: VcsRef) => {
+    const project = projects[activeProjectIndex];
+    if (!project || newContextMutationPendingRef.current) return;
+    const selection = resolveNewThreadBranchSelection({
+      workspaceMode: newWorkspaceMode,
+      projectCwd: project.workspaceRoot,
+      currentWorktreePath: newContextWorktreePath,
+      ref,
+    });
+    setPicker(null);
+
+    if (selection.kind === "select-base") {
+      setNewBranch(selection.branch);
+      store.setStatus(`Worktree base → ${selection.branch}`, "success");
+      return;
+    }
+    if (selection.kind === "reuse-worktree") {
+      setNewBranch(selection.branch);
+      setNewContextWorktreePath(selection.worktreePath);
+      store.setStatus(`Workspace → ${selection.branch}`, "success");
+      return;
+    }
+
+    newContextMutationPendingRef.current = true;
+    const mutationToken = newContextMutationTokenRef.current + 1;
+    newContextMutationTokenRef.current = mutationToken;
+    setNewContextMutationPending(true);
+    store.setStatus(`Switching checkout to ${ref.name}…`, "busy");
+    void client
+      .switchRef(selection.checkoutCwd, ref.name)
+      .then(
+        (result) => {
+          if (
+            newContextMutationTokenRef.current !== mutationToken ||
+            newDraftOriginSelectionRef.current === null
+          ) {
+            return;
+          }
+          setNewBranch(result.refName ?? selection.branch);
+          setNewContextWorktreePath(selection.worktreePath);
+          store.setStatus(`Branch → ${result.refName ?? selection.branch}`, "success");
+        },
+        (error) => {
+          if (newContextMutationTokenRef.current !== mutationToken) return;
+          store.setStatus(`branch switch failed: ${String(error)}`, "error");
+        },
+      )
+      .finally(() => {
+        if (newContextMutationTokenRef.current !== mutationToken) return;
+        newContextMutationPendingRef.current = false;
+        setNewContextMutationPending(false);
+      });
+  };
+
   const applyPicker = (index: number) => {
     const current = picker;
-    setPicker(null);
     if (!current) return;
     const option = current.options[index];
     const value = typeof option?.value === "string" ? option.value : null;
     const kind = current.kind;
     if (!value) return;
-    if (kind === "runtime") {
+    if (kind === "branch") {
+      const ref = newBranchRefs.find((candidate) => candidate.name === value);
+      if (ref) applyNewThreadBranch(ref);
+      return;
+    }
+    setPicker(null);
+    if (kind === "workspace") {
+      const mode = value as NewThreadWorkspaceMode;
+      setNewWorkspaceMode(mode);
+      if (mode === "current") {
+        const project = projects[activeProjectIndex];
+        const currentRef = newContextWorktreePath
+          ? newBranchRefs.find((ref) => ref.worktreePath === newContextWorktreePath)
+          : newBranchRefs.find(
+              (ref) => ref.current || (!!project && ref.worktreePath === project.workspaceRoot),
+            );
+        if (currentRef) {
+          setNewBranch(currentRef.name);
+        }
+      }
+      store.setStatus(
+        mode === "new-worktree" ? "Workspace → New worktree" : "Workspace → Current checkout",
+        "success",
+      );
+    } else if (kind === "runtime") {
       const mode = value as RuntimeMode;
       if (current.target === "new") {
         setNewRuntimeMode(mode);
@@ -890,6 +1068,8 @@ export function ChatView({
                 ? "Current worktree"
                 : "Project workspace",
           branch: newBranch ?? "(current)",
+          onOpenWorkspace: openWorkspacePicker,
+          onOpenBranch: openBranchPicker,
         }
       : detail && state.vcsStatus?.isRepo
         ? {
@@ -917,6 +1097,7 @@ export function ChatView({
     !terminalFocused &&
     !replySubmissionPending &&
     !newSubmissionPending &&
+    !newContextMutationPending &&
     !diffOpen &&
     !filesOpen &&
     !settingsOpen &&
@@ -1106,6 +1287,10 @@ export function ChatView({
 
   const submitNewThread = () => {
     if (newSubmissionPendingRef.current) return;
+    if (newContextMutationPendingRef.current) {
+      store.setStatus("Wait for the branch switch to finish.", "info");
+      return;
+    }
     const project = projects[activeProjectIndex];
     const typedMessage = draft.trim();
     const message =
@@ -1624,6 +1809,18 @@ export function ChatView({
     if (focus === "new") {
       list.push(
         {
+          id: "workspace",
+          title: "Change workspace",
+          keywords: "checkout worktree",
+          run: () => runCommand(openWorkspacePicker),
+        },
+        {
+          id: "branch",
+          title: newWorkspaceMode === "new-worktree" ? "Change base branch" : "Change branch",
+          keywords: "git ref",
+          run: () => runCommand(openBranchPicker),
+        },
+        {
           id: "model",
           title: "Change model",
           run: () => runCommand(openModelPicker),
@@ -1754,6 +1951,12 @@ export function ChatView({
     pendingUserInput,
     threadModelSelection,
     threadInteractionMode,
+    newWorkspaceMode,
+    newBranchRefs,
+    newBranchRefsStatus,
+    newBranch,
+    newContextWorktreePath,
+    activeProjectIndex,
   ]);
 
   const filteredCommands = React.useMemo(
@@ -2021,6 +2224,10 @@ export function ChatView({
     onEscape: () => {
       if (focus === "new") {
         if (newSubmissionPendingRef.current) return;
+        if (newContextMutationPendingRef.current) {
+          store.setStatus("Wait for the branch switch to finish.", "info");
+          return;
+        }
         setDraft("");
         setNewComposerImages([]);
         setNewBranch(null);
