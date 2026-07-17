@@ -1014,6 +1014,72 @@ it.layer(
       }),
   );
 
+  it.effect("refreshes foreground ownership when a program exits between subprocess polls", () =>
+    Effect.gen(function* () {
+      let inspect: {
+        readonly hasRunningSubprocess: boolean;
+        readonly childCommand: string | null;
+        readonly processIds: ReadonlyArray<number>;
+        readonly shellForeground?: boolean;
+      } = {
+        hasRunningSubprocess: true,
+        childCommand: "claude",
+        processIds: [100],
+        shellForeground: false,
+      };
+      let inspections = 0;
+      const { manager, ptyAdapter, getEvents } = yield* createManager(5, {
+        subprocessInspector: () => {
+          inspections += 1;
+          return Effect.succeed(inspect);
+        },
+        subprocessPollIntervalMs: 200,
+      });
+      yield* manager.open(openInput());
+      const process = ptyAdapter.processes[0];
+      expect(process).toBeDefined();
+      if (!process) return;
+
+      yield* waitFor(
+        Effect.map(getEvents, (events) =>
+          events.some((event) => event.type === "activity" && event.hasRunningSubprocess),
+        ),
+        "1200 millis",
+      );
+      const inspectionsBeforeExit = inspections;
+
+      // Claude has exited and the shell owns the PTY again, but the periodic
+      // snapshot still says the foreground program is active.
+      inspect = {
+        hasRunningSubprocess: false,
+        childCommand: null,
+        processIds: [],
+        shellForeground: true,
+      };
+
+      // The captured leak commonly splits DA replies across client writes.
+      // Neither half may reach the shell during the stale-cache window.
+      yield* manager.write({
+        threadId: "thread-1",
+        terminalId: DEFAULT_TERMINAL_ID,
+        data: "\x1b[?1",
+      });
+      yield* manager.write({
+        threadId: "thread-1",
+        terminalId: DEFAULT_TERMINAL_ID,
+        data: ";2c",
+      });
+      yield* manager.write({
+        threadId: "thread-1",
+        terminalId: DEFAULT_TERMINAL_ID,
+        data: "\x1b]11;rgb:1616/1616/1616\x1b\\",
+      });
+
+      expect(inspections).toBeGreaterThan(inspectionsBeforeExit);
+      expect(process.writes).toEqual([]);
+    }),
+  );
+
   it.effect("keeps stripping replies while only a BACKGROUND job runs (shell owns the PTY)", () =>
     Effect.gen(function* () {
       // `sleep 100 &` puts a child under the shell, but the shell still owns
