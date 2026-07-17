@@ -1025,6 +1025,66 @@ it.layer(
       }),
   );
 
+  it.effect("serializes overlapping reply writes through the per-thread lock", () =>
+    Effect.gen(function* () {
+      const inspect = {
+        hasRunningSubprocess: true,
+        childCommand: "vim",
+        processIds: [100],
+        shellForeground: false,
+      };
+      let delayInspections = false;
+      let activeInspections = 0;
+      let maxActiveInspections = 0;
+      const { manager, ptyAdapter, getEvents } = yield* createManager(5, {
+        subprocessInspector: () =>
+          delayInspections
+            ? Effect.gen(function* () {
+                activeInspections += 1;
+                maxActiveInspections = Math.max(maxActiveInspections, activeInspections);
+                yield* Effect.sleep("25 millis");
+                activeInspections -= 1;
+                return inspect;
+              })
+            : Effect.succeed(inspect),
+        // Leave enough room after the initial ownership poll for the two
+        // overlapping writes to exercise only their on-demand refreshes.
+        subprocessPollIntervalMs: 200,
+      });
+      yield* manager.open(openInput());
+      const process = ptyAdapter.processes[0];
+      expect(process).toBeDefined();
+      if (!process) return;
+
+      yield* waitFor(
+        Effect.map(getEvents, (events) =>
+          events.some((event) => event.type === "activity" && event.hasRunningSubprocess),
+        ),
+        "1200 millis",
+      );
+      delayInspections = true;
+
+      yield* Effect.all(
+        [
+          manager.write({
+            threadId: "thread-1",
+            terminalId: DEFAULT_TERMINAL_ID,
+            data: "\x1b[1;1R",
+          }),
+          manager.write({
+            threadId: "thread-1",
+            terminalId: DEFAULT_TERMINAL_ID,
+            data: "\x1b[2;1R",
+          }),
+        ],
+        { concurrency: "unbounded" },
+      );
+
+      expect(maxActiveInspections).toBe(1);
+      expect(process.writes).toEqual(["\x1b[1;1R", "\x1b[2;1R"]);
+    }),
+  );
+
   it.effect("refreshes foreground ownership when a program exits between subprocess polls", () =>
     Effect.gen(function* () {
       let inspect: {
@@ -1213,6 +1273,41 @@ it.layer(
     }),
   );
 
+  it.effect(
+    "relays replies to a running Windows child when foreground ownership is unavailable",
+    () =>
+      Effect.gen(function* () {
+        const inspect = {
+          hasRunningSubprocess: true,
+          childCommand: "vim.exe",
+          processIds: [100],
+        };
+        const fixture = yield* createManager(5, {
+          subprocessInspector: () => Effect.succeed(inspect),
+          subprocessPollIntervalMs: 20,
+        }).pipe(Effect.provide(withHostPlatform("win32")));
+        const { manager, ptyAdapter, getEvents } = fixture;
+        yield* manager.open(openInput());
+        const process = ptyAdapter.processes[0];
+        expect(process).toBeDefined();
+        if (!process) return;
+
+        yield* waitFor(
+          Effect.map(getEvents, (events) =>
+            events.some((event) => event.type === "activity" && event.hasRunningSubprocess),
+          ),
+          "1200 millis",
+        );
+        yield* manager.write({
+          threadId: "thread-1",
+          terminalId: DEFAULT_TERMINAL_ID,
+          data: "\x1b[1;2R",
+        });
+
+        expect(process.writes).toEqual(["\x1b[1;2R"]);
+      }),
+  );
+
   it.effect("drops an idle-shell reply prefix before relaying foreground input", () =>
     Effect.gen(function* () {
       let inspect: {
@@ -1311,6 +1406,24 @@ it.layer(
       expect(reopened.history.includes("tail-marker")).toBe(true);
       // The cut lands on an escape boundary, not mid-sequence.
       expect(reopened.history.startsWith("\u001b")).toBe(true);
+    }),
+  );
+
+  it.effect("does not split a surrogate pair at the history character boundary", () =>
+    Effect.gen(function* () {
+      const { manager, ptyAdapter } = yield* createManager(5_000, { historyCharLimit: 2 });
+      yield* manager.open(openInput());
+      const process = ptyAdapter.processes[0];
+      expect(process).toBeDefined();
+      if (!process) return;
+
+      // UTF-16 indices: A=0, emoji high=1, emoji low=2, B=3. A hard cut at
+      // length-maxChars (=2) would retain a lone low surrogate followed by B.
+      process.emitData("A😀B");
+      yield* manager.close({ threadId: "thread-1" });
+
+      const reopened = yield* manager.open(openInput());
+      expect(reopened.history).toBe("😀B");
     }),
   );
 
@@ -2530,6 +2643,15 @@ describe("sanitizeTerminalInputChunk", () => {
       data: "",
       pendingControlSequence: "",
     });
+  });
+
+  it("drops abandoned CPR and DA prefixes before a fresh response", () => {
+    for (const abandoned of ["\x1b[1;", "\x1b[>0;", "\x9b12;", "\x1b[?2026;"]) {
+      assert.deepEqual(sanitizeTerminalInputChunk("", `${abandoned}\x1b[1;2R`), {
+        data: "",
+        pendingControlSequence: "",
+      });
+    }
   });
 });
 
