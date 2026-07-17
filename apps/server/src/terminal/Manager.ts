@@ -1750,6 +1750,26 @@ export function sanitizeTerminalInputChunk(
 }
 
 /**
+ * Whether a client write is (or starts) a terminal-generated capability reply.
+ *
+ * This is intentionally structural rather than a second signature list: the
+ * canonical input sanitizer above owns reply recognition. An incomplete
+ * sequence also counts so a transport split cannot send its prefix to the PTY
+ * before foreground ownership is refreshed.
+ */
+function mayContainTerminalResponse(pendingControlSequence: string, data: string): boolean {
+  if (pendingControlSequence.length > 0) return true;
+  const hasIntroducer =
+    data.includes("\x1b") ||
+    data.includes("\x9b") ||
+    data.includes("\x9d") ||
+    data.includes("\x90");
+  if (!hasIntroducer) return false;
+  const sanitized = sanitizeTerminalInputChunk("", data);
+  return sanitized.data !== data || sanitized.pendingControlSequence.length > 0;
+}
+
+/**
  * Sanitize a WHOLE persisted scrollback buffer for load/migration, losslessly.
  *
  * Unlike the per-chunk API, there is no next chunk: a trailing incomplete
@@ -3267,6 +3287,22 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         terminalId,
       });
     }
+    // The periodic subprocess snapshot is deliberately cheap and eventually
+    // consistent, but a foreground program can exit between polls. Capability
+    // replies arriving in that gap must refresh foreground ownership before we
+    // decide whether to relay them; otherwise the now-idle shell receives a
+    // whole response burst and prompt redraws amplify it into a feedback loop.
+    if (
+      !session.shellForeground &&
+      mayContainTerminalResponse(session.pendingInputControlSequence, input.data)
+    ) {
+      const refreshed = yield* Effect.exit(subprocessInspector(process.pid));
+      if (refreshed._tag === "Success") {
+        session.shellForeground =
+          refreshed.value.shellForeground ?? !refreshed.value.hasRunningSubprocess;
+      }
+    }
+
     // The reply-strip exists to break the IDLE-PROMPT echo loop (a shell with
     // no reader echoes the emulator's auto-replies, and a prompt that re-queries
     // on redraw turns that into a flood). The gate is PTY foreground ownership,
