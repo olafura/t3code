@@ -196,8 +196,9 @@ interface TerminalSubprocessInspectResult {
    * Whether the shell itself owns the PTY's foreground process group
    * (`tpgid === pgid` of the terminal process) — i.e. the terminal is at an
    * interactive prompt, even if background jobs (`… &`) exist. `undefined`
-   * when the platform/inspector can't tell (Windows, custom fixtures); the
-   * caller then falls back to `!hasRunningSubprocess`.
+   * when the platform/inspector can't tell (Windows, custom fixtures); callers
+   * must treat that as unknown rather than equating any child with foreground
+   * ownership.
    */
   readonly shellForeground?: boolean;
 }
@@ -265,11 +266,11 @@ export interface TerminalSessionState {
    * Whether the shell owns the PTY's foreground process group (idle prompt,
    * possibly with background jobs). Drives the input reply-strip: strip only
    * while true — a foreground job (vim, a CPR-based UI) is reading the replies
-   * to its own queries. Defaults true at spawn; refreshed by the subprocess
-   * poll (`tpgid === pgid`), falling back to `!hasRunningSubprocess` when the
-   * platform can't tell.
+   * to its own queries. `null` means the inspector failed or could not observe
+   * foreground ownership; that state uses the safe idle-shell filtering policy
+   * until a later probe provides a definitive answer.
    */
-  shellForeground: boolean;
+  shellForeground: boolean | null;
   /** Normalized child command name when `hasRunningSubprocess`; cleared when idle. */
   childCommandLabel: string | null;
   runtimeEnv: Record<string, string> | null;
@@ -1121,8 +1122,12 @@ export const TERMINAL_SEQUENCE_GRAMMAR: ReadonlyArray<TerminalSequenceDescriptor
       // has (a no-op set), never re-triggering the echo loop.
       body: "(?:10|11|12);rgb:",
       stripFromOutput: false,
-      input: "1[012];rgb:[0-9a-fA-F/]*",
-      samples: ["11;rgb:1616/1616/1616", "10;rgb:ffff/ffff/ffff"],
+      input: "1[012];rgb:[0-9a-fA-F/]*(?:;rgb:[0-9a-fA-F/]*)*",
+      samples: [
+        "11;rgb:1616/1616/1616",
+        "10;rgb:ffff/ffff/ffff",
+        "10;rgb:ffff/ffff/ffff;rgb:1616/1616/1616",
+      ],
     },
     query: { body: "(?:10|11|12);\\?", samples: ["11;?"] },
     flattened: {
@@ -1130,7 +1135,7 @@ export const TERMINAL_SEQUENCE_GRAMMAR: ReadonlyArray<TerminalSequenceDescriptor
       // that both over-matched ordinary "<n>;rgb:…" text and was a ReDoS). The
       // lookbehind skips a colour run still inside an intact OSC frame the
       // escape walk chose to keep.
-      source: "(?<!\\x1b\\]|\\x9d)(?:1[012];rgb:[0-9a-fA-F/]+|(?<![0-9]);rgb:[0-9a-fA-F/]+)",
+      source: "(?<!\\x1b\\]|\\x9d)(?:1[012];rgb:[0-9a-fA-F/]+|(?<![0-9a-fA-F/]);rgb:[0-9a-fA-F/]+)",
       loneStrippable: true,
       samples: ["11;rgb:1616/1616/1616"],
     },
@@ -1725,13 +1730,6 @@ export function sanitizeTerminalInputChunk(
   // and both prefixes leak to the shell as visible `^[[?` text.
   const input = `${pendingControlSequence}${data}`.replace(ABANDONED_PRIVATE_CSI_INPUT_PREFIX, "");
   const parsed = sanitizeTerminalChunkOnce(input);
-
-  // Escape is both a complete user keystroke and a possible introducer. Never
-  // hold a lone Esc waiting for another write; complete CSI/OSC/DCS prefixes are
-  // still buffered and reassembled across transport chunks.
-  if (parsed.pendingControlSequence === "\x1b") {
-    return { data: `${parsed.inputText}\x1b`, pendingControlSequence: "" };
-  }
 
   // Match the live-output parser's memory bound. A malformed client must not
   // grow session state forever by opening an OSC/DCS string without a
@@ -2820,6 +2818,18 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       );
 
       if (Option.isNone(inspectResult)) {
+        yield* modifyManagerState((state) => {
+          const liveSession = state.sessions.get(
+            toSessionKey(session.threadId, session.terminalId),
+          );
+          if (liveSession?.status === "running" && liveSession.pid === terminalPid) {
+            // Do not keep routing input from a stale foreground observation.
+            // Unknown ownership strips capability replies until a later probe
+            // succeeds, while ordinary keyboard input still passes unchanged.
+            liveSession.shellForeground = null;
+          }
+          return [undefined, state] as const;
+        });
         return;
       }
 
@@ -2844,7 +2854,13 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         // Refresh the foreground-ownership signal even when nothing wire-label-
         // worthy changed (a `fg`/`bg` flip of the same child alters what the
         // input reply-strip must do without changing the activity event).
-        liveSession.value.shellForeground = next.shellForeground ?? !next.hasRunningSubprocess;
+        liveSession.value.shellForeground =
+          next.shellForeground ?? (next.hasRunningSubprocess ? null : true);
+        if (liveSession.value.shellForeground === false) {
+          // A prefix buffered while the shell owned the PTY is unsolicited
+          // reply residue, not input for the newly foreground application.
+          liveSession.value.pendingInputControlSequence = "";
+        }
         if (
           liveSession.value.hasRunningSubprocess === next.hasRunningSubprocess &&
           liveSession.value.childCommandLabel === nextChildLabel
@@ -3299,7 +3315,9 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       const refreshed = yield* Effect.exit(subprocessInspector(process.pid));
       if (refreshed._tag === "Success") {
         session.shellForeground =
-          refreshed.value.shellForeground ?? !refreshed.value.hasRunningSubprocess;
+          refreshed.value.shellForeground ?? (refreshed.value.hasRunningSubprocess ? null : true);
+      } else {
+        session.shellForeground = null;
       }
     }
 
@@ -3314,17 +3332,18 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
     // program's very first queries can still lose a reply, and a program
     // `exec`'d over the shell keeps its pgid so it still looks like the shell —
     // both accepted next to the runaway flood the strip prevents.
-    const data = session.shellForeground
-      ? (() => {
-          const sanitized = sanitizeTerminalInputChunk(
-            session.pendingInputControlSequence,
-            input.data,
-          );
-          session.pendingInputControlSequence = sanitized.pendingControlSequence;
-          return sanitized.data;
-        })()
-      : `${session.pendingInputControlSequence}${input.data}`;
-    if (!session.shellForeground) session.pendingInputControlSequence = "";
+    const data =
+      session.shellForeground !== false
+        ? (() => {
+            const sanitized = sanitizeTerminalInputChunk(
+              session.pendingInputControlSequence,
+              input.data,
+            );
+            session.pendingInputControlSequence = sanitized.pendingControlSequence;
+            return sanitized.data;
+          })()
+        : input.data;
+    if (session.shellForeground === false) session.pendingInputControlSequence = "";
     if (data.length === 0) return;
     yield* Effect.try({
       try: () => process.write(data),
