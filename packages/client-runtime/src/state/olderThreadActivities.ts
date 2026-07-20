@@ -205,7 +205,9 @@ export function useOlderThreadActivities(
   // Latest merged set, read inside the async load handler so dedup runs
   // against current state, not the snapshot captured at dispatch time.
   const mergedActivitiesRef = useRef(mergedActivities);
-  mergedActivitiesRef.current = mergedActivities;
+  useLayoutEffect(() => {
+    mergedActivitiesRef.current = mergedActivities;
+  }, [mergedActivities]);
 
   // Before any page is loaded the server flag is authoritative; afterwards
   // the latest page's `hasMore` is.
