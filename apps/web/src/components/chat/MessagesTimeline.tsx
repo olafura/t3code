@@ -74,6 +74,7 @@ import {
   deriveMessagesTimelineRows,
   normalizeCompactToolLabel,
   resolveAssistantMessageCopyState,
+  resolveOlderHistoryAutoLoad,
   resolveTimelineIsAtEnd,
   resolveTimelineMinimapHasPersistentGutter,
   resolveTimelineMinimapHeightStyle,
@@ -338,6 +339,14 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   );
   const [minimapHasPersistentGutter, setMinimapHasPersistentGutter] = useState(false);
   const [minimapHitStripWidth, setMinimapHitStripWidth] = useState(0);
+  const olderHistoryRequestedAtStartRef = useRef(false);
+  useEffect(() => {
+    olderHistoryRequestedAtStartRef.current = false;
+  }, [routeThreadKey]);
+  const requestOlderHistoryAtStart = useCallback(() => {
+    olderHistoryRequestedAtStartRef.current = true;
+    onLoadOlder?.();
+  }, [onLoadOlder]);
   const handleAnchorReady = useCallback(
     (info: { anchorIndex: number | undefined }) => {
       if (anchorMessageId !== null && info.anchorIndex !== undefined) {
@@ -369,10 +378,19 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     if (isAtEnd !== undefined) {
       onIsAtEndChange(isAtEnd);
     }
-    // Reaching the top lazy-loads older history; maintainVisibleContentPosition
-    // (set on the list) keeps the viewport anchored when rows prepend.
-    if (state?.isAtStart && hasMoreOlder && !loadingOlder) {
-      onLoadOlder?.();
+    // Reaching the top lazy-loads one older page. Measurements rerun when the
+    // request settles and when rows prepend, so keep the visit latched until
+    // the user leaves the top; otherwise failures retry forever and successful
+    // pages chain-load the whole history back into memory.
+    const olderHistoryAutoLoad = resolveOlderHistoryAutoLoad({
+      isAtStart: state?.isAtStart,
+      hasMoreOlder: hasMoreOlder && onLoadOlder !== undefined,
+      loadingOlder,
+      requestedAtStart: olderHistoryRequestedAtStartRef.current,
+    });
+    olderHistoryRequestedAtStartRef.current = olderHistoryAutoLoad.requestedAtStart;
+    if (olderHistoryAutoLoad.shouldLoad) {
+      requestOlderHistoryAtStart();
     }
     if (!state || minimapItems.length === 0) {
       return;
@@ -404,6 +422,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     hasMoreOlder,
     loadingOlder,
     onLoadOlder,
+    requestOlderHistoryAtStart,
   ]);
 
   useEffect(() => {
@@ -448,7 +467,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       return (
         <button
           type="button"
-          onClick={onLoadOlder}
+          onClick={requestOlderHistoryAtStart}
           className="flex w-full cursor-pointer items-center justify-center py-2 text-xs text-muted-foreground transition-colors hover:text-foreground"
         >
           Load older history
@@ -456,7 +475,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       );
     }
     return TIMELINE_LIST_HEADER;
-  }, [loadingOlder, hasMoreOlder, onLoadOlder]);
+  }, [loadingOlder, hasMoreOlder, requestOlderHistoryAtStart]);
 
   const sharedState = useMemo<TimelineRowSharedState>(
     () => ({
