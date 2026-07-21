@@ -1446,19 +1446,17 @@ const makeWsRpcLayer = (
                     synchronizedThenLive,
                   );
                 }
-                const catchUpStream = orchestrationEngine
-                  .readEvents(afterSequence, replayGap)
-                  .pipe(
-                    Stream.filter(isThisThreadDetailEvent),
-                    Stream.map((event) => ({ kind: "event" as const, event })),
-                    Stream.mapError(
-                      (cause) =>
-                        new OrchestrationGetSnapshotError({
-                          message: `Failed to replay thread ${input.threadId} events`,
-                          cause,
+                const catchUpStream = orchestrationEngine.readEvents(afterSequence, replayGap).pipe(
+                  Stream.filter(isThisThreadDetailEvent),
+                  Stream.map((event) => ({ kind: "event" as const, event })),
+                  Stream.mapError(
+                    (cause) =>
+                      new OrchestrationGetSnapshotError({
+                        message: `Failed to replay thread ${input.threadId} events`,
+                        cause,
                       }),
-                    ),
-                  );
+                  ),
+                );
                 return Stream.concat(catchUpStream, synchronizedThenLive);
               }
 
