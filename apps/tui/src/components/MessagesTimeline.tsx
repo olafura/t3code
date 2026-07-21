@@ -4,6 +4,7 @@ import type {
   OrchestrationCheckpointSummary,
   OrchestrationThreadActivity,
 } from "@t3tools/contracts";
+import { shouldCollapseUserMessage } from "@t3tools/shared/chatMessages";
 import * as React from "react";
 import { useRenderer } from "@opentui/react";
 
@@ -144,6 +145,42 @@ interface RowRenderContext {
   readonly onOpenImage?: (preview: ExpandedImagePreview) => void;
 }
 
+const COLLAPSED_USER_MESSAGE_ROWS = 8;
+
+function CollapsibleUserMessage({
+  rawBody,
+  body,
+  streaming,
+  syntaxStyle,
+  mdClient,
+}: {
+  readonly rawBody: string;
+  readonly body: string;
+  readonly streaming: boolean;
+  readonly syntaxStyle: SyntaxStyle;
+  readonly mdClient: Record<string, never>;
+}): React.ReactNode {
+  const palette = usePalette();
+  const [expanded, setExpanded] = React.useState(false);
+  const canCollapse = shouldCollapseUserMessage(rawBody);
+  const collapsed = canCollapse && !expanded;
+  return (
+    <box flexDirection="column" width="100%">
+      <box
+        width="100%"
+        {...(collapsed ? { height: COLLAPSED_USER_MESSAGE_ROWS, overflow: "hidden" as const } : {})}
+      >
+        <markdown content={body} syntaxStyle={syntaxStyle} streaming={streaming} {...mdClient} />
+      </box>
+      {canCollapse ? (
+        <box onMouseDown={() => setExpanded((value) => !value)}>
+          <text fg={palette.dim}>{expanded ? "⌃ Show less" : "⌄ Show full message"}</text>
+        </box>
+      ) : null}
+    </box>
+  );
+}
+
 /**
  * An image attachment with a Kitty preview when supported. The metadata link
  * remains visible as a reliable fallback and copy target.
@@ -263,9 +300,11 @@ function FoldableRowView({
       </box>
     ) : null;
   if (message.role === "user") {
-    const maxBubble = Math.max(16, Math.floor(width * 0.72));
-    const longestLine = rawBody.split("\n").reduce((max, line) => Math.max(max, line.length), 1);
-    const bubbleWidth = Math.min(maxBubble, longestLine + 4);
+    const maxBubble = Math.max(8, Math.floor(width * 0.72));
+    const longestLine = rawBody
+      .split("\n")
+      .reduce((max, line) => Math.max(max, Bun.stringWidth(line)), 1);
+    const bubbleWidth = Math.max(1, Math.min(width, maxBubble, longestLine + 4));
     // Right-align by putting the bubble in a row whose width is the DEFINITE
     // scrollbox content width (= the `width` prop). Inside a scrollbox the
     // cross-size is auto, so "100%"/alignSelf/marginLeft:auto all collapse —
@@ -283,11 +322,12 @@ function FoldableRowView({
             paddingLeft={1}
             paddingRight={1}
           >
-            <markdown
-              content={body}
-              syntaxStyle={syntaxStyle}
+            <CollapsibleUserMessage
+              rawBody={rawBody}
+              body={body}
               streaming={message.streaming}
-              {...mdClient}
+              syntaxStyle={syntaxStyle}
+              mdClient={mdClient}
             />
           </box>
         </box>
@@ -552,6 +592,9 @@ export const MessagesTimeline = React.memo(function MessagesTimeline({
   const imageCellWidth = renderer.resolution ? renderer.resolution.width / renderer.width : 18;
   const mdClient = treeSitterClient ? { treeSitterClient: treeSitterClient as never } : {};
   const palette = usePalette();
+  // The outer border and horizontal padding consume four cells. Concrete child
+  // widths must use the inner width or right-aligned rows paint out of bounds.
+  const contentWidth = Math.max(1, width - 4);
   const activityList = activities ?? detail?.activities ?? [];
   const contextWindow = React.useMemo(
     () => (detail ? deriveContextWindow(activityList) : null),
@@ -583,7 +626,7 @@ export const MessagesTimeline = React.memo(function MessagesTimeline({
 
   const rowCtx: RowRenderContext = {
     palette,
-    width,
+    width: contentWidth,
     syntaxStyle,
     mdClient,
     checkpointByMessage,
@@ -627,11 +670,25 @@ export const MessagesTimeline = React.memo(function MessagesTimeline({
       borderColor={palette.dim}
       paddingLeft={1}
       paddingRight={1}
+      overflow="hidden"
     >
-      <box flexDirection="row" width="100%">
+      <box flexDirection="row" width={contentWidth} overflow="hidden">
         <box flexGrow={1}>
           <text fg={palette.text}>
-            <strong>{clip(detail.title, Math.max(8, width - 28))}</strong>
+            <strong>
+              {clip(
+                detail.title,
+                Math.max(
+                  1,
+                  contentWidth -
+                    (contentWidth >= 64
+                      ? 32
+                      : contentWidth >= 40
+                        ? statusLabel(detail).length + 10
+                        : statusLabel(detail).length + 2),
+                ),
+              )}
+            </strong>
           </text>
         </box>
         <text>
@@ -642,12 +699,16 @@ export const MessagesTimeline = React.memo(function MessagesTimeline({
           >
             {approvals.length > 0 ? "pending approval" : statusLabel(detail)}
           </span>
-          <span fg={detail.interactionMode === "plan" ? palette.accent : palette.dim}>
-            {`  ·  ${detail.interactionMode === "plan" ? "plan" : "build"}`}
-          </span>
-          <span
-            fg={palette.dim}
-          >{`  ·  ${detail.runtimeMode}  ·  ${relativeTime(detail.updatedAt)}`}</span>
+          {contentWidth >= 40 ? (
+            <span fg={detail.interactionMode === "plan" ? palette.accent : palette.dim}>
+              {` · ${detail.interactionMode === "plan" ? "plan" : "build"}`}
+            </span>
+          ) : null}
+          {contentWidth >= 64 ? (
+            <span
+              fg={palette.dim}
+            >{` · ${detail.runtimeMode} · ${relativeTime(detail.updatedAt)}`}</span>
+          ) : null}
         </text>
       </box>
 
