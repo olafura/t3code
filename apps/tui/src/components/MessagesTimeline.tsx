@@ -105,7 +105,7 @@ function WorkGroupSection({
     hasOverflow && !expanded ? groupedEntries.slice(-MAX_VISIBLE_WORK_LOG_ENTRIES) : groupedEntries;
   const hiddenCount = groupedEntries.length - visibleEntries.length;
   return (
-    <box flexDirection="column" marginBottom={1}>
+    <box flexDirection="column" width={width} marginBottom={1} overflow="hidden">
       {visibleEntries.map((entry) => (
         <ToolRow key={entry.id} entry={entry} palette={palette} width={width} />
       ))}
@@ -310,7 +310,15 @@ function FoldableRowView({
     // cross-size is auto, so "100%"/alignSelf/marginLeft:auto all collapse —
     // only a concrete width gives flex-end a reference to push against.
     return (
-      <box flexDirection="column" marginTop={1} marginBottom={1}>
+      <box
+        id={`timeline-row-${row.id}`}
+        flexDirection="column"
+        width={width}
+        flexShrink={0}
+        marginTop={1}
+        marginBottom={1}
+        overflow="hidden"
+      >
         <box flexDirection="row" width={width} justifyContent="flex-end">
           <box
             flexDirection="column"
@@ -336,7 +344,15 @@ function FoldableRowView({
     );
   }
   return (
-    <box flexDirection="column" marginTop={1} marginBottom={1}>
+    <box
+      id={`timeline-row-${row.id}`}
+      flexDirection="column"
+      width={width}
+      flexShrink={0}
+      marginTop={1}
+      marginBottom={1}
+      overflow="hidden"
+    >
       <markdown
         content={body}
         syntaxStyle={syntaxStyle}
@@ -372,7 +388,7 @@ function TurnFoldSection({
 }): React.ReactNode {
   const [expanded, setExpanded] = React.useState(false);
   return (
-    <box flexDirection="column" marginTop={1}>
+    <box flexDirection="column" width={ctx.width} marginTop={1} overflow="hidden">
       <box onMouseDown={() => setExpanded((value) => !value)}>
         <text fg={ctx.palette.dim}>{`${expanded ? "▾" : "▸"} ${label}`}</text>
       </box>
@@ -422,7 +438,7 @@ function ChangedFilesTree({
   const toggleAll = () => setCollapsedDirs(allCollapsed ? new Set() : new Set(allDirs));
 
   return (
-    <box flexDirection="column" marginTop={1}>
+    <box flexDirection="column" width={width} marginTop={1} overflow="hidden">
       <box flexDirection="row" justifyContent="space-between">
         <box
           {...(onOpenDiff ? { onMouseDown: () => onOpenDiff(checkpoint.checkpointTurnCount) } : {})}
@@ -588,13 +604,24 @@ export const MessagesTimeline = React.memo(function MessagesTimeline({
   const inlineImagesSupported = useKittyGraphicsSupport();
   const pauseImagesForScroll = React.useCallback(() => {
     getKittyImageManager(renderer).pauseForScroll();
-  }, [renderer]);
+    // A conversation is vertical-only. OpenTUI still processes horizontal mouse
+    // wheel events when a descendant briefly measures wider than the viewport;
+    // reset after its internal event handler so the whole timeline cannot drift.
+    queueMicrotask(() => {
+      const box = scrollRef.current;
+      if (box && box.scrollLeft !== 0) box.scrollLeft = 0;
+    });
+  }, [renderer, scrollRef]);
   const imageCellWidth = renderer.resolution ? renderer.resolution.width / renderer.width : 18;
   const mdClient = treeSitterClient ? { treeSitterClient: treeSitterClient as never } : {};
   const palette = usePalette();
   // The outer border and horizontal padding consume four cells. Concrete child
   // widths must use the inner width or right-aligned rows paint out of bounds.
   const contentWidth = Math.max(1, width - 4);
+  // OpenTUI overlays the vertical scrollbar instead of subtracting it from the
+  // viewport. Keep every row on this one definite width; auto-sized markdown
+  // rows can otherwise leave a horizontal range after reflow.
+  const timelineWidth = contentWidth;
   const activityList = activities ?? detail?.activities ?? [];
   const contextWindow = React.useMemo(
     () => (detail ? deriveContextWindow(activityList) : null),
@@ -612,6 +639,10 @@ export const MessagesTimeline = React.memo(function MessagesTimeline({
     () => (detail ? deriveTimelineEntries(detail.messages, activityList, detail.latestTurn) : []),
     [detail, activityList],
   );
+  React.useLayoutEffect(() => {
+    const box = scrollRef.current;
+    if (box && box.scrollLeft !== 0) box.scrollLeft = 0;
+  }, [detail?.id, scrollRef, timeline, width]);
   const checkpointByMessage = React.useMemo(
     () =>
       detail
@@ -626,7 +657,7 @@ export const MessagesTimeline = React.memo(function MessagesTimeline({
 
   const rowCtx: RowRenderContext = {
     palette,
-    width: contentWidth,
+    width: timelineWidth,
     syntaxStyle,
     mdClient,
     checkpointByMessage,
@@ -716,11 +747,16 @@ export const MessagesTimeline = React.memo(function MessagesTimeline({
 
       <scrollbox
         ref={scrollRef}
+        width={contentWidth}
         height={bodyHeight}
+        scrollX={false}
         stickyScroll
         stickyStart="bottom"
         onMouseScroll={pauseImagesForScroll}
-        style={{ rootOptions: { backgroundColor: "transparent" } }}
+        style={{
+          rootOptions: { backgroundColor: "transparent" },
+          contentOptions: { width: "100%", maxWidth: "100%", overflow: "hidden" },
+        }}
       >
         {loadingOlder ? (
           <box marginBottom={1}>
