@@ -509,7 +509,12 @@ export interface TuiClient {
   readonly listRefs: (cwd: string) => Promise<VcsListRefsResult>;
   /** Switch the selected checkout to a ref before creating a thread in it. */
   readonly switchRef: (cwd: string, refName: string) => Promise<VcsSwitchRefResult>;
-  readonly terminalWrite: (threadId: ThreadId, terminalId: string, data: string) => Promise<void>;
+  readonly terminalWrite: (
+    threadId: ThreadId,
+    terminalId: string,
+    data: string,
+    inputSource?: "terminal" | "keyboard" | "paste",
+  ) => Promise<void>;
   readonly terminalResize: (
     threadId: ThreadId,
     terminalId: string,
@@ -998,9 +1003,14 @@ export function makeTuiClient(runtime: TuiRuntime, origin = ""): TuiClient {
         }),
       ),
 
-    terminalWrite: (threadId, terminalId, data) =>
+    terminalWrite: (threadId, terminalId, data, inputSource) =>
       runtime.runPromise(
-        request(WS_METHODS.terminalWrite, { threadId, terminalId, data }).pipe(Effect.asVoid),
+        request(WS_METHODS.terminalWrite, {
+          threadId,
+          terminalId,
+          data,
+          ...(inputSource ? { inputSource } : {}),
+        }).pipe(Effect.asVoid),
       ),
 
     terminalResize: (threadId, terminalId, cols, rows) =>
