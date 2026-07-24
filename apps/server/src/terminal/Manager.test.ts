@@ -1000,13 +1000,19 @@ it.layer(
         processIds: [100] as ReadonlyArray<number>,
         shellForeground: false,
       };
+      const staleActivity = {
+        hasRunningSubprocess: true,
+        childCommand: "less",
+        processIds: [100, 101] as ReadonlyArray<number>,
+        shellForeground: false,
+      };
       const idleShell = {
         hasRunningSubprocess: false,
         childCommand: null,
         processIds: [] as ReadonlyArray<number>,
         shellForeground: true,
       };
-      const { manager, ptyAdapter } = yield* createManager(5, {
+      const { manager, ptyAdapter, getEvents } = yield* createManager(5, {
         subprocessInspector: () => {
           inspections += 1;
           if (initialInspection) {
@@ -1019,7 +1025,7 @@ it.layer(
             blockNextInspection = false;
             return Deferred.succeed(staleInspectionStarted, undefined).pipe(
               Effect.andThen(Deferred.await(releaseStaleInspection)),
-              Effect.as(foregroundProgram),
+              Effect.as(staleActivity),
             );
           }
           if (freshWriteInspection) {
@@ -1048,7 +1054,15 @@ it.layer(
         data: "\x1b[1;1R",
       });
       yield* Deferred.succeed(releaseStaleInspection, undefined);
-      yield* Effect.sleep("25 millis");
+      yield* waitFor(
+        Effect.map(getEvents, (events) =>
+          events.some(
+            (event) =>
+              event.type === "activity" && event.hasRunningSubprocess && event.label === "less",
+          ),
+        ),
+        "1200 millis",
+      );
 
       // If the stale poll clobbered the refreshed foreground state, this write
       // performs another inspection and relays the reply to the foreground
@@ -1155,11 +1169,13 @@ it.layer(
           threadId: "thread-1",
           terminalId: DEFAULT_TERMINAL_ID,
           data: "\x1b[1;1R",
+          inputSource: "renderer",
         });
         yield* manager.write({
           threadId: "thread-1",
           terminalId: DEFAULT_TERMINAL_ID,
           data: "\x1b[I",
+          inputSource: "renderer",
         });
         expect(process.writes).toEqual(["\x1b", "q", "\x1b[1;1R", "\x1b[I"]);
       }),
@@ -1195,6 +1211,8 @@ it.layer(
       // currently owns the embedded PTY. Relaying them makes less display
       // `ESC...` and starts the feedback flood.
       for (const data of [
+        "\x1b[?",
+        "\x1b[?1;2c",
         "\x1b[?69;0$y",
         "\x1b[?2026;2$y",
         "\x1b[?2027;0$y",
