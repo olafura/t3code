@@ -271,6 +271,12 @@ export interface TerminalSessionState {
    * until a later probe provides a definitive answer.
    */
   shellForeground: boolean | null;
+  /**
+   * Advances whenever foreground ownership is refreshed. Periodic inspections
+   * capture this revision before running outside the thread lock and may only
+   * apply their result if it is still current.
+   */
+  subprocessInspectionRevision: number;
   /** Normalized child command name when `hasRunningSubprocess`; cleared when idle. */
   childCommandLabel: string | null;
   runtimeEnv: Record<string, string> | null;
@@ -2490,6 +2496,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         session.pid = null;
         session.hasRunningSubprocess = false;
         session.shellForeground = true;
+        session.subprocessInspectionRevision += 1;
         session.childCommandLabel = null;
         session.status = "exited";
         session.pendingHistoryControlSequence = "";
@@ -2564,6 +2571,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       session.pid = null;
       session.hasRunningSubprocess = false;
       session.shellForeground = true;
+      session.subprocessInspectionRevision += 1;
       session.childCommandLabel = null;
       session.status = "exited";
       session.pendingHistoryControlSequence = "";
@@ -2663,6 +2671,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       session.exitSignal = null;
       session.hasRunningSubprocess = false;
       session.shellForeground = true;
+      session.subprocessInspectionRevision += 1;
       session.childCommandLabel = null;
       session.pendingProcessEvents = [];
       session.pendingProcessEventIndex = 0;
@@ -2814,17 +2823,24 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
 
   const pollSubprocessActivity = Effect.fn("terminal.pollSubprocessActivity")(function* () {
     const state = yield* readManagerState;
-    const runningSessions = [...state.sessions.values()].filter(
-      (session): session is TerminalSessionState & { pid: number } =>
-        session.status === "running" && Number.isInteger(session.pid),
-    );
+    const runningSessions = [...state.sessions.values()]
+      .filter(
+        (session): session is TerminalSessionState & { pid: number } =>
+          session.status === "running" && Number.isInteger(session.pid),
+      )
+      .map((session) => ({
+        threadId: session.threadId,
+        terminalId: session.terminalId,
+        pid: session.pid,
+        subprocessInspectionRevision: session.subprocessInspectionRevision,
+      }));
 
     if (runningSessions.length === 0) {
       return;
     }
 
     const inspectSubprocessActivity = Effect.fn("terminal.inspectSubprocessActivity")(function* (
-      session: TerminalSessionState & { pid: number },
+      session: (typeof runningSessions)[number],
     ) {
       const terminalPid = session.pid;
       return yield* subprocessInspector(terminalPid).pipe(
@@ -2841,20 +2857,26 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
     });
 
     const applySubprocessActivity = Effect.fn("terminal.applySubprocessActivity")(function* (
-      session: TerminalSessionState & { pid: number },
+      session: (typeof runningSessions)[number],
       inspectResult: Option.Option<TerminalSubprocessInspectResult>,
     ) {
       const terminalPid = session.pid;
+      const expectedRevision = session.subprocessInspectionRevision;
       if (Option.isNone(inspectResult)) {
         yield* modifyManagerState((state) => {
           const liveSession = state.sessions.get(
             toSessionKey(session.threadId, session.terminalId),
           );
-          if (liveSession?.status === "running" && liveSession.pid === terminalPid) {
+          if (
+            liveSession?.status === "running" &&
+            liveSession.pid === terminalPid &&
+            liveSession.subprocessInspectionRevision === expectedRevision
+          ) {
             // Do not keep routing input from a stale foreground observation.
             // Unknown ownership strips capability replies until a later probe
             // succeeds, while ordinary keyboard input still passes unchanged.
             liveSession.shellForeground = null;
+            liveSession.subprocessInspectionRevision += 1;
           }
           return [undefined, state] as const;
         });
@@ -2862,27 +2884,27 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       }
 
       const next = inspectResult.value;
-      yield* registerTerminalProcesses({
-        threadId: session.threadId,
-        terminalId: session.terminalId,
-        processIds: next.processIds,
-      });
       const nextChildLabel = next.hasRunningSubprocess ? next.childCommand : null;
-      const event = yield* modifyManagerState((state) => {
+      const appliedResult = yield* modifyManagerState<{
+        readonly applied: boolean;
+        readonly event: Option.Option<TerminalEvent>;
+      }>((state) => {
         const liveSession: Option.Option<TerminalSessionState> = Option.fromNullishOr(
           state.sessions.get(toSessionKey(session.threadId, session.terminalId)),
         );
         if (
           Option.isNone(liveSession) ||
           liveSession.value.status !== "running" ||
-          liveSession.value.pid !== terminalPid
+          liveSession.value.pid !== terminalPid ||
+          liveSession.value.subprocessInspectionRevision !== expectedRevision
         ) {
-          return [Option.none(), state] as const;
+          return [{ applied: false, event: Option.none<TerminalEvent>() }, state] as const;
         }
         // Refresh the foreground-ownership signal even when nothing wire-label-
         // worthy changed (a `fg`/`bg` flip of the same child alters what the
         // input reply-strip must do without changing the activity event).
         liveSession.value.shellForeground = resolveShellForeground(platform, next);
+        liveSession.value.subprocessInspectionRevision += 1;
         if (liveSession.value.shellForeground === false) {
           // A prefix buffered while the shell owned the PTY is unsolicited
           // reply residue, not input for the newly foreground application.
@@ -2892,7 +2914,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
           liveSession.value.hasRunningSubprocess === next.hasRunningSubprocess &&
           liveSession.value.childCommandLabel === nextChildLabel
         ) {
-          return [Option.none(), state] as const;
+          return [{ applied: true, event: Option.none<TerminalEvent>() }, state] as const;
         }
 
         liveSession.value.hasRunningSubprocess = next.hasRunningSubprocess;
@@ -2900,19 +2922,30 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         const eventStamp = advanceEventSequence(liveSession.value);
 
         return [
-          Option.some({
-            type: "activity" as const,
-            threadId: liveSession.value.threadId,
-            terminalId: liveSession.value.terminalId,
-            sequence: eventStamp.sequence,
-            hasRunningSubprocess: next.hasRunningSubprocess,
-            label: terminalWireLabel(liveSession.value),
-          }),
+          {
+            applied: true,
+            event: Option.some({
+              type: "activity" as const,
+              threadId: liveSession.value.threadId,
+              terminalId: liveSession.value.terminalId,
+              sequence: eventStamp.sequence,
+              hasRunningSubprocess: next.hasRunningSubprocess,
+              label: terminalWireLabel(liveSession.value),
+            }),
+          },
           state,
         ] as const;
       });
 
-      return event;
+      if (appliedResult.applied) {
+        yield* registerTerminalProcesses({
+          threadId: session.threadId,
+          terminalId: session.terminalId,
+          processIds: next.processIds,
+        });
+      }
+
+      return appliedResult.event;
     });
 
     yield* Effect.forEach(
@@ -3023,6 +3056,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         unsubscribeExit: null,
         hasRunningSubprocess: false,
         shellForeground: true,
+        subprocessInspectionRevision: 0,
         childCommandLabel: null,
         runtimeEnv: normalizedRuntimeEnv(input.env),
       };
@@ -3365,6 +3399,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       } else {
         session.shellForeground = null;
       }
+      session.subprocessInspectionRevision += 1;
     }
 
     // The reply-strip exists to break the IDLE-PROMPT echo loop (a shell with
@@ -3495,6 +3530,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
             unsubscribeExit: null,
             hasRunningSubprocess: false,
             shellForeground: true,
+            subprocessInspectionRevision: 0,
             childCommandLabel: null,
             runtimeEnv: normalizedRuntimeEnv(input.env),
           };
