@@ -349,6 +349,13 @@ function terminalWireLabel(session: TerminalSessionState): string {
   return truncateTerminalWireLabel(getTerminalLabel(session.terminalId));
 }
 
+const TERMINAL_REPLY_UNAWARE_PAGERS = new Set(["less", "more", "most", "lv"]);
+
+function isTerminalReplyUnawarePager(session: TerminalSessionState): boolean {
+  const command = session.childCommandLabel?.trim().toLowerCase();
+  return command !== undefined && TERMINAL_REPLY_UNAWARE_PAGERS.has(command);
+}
+
 function snapshot(session: TerminalSessionState): TerminalSessionSnapshot {
   return {
     threadId: session.threadId,
@@ -2895,21 +2902,24 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         if (
           Option.isNone(liveSession) ||
           liveSession.value.status !== "running" ||
-          liveSession.value.pid !== terminalPid ||
-          liveSession.value.subprocessInspectionRevision !== expectedRevision
+          liveSession.value.pid !== terminalPid
         ) {
           return [{ applied: false, event: Option.none<TerminalEvent>() }, state] as const;
         }
-        // Refresh the foreground-ownership signal even when nothing wire-label-
-        // worthy changed (a `fg`/`bg` flip of the same child alters what the
-        // input reply-strip must do without changing the activity event).
-        liveSession.value.shellForeground = resolveShellForeground(platform, next);
-        liveSession.value.subprocessInspectionRevision += 1;
-        if (liveSession.value.shellForeground === false) {
-          // A prefix buffered while the shell owned the PTY is unsolicited
-          // reply residue, not input for the newly foreground application.
-          liveSession.value.pendingInputControlSequence = "";
+        if (liveSession.value.subprocessInspectionRevision === expectedRevision) {
+          // Refresh the foreground-ownership signal only when no newer
+          // on-demand inspection has made this routing observation stale.
+          liveSession.value.shellForeground = resolveShellForeground(platform, next);
+          liveSession.value.subprocessInspectionRevision += 1;
+          if (liveSession.value.shellForeground === false) {
+            // A prefix buffered while the shell owned the PTY is unsolicited
+            // reply residue, not input for the newly foreground application.
+            liveSession.value.pendingInputControlSequence = "";
+          }
         }
+        // Process metadata is still useful when a newer write inspection won
+        // the foreground-routing race: it drives the activity label and
+        // process registry without overwriting that newer routing decision.
         if (
           liveSession.value.hasRunningSubprocess === next.hasRunningSubprocess &&
           liveSession.value.childCommandLabel === nextChildLabel
@@ -3387,10 +3397,13 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
     // replies arriving in that gap must refresh foreground ownership before we
     // decide whether to relay them; otherwise the now-idle shell receives a
     // whole response burst and prompt redraws amplify it into a feedback loop.
-    const alwaysFilterTerminalResponses =
-      input.inputSource === "keyboard" || input.inputSource === "renderer";
+    const alwaysFilterTerminalResponses = input.inputSource === "keyboard";
+    const initiallyFilterRendererResponses =
+      input.inputSource === "renderer" &&
+      (session.shellForeground !== false || isTerminalReplyUnawarePager(session));
     if (
       !alwaysFilterTerminalResponses &&
+      !initiallyFilterRendererResponses &&
       !session.shellForeground &&
       mayContainTerminalResponse(session.pendingInputControlSequence, input.data)
     ) {
@@ -3402,6 +3415,9 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       }
       session.subprocessInspectionRevision += 1;
     }
+    const filterRendererResponses =
+      input.inputSource === "renderer" &&
+      (session.shellForeground !== false || isTerminalReplyUnawarePager(session));
 
     // The reply-strip exists to break the IDLE-PROMPT echo loop (a shell with
     // no reader echoes the emulator's auto-replies, and a prompt that re-queries
@@ -3418,9 +3434,11 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       (input.inputSource ?? "terminal") === "terminal" &&
       session.pendingInputControlSequence.length === 0 &&
       input.data === "\x1b";
+    const statefullyFilterTerminalResponses =
+      filterRendererResponses || session.shellForeground !== false;
     const data = alwaysFilterTerminalResponses
       ? stripTerminalResponsesFromInput(input.data)
-      : session.shellForeground !== false
+      : statefullyFilterTerminalResponses
         ? isStandaloneTerminalEscape
           ? input.data
           : (() => {
@@ -3432,7 +3450,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
               return sanitized.data;
             })()
         : input.data;
-    if (session.shellForeground === false) {
+    if (session.shellForeground === false && !filterRendererResponses) {
       session.pendingInputControlSequence = "";
     }
     if (data.length === 0) return;
