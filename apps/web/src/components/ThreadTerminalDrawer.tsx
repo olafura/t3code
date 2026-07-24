@@ -3,7 +3,10 @@ import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
-import { type TerminalSessionState } from "@t3tools/client-runtime/state/terminal";
+import {
+  resolveTerminalBufferRenderUpdate,
+  type TerminalSessionState,
+} from "@t3tools/client-runtime/state/terminal";
 import {
   Plus,
   Square,
@@ -404,6 +407,8 @@ export function TerminalViewport({
   const terminalVersion = terminalSession.version;
   const previousSessionRef = useRef({
     buffer: terminalBuffer,
+    bufferEpoch: terminalSession.bufferEpoch,
+    appendedLength: terminalSession.appendedLength,
     error: terminalError,
     status: terminalStatus,
     version: terminalVersion,
@@ -411,6 +416,8 @@ export function TerminalViewport({
   const latestSessionRef = useRef(previousSessionRef.current);
   latestSessionRef.current = {
     buffer: terminalBuffer,
+    bufferEpoch: terminalSession.bufferEpoch,
+    appendedLength: terminalSession.appendedLength,
     error: terminalError,
     status: terminalStatus,
     version: terminalVersion,
@@ -848,6 +855,8 @@ export function TerminalViewport({
     const terminal = terminalRef.current;
     const current = {
       buffer: terminalBuffer,
+      bufferEpoch: terminalSession.bufferEpoch,
+      appendedLength: terminalSession.appendedLength,
       error: terminalError,
       status: terminalStatus,
       version: terminalVersion,
@@ -863,13 +872,11 @@ export function TerminalViewport({
       return;
     }
 
-    if (
-      current.buffer.length >= previous.buffer.length &&
-      current.buffer.startsWith(previous.buffer)
-    ) {
-      terminal.write(current.buffer.slice(previous.buffer.length));
-    } else {
-      writeTerminalBuffer(terminal, current.buffer);
+    const bufferUpdate = resolveTerminalBufferRenderUpdate(previous, current);
+    if (bufferUpdate.type === "append") {
+      terminal.write(bufferUpdate.data);
+    } else if (bufferUpdate.type === "replace") {
+      writeTerminalBuffer(terminal, bufferUpdate.data);
     }
     terminal.clearSelection();
 
@@ -883,7 +890,15 @@ export function TerminalViewport({
       });
     }
     previousSessionRef.current = current;
-  }, [autoFocus, terminalBuffer, terminalError, terminalStatus, terminalVersion]);
+  }, [
+    autoFocus,
+    terminalBuffer,
+    terminalError,
+    terminalSession.appendedLength,
+    terminalSession.bufferEpoch,
+    terminalStatus,
+    terminalVersion,
+  ]);
 
   useEffect(() => {
     if (!autoFocus) return;
