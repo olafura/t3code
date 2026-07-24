@@ -10,6 +10,7 @@ import {
 } from "@t3tools/contracts";
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import * as Data from "effect/Data";
+import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Encoding from "effect/Encoding";
@@ -936,6 +937,51 @@ it.layer(
         ),
         "1200 millis",
       );
+    }),
+  );
+
+  it.effect("does not hold the terminal lock while inspecting subprocesses", () =>
+    Effect.gen(function* () {
+      const inspectionStarted = yield* Deferred.make<void>();
+      const releaseInspection = yield* Deferred.make<void>();
+      let blockInspection = false;
+      const idleShell = {
+        hasRunningSubprocess: false,
+        childCommand: null,
+        processIds: [] as ReadonlyArray<number>,
+        shellForeground: true,
+      };
+      const { manager, ptyAdapter } = yield* createManager(5, {
+        subprocessInspector: () =>
+          blockInspection
+            ? Effect.gen(function* () {
+                yield* Deferred.succeed(inspectionStarted, undefined);
+                yield* Deferred.await(releaseInspection);
+                return idleShell;
+              })
+            : Effect.succeed(idleShell),
+        subprocessPollIntervalMs: 20,
+      });
+
+      yield* manager.open(openInput());
+      const process = ptyAdapter.processes[0];
+      expect(process).toBeDefined();
+      if (!process) return;
+
+      blockInspection = true;
+      yield* Deferred.await(inspectionStarted).pipe(Effect.timeout("1200 millis"));
+
+      const writeExit = yield* manager
+        .write({
+          threadId: "thread-1",
+          terminalId: DEFAULT_TERMINAL_ID,
+          data: "x",
+        })
+        .pipe(Effect.timeout("100 millis"), Effect.exit);
+      yield* Deferred.succeed(releaseInspection, undefined);
+
+      expect(Exit.isSuccess(writeExit)).toBe(true);
+      expect(process.writes).toEqual(["x"]);
     }),
   );
 
