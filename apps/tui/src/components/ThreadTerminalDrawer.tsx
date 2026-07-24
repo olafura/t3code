@@ -222,7 +222,7 @@ const TerminalPane = React.memo(function TerminalPane({
     const text = new TextDecoder().decode(event.bytes);
     if (text.length === 0) return;
     const data = encodeTerminalPaste(text, term.modes.bracketedPasteMode);
-    void client.terminalWrite(info.threadId, info.terminalId, data).catch(() => {});
+    void client.terminalWrite(info.threadId, info.terminalId, data, "paste").catch(() => {});
   });
 
   React.useEffect(() => {
