@@ -369,6 +369,49 @@ function isTerminalReplyUnawareCommand(raw: string, platform: NodeJS.Platform): 
   return command !== undefined && TERMINAL_REPLY_UNAWARE_PAGERS.has(command);
 }
 
+export function hasReplyUnawareForegroundProcess(input: {
+  readonly platform: NodeJS.Platform;
+  readonly foregroundProcessGroupId: number | undefined;
+  readonly shellForeground: boolean | undefined;
+  readonly childPid: number;
+  readonly childCommand: string | null;
+  readonly processes: ReadonlyArray<{
+    readonly pid: number;
+    readonly processGroupId: number | undefined;
+    readonly command: string;
+  }>;
+}): boolean {
+  const directChildIsReplyUnaware = isTerminalReplyUnawareCommand(
+    input.childCommand ?? "",
+    input.platform,
+  );
+  const directChild = input.processes.find((process) => process.pid === input.childPid);
+  if (input.foregroundProcessGroupId === undefined) {
+    return input.shellForeground === false && directChildIsReplyUnaware;
+  }
+  if (
+    input.processes.some(
+      (process) =>
+        process.processGroupId === input.foregroundProcessGroupId &&
+        isTerminalReplyUnawareCommand(process.command, input.platform),
+    )
+  ) {
+    return true;
+  }
+  const observedForegroundProcess = input.processes.some(
+    (process) => process.processGroupId === input.foregroundProcessGroupId,
+  );
+  // The tree-wide `ps` probe may omit command or group data while the focused
+  // direct-child probe still succeeds. Preserve that known `less` result only
+  // when no contradictory process-group observation exists.
+  return (
+    !observedForegroundProcess &&
+    directChild?.processGroupId === undefined &&
+    input.shellForeground === false &&
+    directChildIsReplyUnaware
+  );
+}
+
 function isTerminalReplyUnawarePager(session: TerminalSessionState): boolean {
   return session.hasTerminalReplyUnawareSubprocess;
 }
@@ -663,12 +706,16 @@ function isRetryableShellSpawnError(error: PtyAdapter.PtySpawnError): boolean {
 interface TerminalProcessTableSnapshot {
   readonly childrenByParent: ReadonlyMap<number, ReadonlyArray<number>>;
   readonly commandById: ReadonlyMap<number, string>;
+  readonly processGroupById: ReadonlyMap<number, number>;
+  readonly foregroundProcessGroupById: ReadonlyMap<number, number>;
   readonly shellForegroundById: ReadonlyMap<number, boolean>;
 }
 
 function parsePosixProcessTable(stdout: string): TerminalProcessTableSnapshot {
   const childrenByParent = new Map<number, number[]>();
   const commandById = new Map<number, string>();
+  const processGroupById = new Map<number, number>();
+  const foregroundProcessGroupById = new Map<number, number>();
   const shellForegroundById = new Map<number, boolean>();
   for (const line of stdout.split(/\r?\n/g)) {
     // `comm=` is the final column and may itself contain spaces, so only the
@@ -682,6 +729,8 @@ function parsePosixProcessTable(stdout: string): TerminalProcessTableSnapshot {
     const pgid = Number(match[3]);
     const tpgid = Number(match[4]);
     if (Number.isInteger(pgid) && Number.isInteger(tpgid) && pgid > 0 && tpgid > 0) {
+      processGroupById.set(pid, pgid);
+      foregroundProcessGroupById.set(pid, tpgid);
       shellForegroundById.set(pid, pgid === tpgid);
     }
     commandById.set(pid, (match[5] ?? "").trim());
@@ -689,7 +738,13 @@ function parsePosixProcessTable(stdout: string): TerminalProcessTableSnapshot {
     children.push(pid);
     childrenByParent.set(ppid, children);
   }
-  return { childrenByParent, commandById, shellForegroundById };
+  return {
+    childrenByParent,
+    commandById,
+    processGroupById,
+    foregroundProcessGroupById,
+    shellForegroundById,
+  };
 }
 
 function parseWindowsProcessTable(stdout: string): TerminalProcessTableSnapshot {
@@ -705,7 +760,13 @@ function parseWindowsProcessTable(stdout: string): TerminalProcessTableSnapshot 
     children.push(pid);
     childrenByParent.set(parentPid, children);
   }
-  return { childrenByParent, commandById, shellForegroundById: new Map() };
+  return {
+    childrenByParent,
+    commandById,
+    processGroupById: new Map(),
+    foregroundProcessGroupById: new Map(),
+    shellForegroundById: new Map(),
+  };
 }
 
 function deriveSubprocessInspectResult(
@@ -714,6 +775,7 @@ function deriveSubprocessInspectResult(
   platform: NodeJS.Platform,
 ): TerminalSubprocessInspectResult {
   const shellForeground = snapshot.shellForegroundById.get(terminalPid);
+  const foregroundProcessGroupId = snapshot.foregroundProcessGroupById.get(terminalPid);
   const childPid = (snapshot.childrenByParent.get(terminalPid) ?? [])[0];
   if (childPid === undefined) {
     return {
@@ -735,15 +797,26 @@ function deriveSubprocessInspectResult(
     }
   }
   const normalized = normalizeChildCommandName(snapshot.commandById.get(childPid) ?? "", platform);
+  const hasReplyUnawareProcess = hasReplyUnawareForegroundProcess({
+    platform,
+    foregroundProcessGroupId,
+    shellForeground,
+    childPid,
+    childCommand: normalized,
+    processes: [...processIds].map((pid) => ({
+      pid,
+      processGroupId: snapshot.processGroupById.get(pid),
+      command: snapshot.commandById.get(pid) ?? (pid === childPid ? (normalized ?? "") : ""),
+    })),
+  });
   return {
     hasRunningSubprocess: true,
     childCommand: normalized ? truncateTerminalWireLabel(normalized) : null,
     processIds: [...processIds],
-    hasTerminalReplyUnawareSubprocess: [...processIds].some(
-      (pid) =>
-        pid !== terminalPid &&
-        isTerminalReplyUnawareCommand(snapshot.commandById.get(pid) ?? "", platform),
-    ),
+    hasTerminalReplyUnawareSubprocess:
+      platform === "win32"
+        ? isTerminalReplyUnawareCommand(snapshot.commandById.get(childPid) ?? "", platform)
+        : hasReplyUnawareProcess,
     ...(shellForeground !== undefined ? { shellForeground } : {}),
   };
 }
@@ -2871,6 +2944,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
             // Unknown ownership strips capability replies until a later probe
             // succeeds, while ordinary keyboard input still passes unchanged.
             liveSession.shellForeground = null;
+            liveSession.hasTerminalReplyUnawareSubprocess = false;
             liveSession.subprocessInspectionRevision += 1;
           }
           return [undefined, state] as const;
@@ -3389,10 +3463,8 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
     // decide whether to relay them; otherwise the now-idle shell receives a
     // whole response burst and prompt redraws amplify it into a feedback loop.
     const alwaysFilterTerminalResponses = input.inputSource === "keyboard";
-    const filterTerminalResponsesForForegroundProcess = isTerminalReplyUnawarePager(session);
     if (
       !alwaysFilterTerminalResponses &&
-      !filterTerminalResponsesForForegroundProcess &&
       !session.shellForeground &&
       mayContainTerminalResponse(session.pendingInputControlSequence, input.data)
     ) {
@@ -3403,6 +3475,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
           refreshed.value.hasTerminalReplyUnawareSubprocess ?? false;
       } else {
         session.shellForeground = null;
+        session.hasTerminalReplyUnawareSubprocess = false;
       }
       session.subprocessInspectionRevision += 1;
     }
@@ -3423,18 +3496,6 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       (input.inputSource ?? "terminal") === "terminal" &&
       session.pendingInputControlSequence.length === 0 &&
       input.data === "\x1b";
-    if (
-      filterTerminalResponsesForCurrentProcess &&
-      session.pendingInputControlSequence.length > 0 &&
-      input.data !== "\x1b" &&
-      [...input.data].length === 1
-    ) {
-      // Client transports multiplex generated replies and physical keys. A
-      // reply-unaware foreground process must never lose a complete one-key
-      // command (`q`, Enter, Ctrl-C) merely because an abandoned reply prefix
-      // was buffered by an earlier write.
-      session.pendingInputControlSequence = "";
-    }
     const statefullyFilterTerminalResponses =
       filterTerminalResponsesForCurrentProcess || session.shellForeground !== false;
     const data = alwaysFilterTerminalResponses
@@ -3443,11 +3504,25 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         ? isStandaloneTerminalEscape
           ? input.data
           : (() => {
+              const previousPendingControlSequence = session.pendingInputControlSequence;
               const sanitized = sanitizeTerminalInputChunk(
-                session.pendingInputControlSequence,
+                previousPendingControlSequence,
                 input.data,
               );
               session.pendingInputControlSequence = sanitized.pendingControlSequence;
+              if (
+                filterTerminalResponsesForCurrentProcess &&
+                previousPendingControlSequence.length > 0 &&
+                sanitized.pendingControlSequence.length === 0 &&
+                sanitized.data.length > 0 &&
+                input.data !== "\x1b" &&
+                [...input.data].length === 1
+              ) {
+                // The buffered prefix plus this byte was not a recognized
+                // terminal reply. Drop only the abandoned prefix and preserve
+                // the complete one-key pager command (`q`, Enter, Ctrl-C).
+                return input.data;
+              }
               return sanitized.data;
             })()
         : input.data;
