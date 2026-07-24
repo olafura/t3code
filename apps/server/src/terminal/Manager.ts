@@ -201,6 +201,8 @@ interface TerminalSubprocessInspectResult {
   readonly hasRunningSubprocess: boolean;
   readonly childCommand: string | null;
   readonly processIds: ReadonlyArray<number>;
+  /** Whether any process in the terminal's descendant tree cannot consume terminal replies. */
+  readonly hasTerminalReplyUnawareSubprocess?: boolean;
   /**
    * Whether the shell itself owns the PTY's foreground process group
    * (`tpgid === pgid` of the terminal process) — i.e. the terminal is at an
@@ -288,6 +290,8 @@ export interface TerminalSessionState {
   subprocessInspectionRevision: number;
   /** Normalized child command name when `hasRunningSubprocess`; cleared when idle. */
   childCommandLabel: string | null;
+  /** Whether any current descendant is known not to consume terminal replies. */
+  hasTerminalReplyUnawareSubprocess: boolean;
   runtimeEnv: Record<string, string> | null;
 }
 
@@ -360,9 +364,17 @@ function terminalWireLabel(session: TerminalSessionState): string {
 
 const TERMINAL_REPLY_UNAWARE_PAGERS = new Set(["less", "more", "most", "lv"]);
 
+function isTerminalReplyUnawareCommand(raw: string, platform: NodeJS.Platform): boolean {
+  const command = normalizeChildCommandName(raw, platform)?.toLowerCase();
+  return command !== undefined && TERMINAL_REPLY_UNAWARE_PAGERS.has(command);
+}
+
 function isTerminalReplyUnawarePager(session: TerminalSessionState): boolean {
   const command = session.childCommandLabel?.trim().toLowerCase();
-  return command !== undefined && TERMINAL_REPLY_UNAWARE_PAGERS.has(command);
+  return (
+    session.hasTerminalReplyUnawareSubprocess ||
+    (command !== undefined && TERMINAL_REPLY_UNAWARE_PAGERS.has(command))
+  );
 }
 
 function snapshot(session: TerminalSessionState): TerminalSessionSnapshot {
@@ -731,6 +743,11 @@ function deriveSubprocessInspectResult(
     hasRunningSubprocess: true,
     childCommand: normalized ? truncateTerminalWireLabel(normalized) : null,
     processIds: [...processIds],
+    hasTerminalReplyUnawareSubprocess: [...processIds].some(
+      (pid) =>
+        pid !== terminalPid &&
+        isTerminalReplyUnawareCommand(snapshot.commandById.get(pid) ?? "", platform),
+    ),
     ...(shellForeground !== undefined ? { shellForeground } : {}),
   };
 }
@@ -2461,6 +2478,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         session.shellForeground = true;
         session.subprocessInspectionRevision += 1;
         session.childCommandLabel = null;
+        session.hasTerminalReplyUnawareSubprocess = false;
         session.status = "exited";
         session.pendingHistoryControlSequence = "";
         session.pendingInputControlSequence = "";
@@ -2536,6 +2554,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       session.shellForeground = true;
       session.subprocessInspectionRevision += 1;
       session.childCommandLabel = null;
+      session.hasTerminalReplyUnawareSubprocess = false;
       session.status = "exited";
       session.pendingHistoryControlSequence = "";
       session.pendingInputControlSequence = "";
@@ -2636,6 +2655,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       session.shellForeground = true;
       session.subprocessInspectionRevision += 1;
       session.childCommandLabel = null;
+      session.hasTerminalReplyUnawareSubprocess = false;
       session.pendingProcessEvents = [];
       session.pendingProcessEventIndex = 0;
       session.processEventDrainRunning = false;
@@ -2714,6 +2734,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         session.hasRunningSubprocess = false;
         session.shellForeground = true;
         session.childCommandLabel = null;
+        session.hasTerminalReplyUnawareSubprocess = false;
         session.pendingProcessEvents = [];
         session.pendingProcessEventIndex = 0;
         session.processEventDrainRunning = false;
@@ -2891,6 +2912,8 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         // Process metadata is still useful when a newer write inspection won
         // the foreground-routing race: it drives the activity label and
         // process registry without overwriting that newer routing decision.
+        liveSession.value.hasTerminalReplyUnawareSubprocess =
+          next.hasTerminalReplyUnawareSubprocess ?? false;
         if (
           liveSession.value.hasRunningSubprocess === next.hasRunningSubprocess &&
           liveSession.value.childCommandLabel === nextChildLabel
@@ -3039,6 +3062,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         shellForeground: true,
         subprocessInspectionRevision: 0,
         childCommandLabel: null,
+        hasTerminalReplyUnawareSubprocess: false,
         runtimeEnv: normalizedRuntimeEnv(input.env),
       };
 
@@ -3379,6 +3403,8 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       const refreshed = yield* Effect.exit(subprocessInspector(process.pid));
       if (refreshed._tag === "Success") {
         session.shellForeground = resolveShellForeground(platform, refreshed.value);
+        session.hasTerminalReplyUnawareSubprocess =
+          refreshed.value.hasTerminalReplyUnawareSubprocess ?? false;
       } else {
         session.shellForeground = null;
       }
@@ -3401,6 +3427,18 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       (input.inputSource ?? "terminal") === "terminal" &&
       session.pendingInputControlSequence.length === 0 &&
       input.data === "\x1b";
+    if (
+      filterTerminalResponsesForCurrentProcess &&
+      session.pendingInputControlSequence.length > 0 &&
+      input.data !== "\x1b" &&
+      [...input.data].length === 1
+    ) {
+      // Client transports multiplex generated replies and physical keys. A
+      // reply-unaware foreground process must never lose a complete one-key
+      // command (`q`, Enter, Ctrl-C) merely because an abandoned reply prefix
+      // was buffered by an earlier write.
+      session.pendingInputControlSequence = "";
+    }
     const statefullyFilterTerminalResponses =
       filterTerminalResponsesForCurrentProcess || session.shellForeground !== false;
     const data = alwaysFilterTerminalResponses
@@ -3518,6 +3556,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
             shellForeground: true,
             subprocessInspectionRevision: 0,
             childCommandLabel: null,
+            hasTerminalReplyUnawareSubprocess: false,
             runtimeEnv: normalizedRuntimeEnv(input.env),
           };
           const createdSession = session;
