@@ -2794,11 +2794,11 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
 
     const subprocessInspector = inspectorOption.value;
 
-    const checkSubprocessActivity = Effect.fn("terminal.checkSubprocessActivity")(function* (
+    const inspectSubprocessActivity = Effect.fn("terminal.inspectSubprocessActivity")(function* (
       session: TerminalSessionState & { pid: number },
     ) {
       const terminalPid = session.pid;
-      const inspectResult = yield* subprocessInspector(terminalPid).pipe(
+      return yield* subprocessInspector(terminalPid).pipe(
         Effect.map(Option.some),
         Effect.catch((reason) =>
           Effect.logWarning("failed to check terminal subprocess activity", {
@@ -2809,7 +2809,13 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
           }).pipe(Effect.as(Option.none<TerminalSubprocessInspectResult>())),
         ),
       );
+    });
 
+    const applySubprocessActivity = Effect.fn("terminal.applySubprocessActivity")(function* (
+      session: TerminalSessionState & { pid: number },
+      inspectResult: Option.Option<TerminalSubprocessInspectResult>,
+    ) {
+      const terminalPid = session.pid;
       if (Option.isNone(inspectResult)) {
         yield* modifyManagerState((state) => {
           const liveSession = state.sessions.get(
@@ -2884,7 +2890,15 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       runningSessions,
       (session) =>
         Effect.gen(function* () {
-          const event = yield* withThreadLock(session.threadId, checkSubprocessActivity(session));
+          // Process inspection invokes external `ps`/`pgrep` commands and can
+          // take seconds to time out. Keep that I/O outside the per-thread lock
+          // so writes and resizes remain responsive, then revalidate the
+          // captured PID while applying the result under the lock.
+          const inspectResult = yield* inspectSubprocessActivity(session);
+          const event = yield* withThreadLock(
+            session.threadId,
+            applySubprocessActivity(session, inspectResult),
+          );
           // Listener callbacks stay outside the session lock so a subscriber
           // can safely trigger another terminal operation for this thread.
           if (Option.isSome(event)) {
