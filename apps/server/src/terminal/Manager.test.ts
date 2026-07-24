@@ -1169,19 +1169,17 @@ it.layer(
           threadId: "thread-1",
           terminalId: DEFAULT_TERMINAL_ID,
           data: "\x1b[1;1R",
-          inputSource: "renderer",
         });
         yield* manager.write({
           threadId: "thread-1",
           terminalId: DEFAULT_TERMINAL_ID,
           data: "\x1b[I",
-          inputSource: "renderer",
         });
         expect(process.writes).toEqual(["\x1b", "q", "\x1b[1;1R", "\x1b[I"]);
       }),
   );
 
-  it.effect("strips xterm renderer replies while a git diff pager owns the PTY", () =>
+  it.effect("strips terminal replies while a git diff pager owns the PTY", () =>
     Effect.gen(function* () {
       const inspect = {
         hasRunningSubprocess: true,
@@ -1207,9 +1205,10 @@ it.layer(
 
       // Reproduced by feeding the queries emitted around `git diff`/less
       // through xterm and by inspecting the persisted failing PTY log. These
-      // replies belong to the OUTER renderer, not to less, even though less
+      // These reply-shaped bytes do not belong to less, even though less
       // currently owns the embedded PTY. Relaying them makes less display
-      // `ESC...` and starts the feedback flood.
+      // `ESC...` and starts the feedback flood. This policy is enforced here in
+      // the backend regardless of which terminal client supplied the bytes.
       for (const data of [
         "\x1b[?",
         "\x1b[?1;2c",
@@ -1227,7 +1226,6 @@ it.layer(
           threadId: "thread-1",
           terminalId: DEFAULT_TERMINAL_ID,
           data,
-          inputSource: "renderer",
         });
       }
 

@@ -71,23 +71,6 @@ const MIN_DRAWER_HEIGHT = 180;
 const MAX_DRAWER_HEIGHT_RATIO = 0.75;
 const MULTI_CLICK_SELECTION_ACTION_DELAY_MS = 260;
 
-export function createTerminalInputSourceClassifier(): {
-  readonly recordKey: (data: string) => void;
-  readonly classifyData: (data: string) => "terminal" | "renderer";
-} {
-  let pendingKeyData: string | null = null;
-  return {
-    recordKey: (data) => {
-      pendingKeyData = data;
-    },
-    classifyData: (data) => {
-      const source = pendingKeyData === data ? "terminal" : "renderer";
-      pendingKeyData = null;
-      return source;
-    },
-  };
-}
-
 function maxDrawerHeight(): number {
   if (typeof window === "undefined") return DEFAULT_THREAD_TERMINAL_HEIGHT;
   return Math.max(MIN_DRAWER_HEIGHT, Math.floor(window.innerHeight * MAX_DRAWER_HEIGHT_RATIO));
@@ -369,12 +352,11 @@ export function TerminalViewport({
       ...(runtimeEnv ? { env: runtimeEnv } : {}),
     },
   });
-  const writeTerminal = useEffectEvent(
-    (data: string, inputSource: "terminal" | "renderer" = "terminal") =>
-      runTerminalWrite({
-        environmentId,
-        input: { threadId, terminalId, data, inputSource },
-      }),
+  const writeTerminal = useEffectEvent((data: string) =>
+    runTerminalWrite({
+      environmentId,
+      input: { threadId, terminalId, data },
+    }),
   );
   const resizeTerminal = useEffectEvent((cols: number, rows: number) =>
     runTerminalResize({
@@ -580,11 +562,6 @@ export function TerminalViewport({
       return false;
     });
 
-    const inputSourceClassifier = createTerminalInputSourceClassifier();
-    const keyDisposable = terminal.onKey(({ key }) => {
-      inputSourceClassifier.recordKey(key);
-    });
-
     const terminalLinksDisposable = terminal.registerLinkProvider({
       provideLinks: (bufferLineNumber, callback) => {
         const activeTerminal = terminalRef.current;
@@ -671,7 +648,7 @@ export function TerminalViewport({
 
     const inputDisposable = terminal.onData((data) => {
       void (async () => {
-        const result = await writeTerminal(data, inputSourceClassifier.classifyData(data));
+        const result = await writeTerminal(data);
         if (result._tag === "Success" || isAtomCommandInterrupted(result)) {
           return;
         }
@@ -741,7 +718,6 @@ export function TerminalViewport({
 
     return () => {
       window.clearTimeout(fitTimer);
-      keyDisposable.dispose();
       inputDisposable.dispose();
       selectionDisposable.dispose();
       terminalLinksDisposable.dispose();
