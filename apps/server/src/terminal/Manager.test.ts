@@ -985,6 +985,85 @@ it.layer(
     }),
   );
 
+  it.effect("discards a periodic inspection superseded by a write refresh", () =>
+    Effect.gen(function* () {
+      const initialInspectionCompleted = yield* Deferred.make<void>();
+      const staleInspectionStarted = yield* Deferred.make<void>();
+      const releaseStaleInspection = yield* Deferred.make<void>();
+      let initialInspection = true;
+      let blockNextInspection = false;
+      let freshWriteInspection = true;
+      let inspections = 0;
+      const foregroundProgram = {
+        hasRunningSubprocess: true,
+        childCommand: "vim",
+        processIds: [100] as ReadonlyArray<number>,
+        shellForeground: false,
+      };
+      const idleShell = {
+        hasRunningSubprocess: false,
+        childCommand: null,
+        processIds: [] as ReadonlyArray<number>,
+        shellForeground: true,
+      };
+      const { manager, ptyAdapter } = yield* createManager(5, {
+        subprocessInspector: () => {
+          inspections += 1;
+          if (initialInspection) {
+            initialInspection = false;
+            return Deferred.succeed(initialInspectionCompleted, undefined).pipe(
+              Effect.as(foregroundProgram),
+            );
+          }
+          if (blockNextInspection) {
+            blockNextInspection = false;
+            return Deferred.succeed(staleInspectionStarted, undefined).pipe(
+              Effect.andThen(Deferred.await(releaseStaleInspection)),
+              Effect.as(foregroundProgram),
+            );
+          }
+          if (freshWriteInspection) {
+            freshWriteInspection = false;
+            return Effect.succeed(idleShell);
+          }
+          return Effect.succeed(foregroundProgram);
+        },
+        subprocessPollIntervalMs: 100,
+      });
+
+      yield* manager.open(openInput());
+      const process = ptyAdapter.processes[0];
+      expect(process).toBeDefined();
+      if (!process) return;
+
+      yield* Deferred.await(initialInspectionCompleted).pipe(Effect.timeout("1200 millis"));
+      blockNextInspection = true;
+      yield* Deferred.await(staleInspectionStarted).pipe(Effect.timeout("1200 millis"));
+
+      // This on-demand inspection is newer than the blocked periodic poll and
+      // observes that the shell owns the PTY again.
+      yield* manager.write({
+        threadId: "thread-1",
+        terminalId: DEFAULT_TERMINAL_ID,
+        data: "\x1b[1;1R",
+      });
+      yield* Deferred.succeed(releaseStaleInspection, undefined);
+      yield* Effect.sleep("25 millis");
+
+      // If the stale poll clobbered the refreshed foreground state, this write
+      // performs another inspection and relays the reply to the foreground
+      // program. Keeping the fresh state strips it at the idle prompt.
+      yield* manager.write({
+        threadId: "thread-1",
+        terminalId: DEFAULT_TERMINAL_ID,
+        data: "\x1b[2;1R",
+      });
+
+      expect(inspections).toBe(3);
+      expect(process.writes).toEqual([]);
+    }),
+  );
+
   it.effect(
     "strips capability replies at an idle prompt but relays them to a foreground program",
     () =>
