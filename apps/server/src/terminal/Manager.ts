@@ -361,11 +361,7 @@ function isTerminalReplyUnawareCommand(raw: string, platform: NodeJS.Platform): 
 }
 
 function isTerminalReplyUnawarePager(session: TerminalSessionState): boolean {
-  const command = session.childCommandLabel?.trim().toLowerCase();
-  return (
-    session.hasTerminalReplyUnawareSubprocess ||
-    (command !== undefined && TERMINAL_REPLY_UNAWARE_PAGERS.has(command))
-  );
+  return session.hasTerminalReplyUnawareSubprocess;
 }
 
 function snapshot(session: TerminalSessionState): TerminalSessionSnapshot {
@@ -2938,6 +2934,8 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
           // Refresh the foreground-ownership signal only when no newer
           // on-demand inspection has made this routing observation stale.
           liveSession.value.shellForeground = resolveShellForeground(platform, next);
+          liveSession.value.hasTerminalReplyUnawareSubprocess =
+            next.hasTerminalReplyUnawareSubprocess ?? false;
           liveSession.value.subprocessInspectionRevision += 1;
           if (liveSession.value.shellForeground === false) {
             // A prefix buffered while the shell owned the PTY is unsolicited
@@ -2948,8 +2946,6 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         // Process metadata is still useful when a newer write inspection won
         // the foreground-routing race: it drives the activity label and
         // process registry without overwriting that newer routing decision.
-        liveSession.value.hasTerminalReplyUnawareSubprocess =
-          next.hasTerminalReplyUnawareSubprocess ?? false;
         if (
           liveSession.value.hasRunningSubprocess === next.hasRunningSubprocess &&
           liveSession.value.childCommandLabel === nextChildLabel
