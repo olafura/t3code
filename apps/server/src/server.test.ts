@@ -5891,22 +5891,50 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
 
   it.effect("subscribeThread sends a fresh snapshot instead of replaying a large gap", () =>
     Effect.gen(function* () {
+      const snapshotSequence = 100_000;
       const thread = makeDefaultOrchestrationReadModel().threads[0]!;
+      const liveEvents = yield* PubSub.unbounded<OrchestrationEvent>();
       let readEventsCalls = 0;
+      const messageEvent = {
+        sequence: snapshotSequence + 1,
+        eventId: EventId.make("event-stale-cursor-message"),
+        aggregateKind: "thread",
+        aggregateId: defaultThreadId,
+        occurredAt: "2026-01-01T00:00:01.000Z",
+        commandId: null,
+        causationEventId: null,
+        correlationId: null,
+        metadata: {},
+        type: "thread.message-sent",
+        payload: {
+          threadId: defaultThreadId,
+          messageId: MessageId.make("message-stale-cursor"),
+          role: "user",
+          text: "Published while loading the replacement snapshot",
+          turnId: null,
+          streaming: false,
+          createdAt: "2026-01-01T00:00:01.000Z",
+          updatedAt: "2026-01-01T00:00:01.000Z",
+        },
+      } satisfies Extract<OrchestrationEvent, { type: "thread.message-sent" }>;
 
       yield* buildAppUnderTest({
         layers: {
           orchestrationEngine: {
-            latestSequence: Effect.succeed(100_000),
-            readEvents: () =>
-              Stream.sync(() => {
-                readEventsCalls += 1;
-                return {} as OrchestrationEvent;
-              }),
+            latestSequence: Effect.succeed(snapshotSequence),
+            streamDomainEvents: Stream.fromPubSub(liveEvents),
+            readEvents: () => {
+              readEventsCalls += 1;
+              return Stream.empty;
+            },
           },
           projectionSnapshotQuery: {
             getThreadDetailSnapshot: () =>
-              Effect.succeed(Option.some({ snapshotSequence: 100_000, thread })),
+              Effect.gen(function* () {
+                yield* Effect.sleep("25 millis");
+                yield* PubSub.publish(liveEvents, messageEvent);
+                return Option.some({ snapshotSequence, thread });
+              }),
           },
         },
       });
@@ -5918,14 +5946,22 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
             threadId: defaultThreadId,
             afterSequence: 5,
             requestCompletionMarker: true,
-          }).pipe(Stream.take(2), Stream.runCollect),
+          }).pipe(Stream.take(3), Stream.runCollect),
         ),
-      );
+      ).pipe(Effect.timeout("2 seconds"));
 
-      assert.equal(items[0]?.kind, "snapshot");
-      assert.deepEqual(items[1], { kind: "synchronized" });
       assert.equal(readEventsCalls, 0);
-    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+      assert.equal(items[0]?.kind, "snapshot");
+      if (items[0]?.kind === "snapshot") {
+        assert.equal(items[0].snapshot.snapshotSequence, snapshotSequence);
+        assert.equal(items[0].snapshot.thread.id, defaultThreadId);
+      }
+      assert.deepEqual(items[1], { kind: "synchronized" });
+      assert.equal(items[2]?.kind, "event");
+      if (items[2]?.kind === "event") {
+        assert.equal(items[2].event.sequence, snapshotSequence + 1);
+      }
+    }).pipe(Effect.provide(NodeHttpServer.layerTest), TestClock.withLive),
   );
 
   it.effect("subscribeShell coalesces a per-thread burst without stalling other threads", () =>

@@ -1441,10 +1441,14 @@ const makeWsRpcLayer = (
                 const replayGap = headSequence - afterSequence;
                 if (replayGap < 0 || replayGap > SUBSCRIPTION_RESUME_MAX_GAP) {
                   const snapshot = yield* loadSnapshot;
-                  return Stream.concat(
-                    Stream.make({ kind: "snapshot" as const, snapshot }),
-                    synchronizedThenLive,
-                  );
+                  const replacementSnapshot =
+                    input.requestCompletionMarker === true
+                      ? Stream.make(
+                          { kind: "snapshot" as const, snapshot },
+                          { kind: "synchronized" as const },
+                        )
+                      : Stream.make({ kind: "snapshot" as const, snapshot });
+                  return Stream.concat(replacementSnapshot, bufferedLiveStream);
                 }
                 const catchUpStream = orchestrationEngine.readEvents(afterSequence, replayGap).pipe(
                   Stream.filter(isThisThreadDetailEvent),
