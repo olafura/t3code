@@ -1179,12 +1179,13 @@ it.layer(
       }),
   );
 
-  it.effect("strips terminal replies while a git diff pager owns the PTY", () =>
+  it.effect("strips terminal replies while a nested git diff pager owns the PTY", () =>
     Effect.gen(function* () {
       const inspect = {
         hasRunningSubprocess: true,
-        childCommand: "less",
-        processIds: [100],
+        childCommand: "git",
+        processIds: [100, 101],
+        hasTerminalReplyUnawareSubprocess: true,
         shellForeground: false,
       };
       const { manager, ptyAdapter, getEvents } = yield* createManager(5, {
@@ -1205,10 +1206,21 @@ it.layer(
 
       // Reproduced by feeding the queries emitted around `git diff`/less
       // through xterm and by inspecting the persisted failing PTY log. These
-      // These reply-shaped bytes do not belong to less, even though less
-      // currently owns the embedded PTY. Relaying them makes less display
-      // `ESC...` and starts the feedback flood. This policy is enforced here in
-      // the backend regardless of which terminal client supplied the bytes.
+      // These reply-shaped bytes do not belong to the nested less process.
+      // Relaying them makes less display `ESC...` and starts the feedback
+      // flood. This policy is enforced here in the backend regardless of which
+      // terminal client supplied the bytes.
+      yield* manager.write({
+        threadId: "thread-1",
+        terminalId: DEFAULT_TERMINAL_ID,
+        data: "\x1b[?",
+      });
+      yield* manager.write({
+        threadId: "thread-1",
+        terminalId: DEFAULT_TERMINAL_ID,
+        data: "q",
+      });
+
       for (const data of [
         "\x1b[?",
         "\x1b[?1;2c",
@@ -1246,7 +1258,7 @@ it.layer(
         inputSource: "terminal",
       });
 
-      expect(process.writes).toEqual(["\x1b", "q"]);
+      expect(process.writes).toEqual(["q", "\x1b", "q"]);
     }),
   );
 
