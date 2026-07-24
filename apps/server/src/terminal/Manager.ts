@@ -3339,7 +3339,9 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
     // replies arriving in that gap must refresh foreground ownership before we
     // decide whether to relay them; otherwise the now-idle shell receives a
     // whole response burst and prompt redraws amplify it into a feedback loop.
+    const alwaysFilterTerminalResponses = input.inputSource === "keyboard";
     if (
+      !alwaysFilterTerminalResponses &&
       !session.shellForeground &&
       mayContainTerminalResponse(session.pendingInputControlSequence, input.data)
     ) {
@@ -3362,8 +3364,9 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
     // program's very first queries can still lose a reply, and a program
     // `exec`'d over the shell keeps its pgid so it still looks like the shell —
     // both accepted next to the runaway flood the strip prevents.
-    const data =
-      session.shellForeground !== false
+    const data = alwaysFilterTerminalResponses
+      ? stripTerminalResponsesFromInput(input.data)
+      : session.shellForeground !== false
         ? (() => {
             const sanitized = sanitizeTerminalInputChunk(
               session.pendingInputControlSequence,
@@ -3373,7 +3376,9 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
             return sanitized.data;
           })()
         : input.data;
-    if (session.shellForeground === false) session.pendingInputControlSequence = "";
+    if (session.shellForeground === false) {
+      session.pendingInputControlSequence = "";
+    }
     if (data.length === 0) return;
     yield* Effect.try({
       try: () => process.write(data),
