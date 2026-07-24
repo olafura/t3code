@@ -513,7 +513,7 @@ export interface TuiClient {
     threadId: ThreadId,
     terminalId: string,
     data: string,
-    inputSource?: "terminal" | "keyboard" | "renderer" | "paste",
+    inputSource?: "terminal" | "keyboard" | "paste",
   ) => Promise<void>;
   readonly terminalResize: (
     threadId: ThreadId,
