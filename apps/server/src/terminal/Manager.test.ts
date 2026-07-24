@@ -1043,6 +1043,21 @@ it.layer(
         });
         expect(process.writes).toEqual([]);
 
+        // xterm's default onData path also carries physical keys. A standalone
+        // Escape callback is a complete key event, not the first chunk of a
+        // capability reply, so it must reach the shell before the next key.
+        yield* manager.write({
+          threadId: "thread-1",
+          terminalId: DEFAULT_TERMINAL_ID,
+          data: "\x1b",
+        });
+        yield* manager.write({
+          threadId: "thread-1",
+          terminalId: DEFAULT_TERMINAL_ID,
+          data: "q",
+        });
+        expect(process.writes).toEqual(["\x1b", "q"]);
+
         // Foreground program running (vim): it issued the query and is blocked
         // reading the answer — input must pass through verbatim.
         inspect = {
@@ -1067,7 +1082,7 @@ it.layer(
           terminalId: DEFAULT_TERMINAL_ID,
           data: "\x1b[I",
         });
-        expect(process.writes).toEqual(["\x1b[1;1R", "\x1b[I"]);
+        expect(process.writes).toEqual(["\x1b", "q", "\x1b[1;1R", "\x1b[I"]);
       }),
   );
 
@@ -1450,7 +1465,7 @@ it.layer(
       yield* manager.write({
         threadId: "thread-1",
         terminalId: DEFAULT_TERMINAL_ID,
-        data: "\x1b",
+        data: "\x1b[1",
       });
       inspect = {
         hasRunningSubprocess: true,

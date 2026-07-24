@@ -3378,17 +3378,23 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
     // program's very first queries can still lose a reply, and a program
     // `exec`'d over the shell keeps its pgid so it still looks like the shell —
     // both accepted next to the runaway flood the strip prevents.
+    const isStandaloneTerminalEscape =
+      (input.inputSource ?? "terminal") === "terminal" &&
+      session.pendingInputControlSequence.length === 0 &&
+      input.data === "\x1b";
     const data = alwaysFilterTerminalResponses
       ? stripTerminalResponsesFromInput(input.data)
       : session.shellForeground !== false
-        ? (() => {
-            const sanitized = sanitizeTerminalInputChunk(
-              session.pendingInputControlSequence,
-              input.data,
-            );
-            session.pendingInputControlSequence = sanitized.pendingControlSequence;
-            return sanitized.data;
-          })()
+        ? isStandaloneTerminalEscape
+          ? input.data
+          : (() => {
+              const sanitized = sanitizeTerminalInputChunk(
+                session.pendingInputControlSequence,
+                input.data,
+              );
+              session.pendingInputControlSequence = sanitized.pendingControlSequence;
+              return sanitized.data;
+            })()
         : input.data;
     if (session.shellForeground === false) {
       session.pendingInputControlSequence = "";
