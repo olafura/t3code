@@ -2074,7 +2074,7 @@ export function ChatView({
     onTerminalKey: (sequence) => {
       if (activeTerminal) {
         void client
-          .terminalWrite(activeTerminal.threadId, activeTerminal.terminalId, sequence)
+          .terminalWrite(activeTerminal.threadId, activeTerminal.terminalId, sequence, "keyboard")
           .catch(() => {});
       }
     },

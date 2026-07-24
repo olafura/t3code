@@ -60,6 +60,17 @@ export type TerminalAttachInput = Schema.Codec.Encoded<typeof TerminalAttachInpu
 export const TerminalWriteInput = Schema.Struct({
   ...TerminalSessionInput.fields,
   data: Schema.String.check(Schema.isNonEmpty()).check(Schema.isMaxLength(65_536)),
+  /**
+   * Where the bytes came from.
+   *
+   * Browser xterm's `onData` stream mixes physical keys with legitimate
+   * emulator-generated capability replies, so the default remains `terminal`.
+   * TUI keyboard input is different: it is decoded by the outer terminal first,
+   * which can accidentally surface that outer terminal's own replies as key
+   * sequences. The server always filters reply-shaped bytes from `keyboard`
+   * writes so they cannot be injected into an embedded pager or shell.
+   */
+  inputSource: Schema.optional(Schema.Literals(["terminal", "keyboard", "paste"])),
 });
 export type TerminalWriteInput = Schema.Codec.Encoded<typeof TerminalWriteInput>;
 
