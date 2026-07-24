@@ -3398,12 +3398,10 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
     // decide whether to relay them; otherwise the now-idle shell receives a
     // whole response burst and prompt redraws amplify it into a feedback loop.
     const alwaysFilterTerminalResponses = input.inputSource === "keyboard";
-    const initiallyFilterRendererResponses =
-      input.inputSource === "renderer" &&
-      (session.shellForeground !== false || isTerminalReplyUnawarePager(session));
+    const filterTerminalResponsesForForegroundProcess = isTerminalReplyUnawarePager(session);
     if (
       !alwaysFilterTerminalResponses &&
-      !initiallyFilterRendererResponses &&
+      !filterTerminalResponsesForForegroundProcess &&
       !session.shellForeground &&
       mayContainTerminalResponse(session.pendingInputControlSequence, input.data)
     ) {
@@ -3415,9 +3413,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       }
       session.subprocessInspectionRevision += 1;
     }
-    const filterRendererResponses =
-      input.inputSource === "renderer" &&
-      (session.shellForeground !== false || isTerminalReplyUnawarePager(session));
+    const filterTerminalResponsesForCurrentProcess = isTerminalReplyUnawarePager(session);
 
     // The reply-strip exists to break the IDLE-PROMPT echo loop (a shell with
     // no reader echoes the emulator's auto-replies, and a prompt that re-queries
@@ -3435,7 +3431,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       session.pendingInputControlSequence.length === 0 &&
       input.data === "\x1b";
     const statefullyFilterTerminalResponses =
-      filterRendererResponses || session.shellForeground !== false;
+      filterTerminalResponsesForCurrentProcess || session.shellForeground !== false;
     const data = alwaysFilterTerminalResponses
       ? stripTerminalResponsesFromInput(input.data)
       : statefullyFilterTerminalResponses
@@ -3450,7 +3446,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
               return sanitized.data;
             })()
         : input.data;
-    if (session.shellForeground === false && !filterRendererResponses) {
+    if (session.shellForeground === false && !filterTerminalResponsesForCurrentProcess) {
       session.pendingInputControlSequence = "";
     }
     if (data.length === 0) return;
