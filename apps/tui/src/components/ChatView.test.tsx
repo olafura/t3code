@@ -145,6 +145,7 @@ function fakeClient({
       },
     ] as never,
   terminalMetadata,
+  listTerminalIds = async () => [],
 }: {
   readonly detail: OrchestrationThread;
   readonly shellSnapshot?: OrchestrationShellSnapshot;
@@ -163,6 +164,7 @@ function fakeClient({
   readonly switchRef?: TuiClient["switchRef"];
   readonly listModels?: TuiClient["listModels"];
   readonly terminalMetadata?: TerminalMetadataStreamEvent;
+  readonly listTerminalIds?: TuiClient["listTerminalIds"];
 }): {
   readonly client: TuiClient;
   readonly connect: () => void;
@@ -206,6 +208,7 @@ function fakeClient({
     terminalRestart,
     setInteractionMode,
     terminalClose: async () => {},
+    listTerminalIds,
     listModels,
     getServerConfig: async () => ({ settings: DEFAULT_SERVER_SETTINGS }) as never,
     listRefs,
@@ -375,6 +378,7 @@ describe("ChatView Herdr host", () => {
     } as const satisfies HerdrSessionSnapshot;
     const reports: Array<Parameters<HerdrTuiHost["reportThread"]>[0]> = [];
     const openedTerminals: string[] = [];
+    const openedTerminalTotals: number[] = [];
     let herdrConnected = false;
     let notifyHost = () => {};
     const host = {
@@ -409,6 +413,7 @@ describe("ChatView Herdr host", () => {
       },
       openThreadTerminal: async (input) => {
         openedTerminals.push(input.terminalId);
+        openedTerminalTotals.push(input.total);
         return {
           paneId: "w1:p3",
           index: input.index,
@@ -437,8 +442,9 @@ describe("ChatView Herdr host", () => {
       detail: thread(),
       terminalMetadata: {
         type: "snapshot",
-        terminals: [terminalSummary("term-1"), terminalSummary("term-2")],
+        terminals: [terminalSummary("term-2")],
       },
+      listTerminalIds: async () => ["term-1", "term-2"],
     });
     const setup = await testRender(
       <ChatView client={fake.client} host={host} onExit={() => {}} />,
@@ -501,7 +507,10 @@ describe("ChatView Herdr host", () => {
       frame.includes("Terminal · Thread one"),
     );
     expect(withTerminal).toContain("+ new");
+    expect(withTerminal).toContain("▸1");
+    expect(withTerminal).toContain("2");
     await setup.waitFor(() => openedTerminals.includes("term-1"));
+    expect(openedTerminalTotals).toContain(2);
     await React.act(async () => {
       setup.mockInput.pressKey("p", { ctrl: true });
       await setup.renderOnce();
