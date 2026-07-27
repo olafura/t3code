@@ -341,6 +341,7 @@ export function ChatView({
   const [knownTerminals, setKnownTerminals] = React.useState<
     ReadonlyMap<string, ReadonlyArray<string>>
   >(() => new Map());
+  const [terminalMetadataReady, setTerminalMetadataReady] = React.useState(false);
   // The terminal drawer coexists with the prompt; this tracks which one keystrokes go to.
   const [terminalFocused, setTerminalFocused] = React.useState(false);
   // User-set terminal-drawer height in rows; null = the default proportion.
@@ -577,8 +578,8 @@ export function ChatView({
         process.cwd())
       : terminalCwd;
   const detailTabs = detail ? (terminalTabs.get(detail.id) ?? null) : null;
-  const activeTerminal: TerminalInfo | null =
-    terminalOpen && detail && detailTabs
+  const selectedTerminal: TerminalInfo | null =
+    detail && detailTabs
       ? {
           threadId: detail.id,
           terminalId: detailTabs.activeId,
@@ -587,6 +588,7 @@ export function ChatView({
           worktreePath: detail.worktreePath,
         }
       : null;
+  const activeTerminal = terminalOpen ? selectedTerminal : null;
   const newReasoning = React.useMemo(
     () => reasoningChoicesForSelection(modelOptions, resolvedNewModelSelection),
     [modelOptions, resolvedNewModelSelection],
@@ -1760,39 +1762,76 @@ export function ChatView({
   // Discover terminals the TUI didn't open (agent-spawned, web-created, or from
   // a prior run) via the metadata stream, so the tab bar isn't blind to them.
   React.useEffect(() => {
-    if (host.kind === "herdr") return;
+    setTerminalMetadataReady(false);
     const unsubscribe = client.subscribeTerminalMetadata((event) => {
       setKnownTerminals((prev) => reduceKnownTerminals(prev, event));
+      setTerminalMetadataReady(true);
     });
     return unsubscribe;
-  }, [client, host.kind]);
+  }, [client]);
 
   // Union discovered ids into the open thread's tabs. tabsWithDiscovered returns
   // the same reference when nothing is new, so updateThreadTabs no-ops then.
   const detailIdForTabs = detail?.id ?? null;
   React.useEffect(() => {
-    if (!terminalOpen || detailIdForTabs === null) return;
+    if ((host.kind === "standalone" && !terminalOpen) || detailIdForTabs === null) return;
     const discovered = knownTerminals.get(detailIdForTabs) ?? [];
+    if (host.kind === "herdr") {
+      updateThreadTabs(detailIdForTabs, (tabs) => {
+        const synced = tabsWithDiscovered(null, discovered);
+        if (!synced) return null;
+        return tabs && discovered.includes(tabs.activeId)
+          ? { ids: synced.ids, activeId: tabs.activeId }
+          : synced;
+      });
+      return;
+    }
     if (discovered.length === 0) return;
     updateThreadTabs(detailIdForTabs, (tabs) => tabsWithDiscovered(tabs, discovered));
-  }, [terminalOpen, detailIdForTabs, knownTerminals]);
+  }, [terminalOpen, detailIdForTabs, host.kind, knownTerminals]);
 
   // ^E toggles the embedded drawer in standalone mode and opens or focuses the
-  // current thread's native shell pane when Herdr hosts the TUI.
-  const currentHerdrTerminalInput = () =>
+  // current thread's server-backed native terminal tab in Herdr.
+  const currentHerdrTerminalInput = (terminalId: string, tabs: ThreadTabs) =>
     detail
       ? {
           threadId: detail.id,
+          terminalId,
+          index: tabs.ids.indexOf(terminalId) + 1,
+          total: tabs.ids.length,
           title: detail.title,
           cwd: terminalCwd,
+          worktreePath: detail.worktreePath,
           fallbackCwd: terminalFallbackCwd,
         }
       : null;
+  const detailTerminalIdsKey = detailTabs?.ids.join("\u0000") ?? "";
+  React.useEffect(() => {
+    if (host.kind !== "herdr" || !detail || !terminalMetadataReady) return;
+    const inputs = (detailTabs?.ids ?? []).flatMap((terminalId) => {
+      const input = detailTabs ? currentHerdrTerminalInput(terminalId, detailTabs) : null;
+      return input ? [input] : [];
+    });
+    void host
+      .syncThreadTerminals(detail.id, inputs)
+      .catch((error) => store.setStatus(`terminal tab sync failed: ${String(error)}`, "error"));
+  }, [
+    detail?.id,
+    detail?.title,
+    detail?.worktreePath,
+    detailTerminalIdsKey,
+    host,
+    terminalCwd,
+    terminalFallbackCwd,
+    terminalMetadataReady,
+  ]);
   const describeHerdrTerminal = (index: number, total: number, created: boolean) =>
-    `${created ? "Opened" : "Focused"} terminal ${index}/${total} in Herdr. Switch from the Agents sidebar or with Herdr’s pane-cycle keys.`;
+    `${created ? "Opened" : "Focused"} synced terminal tab ${index}/${total} in Herdr.`;
   const toggleTerminal = () => {
     if (host.kind === "herdr") {
-      const input = currentHerdrTerminalInput();
+      const tabs = detailTabs ?? initialTabs();
+      if (detail && !detailTabs) updateThreadTabs(detail.id, () => tabs);
+      const input = currentHerdrTerminalInput(tabs.activeId, tabs);
       if (!input) {
         store.setStatus("Select a T3 thread before opening its terminal.");
         return;
@@ -1823,10 +1862,16 @@ export function ChatView({
   const newTerminal = () => {
     if (!detail) return;
     if (host.kind === "herdr") {
-      const input = currentHerdrTerminalInput();
+      if ((detailTabs?.ids.length ?? 0) >= MAX_TERMINALS_PER_THREAD) {
+        store.setStatus(`At most ${MAX_TERMINALS_PER_THREAD} terminals per thread.`);
+        return;
+      }
+      const tabs = addTab(detailTabs);
+      updateThreadTabs(detail.id, () => tabs);
+      const input = currentHerdrTerminalInput(tabs.activeId, tabs);
       if (!input) return;
       store.setStatus("Opening another real terminal in Herdr…", "busy");
-      void host.createThreadTerminal(input).then(
+      void host.openThreadTerminal(input).then(
         (result) =>
           store.setStatus(
             describeHerdrTerminal(result.index, result.total, result.created),
@@ -1858,9 +1903,17 @@ export function ChatView({
   const cycleTerminal = (delta: 1 | -1) => {
     if (!detail) return;
     if (host.kind === "herdr") {
-      const input = currentHerdrTerminalInput();
+      const tabs = detailTabs;
+      if (!tabs || tabs.ids.length < 2) {
+        store.setStatus("This thread has one terminal.");
+        return;
+      }
+      const terminalId = cycleActiveId(tabs, delta);
+      const nextTabs = { ids: tabs.ids, activeId: terminalId };
+      updateThreadTabs(detail.id, () => nextTabs);
+      const input = currentHerdrTerminalInput(terminalId, nextTabs);
       if (!input) return;
-      void host.cycleThreadTerminal(input, delta).then(
+      void host.openThreadTerminal(input).then(
         (result) =>
           store.setStatus(
             describeHerdrTerminal(result.index, result.total, result.created),
@@ -1880,6 +1933,10 @@ export function ChatView({
   // neighbour (or close the drawer when it was the last one).
   const closeTerminal = (id: string) => {
     if (!detail) return;
+    if (host.kind === "herdr" && detailTabs) {
+      const input = currentHerdrTerminalInput(id, detailTabs);
+      if (input) void host.closeThreadTerminal(input).catch(() => {});
+    }
     void client.terminalClose(detail.id, id).catch(() => {});
     const willBeEmpty = (detailTabs?.ids.length ?? 0) <= 1;
     updateThreadTabs(detail.id, (tabs) =>
@@ -1892,23 +1949,23 @@ export function ChatView({
   };
 
   const clearActiveTerminal = () => {
-    if (!activeTerminal) return;
+    if (!selectedTerminal) return;
     store.setStatus("Clearing terminal…", "busy");
-    void client.terminalClear(activeTerminal.threadId, activeTerminal.terminalId).then(
+    void client.terminalClear(selectedTerminal.threadId, selectedTerminal.terminalId).then(
       () => store.setStatus("Terminal cleared.", "success"),
       (error) => store.setStatus(`Could not clear terminal: ${String(error)}`, "error"),
     );
   };
 
   const restartActiveTerminal = () => {
-    if (!activeTerminal) return;
+    if (!selectedTerminal) return;
     store.setStatus("Restarting terminal…", "busy");
     void client
       .terminalRestart({
-        threadId: activeTerminal.threadId,
-        terminalId: activeTerminal.terminalId,
-        cwd: activeTerminal.cwd,
-        worktreePath: activeTerminal.worktreePath,
+        threadId: selectedTerminal.threadId,
+        terminalId: selectedTerminal.terminalId,
+        cwd: selectedTerminal.cwd,
+        worktreePath: selectedTerminal.worktreePath,
         cols: termCols,
         rows: termRows,
       })
@@ -2322,12 +2379,12 @@ export function ChatView({
     if (detail) {
       list.push({
         id: "terminal-new",
-        title: host.kind === "herdr" ? "New real terminal below timeline" : "New terminal",
+        title: host.kind === "herdr" ? "New synced terminal tab in Herdr" : "New terminal",
         keywords: "shell group tab pane",
         run: () => runCommand(newTerminal),
       });
     }
-    if (detail && host.kind === "herdr") {
+    if (detail && host.kind === "herdr" && (detailTabs?.ids.length ?? 0) > 1) {
       list.push({
         id: "terminal-next",
         title: "Next Herdr terminal for this thread",
@@ -2354,7 +2411,7 @@ export function ChatView({
         run: () => runCommand(() => cycleTerminal(-1)),
       });
     }
-    if (host.kind === "standalone" && terminalOpen && detailTabs) {
+    if ((host.kind === "herdr" || terminalOpen) && detailTabs) {
       list.push({
         id: "terminal-clear",
         title: "Clear terminal",
@@ -2427,7 +2484,6 @@ export function ChatView({
       run: () => runCommand(() => setSettingsOpen(true)),
     });
     return list;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     detail,
     checkpoints.length,
@@ -2779,7 +2835,7 @@ export function ChatView({
     "^↑/^↓ size",
     "^N new",
     "^E term",
-    ...(host.kind === "herdr" ? ["^K new/switch terminals"] : []),
+    ...(host.kind === "herdr" ? ["^K terminal tabs"] : []),
     ...(focus !== "new" && actionablePlan ? ["^Y implement"] : []),
     ...(focus !== "new" && approvals.length > 0
       ? [approvals.length > 1 ? "^A/^R approve (↑/↓)" : "^A/^R approve"]

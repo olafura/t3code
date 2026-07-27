@@ -7,14 +7,15 @@ native agents, and real terminal panes.
 In hosted mode, Herdr owns navigation: the T3 pane does not render the
 standalone projects sidebar. The current Herdr Space selects the project
 checkout, and the active T3 thread reports semantic working, blocked, or idle
-state into Herdr's native Agents sidebar. `Ctrl-E` opens a real Herdr shell pane
-below the timeline, falling back to the project root if an old worktree has
-already been removed. Each shell is registered as a `T3 Terminal` in Herdr's
-Agents sidebar, so it can be focused there like any other agent pane.
+state into Herdr's native Agents sidebar. `Ctrl-E` opens the selected T3
+terminal as a native Herdr tab, falling back to the project root if an old
+worktree has already been removed. The tab bridges the same server terminal
+session used by the web and standalone TUI, so history, output, and input stay
+shared across clients.
 
-Use the T3 command palette (`Ctrl-K`) to create another terminal for the current
-thread or focus its next/previous terminal. Herdr's own pane-cycle shortcuts can
-also switch between every pane in the Space.
+Use the T3 command palette (`Ctrl-K`) to create, close, clear, restart, or focus
+the next/previous terminal. Herdr renders each terminal as its own tab, so only
+one terminal is visible at a time and Herdr's normal tab controls work too.
 
 Requirements:
 
