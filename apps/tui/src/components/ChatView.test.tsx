@@ -319,7 +319,7 @@ describe("ChatView responsive shell", () => {
 });
 
 describe("ChatView Herdr host", () => {
-  it("Given a Herdr Space, the hosted timeline leaves navigation to Herdr and opens a native terminal", async () => {
+  it("Given a Herdr Space, the hosted timeline toggles T3 navigation and opens a native terminal", async () => {
     const terminals: Array<Parameters<HerdrTuiHost["openThreadTerminal"]>[0]> = [];
     const snapshot = {
       version: "0.7.5",
@@ -450,6 +450,38 @@ describe("ChatView Herdr host", () => {
     const hosted = await setup.waitForFrame((frame) => frame.includes("Ask anything"));
     expect(hosted).not.toContain("Search projects");
     expect(hosted).not.toContain("Reviewer");
+    await React.act(async () => {
+      setup.mockInput.pressKey("f", { ctrl: true });
+      await setup.renderOnce();
+    });
+    const withT3Sidebar = await setup.waitForFrame((frame) => frame.includes("Search projects"));
+    expect(withT3Sidebar).toContain("Reviewer");
+    await React.act(async () => {
+      setup.mockInput.pressKey("f", { ctrl: true });
+      await setup.renderOnce();
+    });
+    await setup.waitForFrame((frame) => !frame.includes("Search projects"));
+    await React.act(async () => {
+      setup.mockInput.pressKey("k", { ctrl: true });
+      await setup.renderOnce();
+    });
+    await setup.waitForFrame((frame) => frame.includes("Type a command"));
+    await React.act(async () => {
+      await setup.mockInput.typeText("T3 sidebar");
+      await setup.renderOnce();
+    });
+    const sidebarCommand = await setup.waitForFrame((frame) => frame.includes("Show T3 sidebar"));
+    expect(sidebarCommand).toContain("^F");
+    await React.act(async () => {
+      setup.mockInput.pressEnter();
+      await setup.renderOnce();
+    });
+    await setup.waitForFrame((frame) => frame.includes("Search projects"));
+    await React.act(async () => {
+      setup.mockInput.pressKey("f", { ctrl: true });
+      await setup.renderOnce();
+    });
+    await setup.waitForFrame((frame) => !frame.includes("Search projects"));
     await setup.waitFor(() => reports.some((report) => report?.threadId === "t1"));
     await React.act(async () => {
       setup.mockInput.pressKey("e", { ctrl: true });

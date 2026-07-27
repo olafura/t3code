@@ -241,6 +241,9 @@ export function useKeyBindings(actions: KeyBindingActions): void {
       return;
     }
     if (actions.mode === "filter") {
+      // Hosted mode uses ^F as a true T3-sidebar toggle. In standalone mode
+      // onOpenFilter simply keeps the existing search focused.
+      if (key.ctrl && key.name === "f") return actions.onOpenFilter();
       if (key.name === "return" || key.name === "enter") return actions.onCommitFilter();
       if (key.name === "escape") return actions.onCancelFilter();
       return;
