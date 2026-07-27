@@ -8,6 +8,7 @@ import {
   TerminalCloseInput,
   TerminalEvent,
   TerminalError,
+  TerminalListResult,
   TerminalOpenInput,
   TerminalProviderEnvironmentError,
   TerminalResizeInput,
@@ -52,6 +53,12 @@ describe("TerminalProviderEnvironmentError", () => {
       "Could not prepare the terminal environment for provider instance: codex_work",
     );
     expect(decoded.message).not.toContain("secret backend unavailable");
+  });
+});
+
+describe("TerminalListResult", () => {
+  it("accepts the ordered terminal identities retained for a thread", () => {
+    expect(decodes(TerminalListResult, { terminalIds: ["term-1", "term-2"] })).toBe(true);
   });
 });
 
