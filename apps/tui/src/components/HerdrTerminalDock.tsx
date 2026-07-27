@@ -21,6 +21,16 @@ export const HerdrTerminalDock = React.memo(function HerdrTerminalDock({
   readonly onCloseTab: (id: string) => void;
 }): React.ReactNode {
   const palette = usePalette();
+  const compact = width < 90;
+  const terminalLabels = tabIds.map((_, index) =>
+    compact ? `T${index + 1}` : `Terminal ${index + 1}`,
+  );
+  const tabsWidth =
+    terminalLabels.reduce((total, label, index) => {
+      const closeWidth = tabIds[index] === activeTabId && tabIds.length > 1 ? 2 : 0;
+      return total + label.length + closeWidth + 4;
+    }, 0) + (compact ? 5 : 7);
+  const titleWidth = Math.max(1, width - tabsWidth - 6);
   return (
     <box
       flexDirection="row"
@@ -35,16 +45,31 @@ export const HerdrTerminalDock = React.memo(function HerdrTerminalDock({
       justifyContent="space-between"
     >
       <box flexDirection="row" flexShrink={1} overflow="hidden">
-        <text fg={palette.dim}>{clip(`Terminal · ${title}`, Math.max(1, width - 34))}</text>
+        <text fg={palette.dim}>{clip(title, titleWidth)}</text>
       </box>
       <box flexDirection="row" flexShrink={0}>
         {tabIds.map((id, index) => {
           const active = id === activeTabId;
+          const label = terminalLabels[index] as string;
           return (
-            <box key={id} flexDirection="row" marginLeft={1}>
+            <box
+              key={id}
+              flexDirection="row"
+              marginLeft={1}
+              paddingLeft={1}
+              paddingRight={1}
+              {...(active ? { backgroundColor: palette.selectedBg } : {})}
+            >
               <box onMouseDown={() => onSelectTab(id)}>
                 <text fg={active ? palette.accent : palette.dim}>
-                  {`${active ? "▸" : ""}${index + 1}`}
+                  {active ? (
+                    <>
+                      <span fg={palette.accent}>{"▸ "}</span>
+                      <strong>{label}</strong>
+                    </>
+                  ) : (
+                    label
+                  )}
                 </text>
               </box>
               {active && tabIds.length > 1 ? (
@@ -55,10 +80,9 @@ export const HerdrTerminalDock = React.memo(function HerdrTerminalDock({
             </box>
           );
         })}
-        <box marginLeft={1} onMouseDown={onNewTab}>
-          <text fg={palette.dim}>+ new</text>
+        <box marginLeft={1} paddingLeft={1} onMouseDown={onNewTab}>
+          <text fg={palette.accent}>{compact ? "+" : "+ New"}</text>
         </box>
-        <text fg={palette.dim}>{" · ^P from terminal"}</text>
       </box>
     </box>
   );
