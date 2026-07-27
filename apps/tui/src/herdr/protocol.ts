@@ -425,37 +425,6 @@ export class HerdrProtocolClient {
     return readTypedResult<HerdrPaneInfo>(result, "pane", "split pane");
   }
 
-  async createTab(input: {
-    readonly workspaceId: string;
-    readonly cwd: string;
-    readonly label: string;
-    readonly focus?: boolean;
-  }): Promise<HerdrPaneInfo> {
-    const result = await this.request("tab.create", {
-      workspace_id: input.workspaceId,
-      cwd: input.cwd,
-      label: input.label,
-      focus: input.focus ?? true,
-    });
-    return readTypedResult<HerdrPaneInfo>(result, "root_pane", "tab root pane");
-  }
-
-  async sendPaneInput(
-    paneId: string,
-    text: string,
-    keys: ReadonlyArray<string> = [],
-  ): Promise<void> {
-    await this.request("pane.send_input", {
-      pane_id: paneId,
-      text,
-      keys,
-    });
-  }
-
-  async closePane(paneId: string): Promise<void> {
-    await this.request("pane.close", { pane_id: paneId });
-  }
-
   async reportPaneAgent(input: {
     readonly paneId: string;
     readonly source: string;

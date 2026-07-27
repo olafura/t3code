@@ -21,7 +21,6 @@ describe("tuiHostFromEnvironment", () => {
         HERDR_PANE_ID: "w1:p2",
         HERDR_WORKSPACE_ID: "w1",
         HERDR_PLUGIN_ID: "dev.t3code",
-        HERDR_PLUGIN_STATE_DIR: "/tmp/t3-herdr",
       },
       "http://localhost:13773",
       "/workspace/project",
