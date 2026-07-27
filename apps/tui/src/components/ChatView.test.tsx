@@ -167,9 +167,11 @@ function fakeClient({
   readonly client: TuiClient;
   readonly connect: () => void;
   readonly subscribedThreadIds: string[];
+  readonly subscribedTerminalIds: string[];
 } {
   let shellSubscriber: ((snapshot: OrchestrationShellSnapshot) => void) | null = null;
   const subscribedThreadIds: string[] = [];
+  const subscribedTerminalIds: string[] = [];
   const client = {
     subscribeShell: (onSnapshot: (snapshot: OrchestrationShellSnapshot) => void) => {
       shellSubscriber = onSnapshot;
@@ -194,7 +196,10 @@ function fakeClient({
     respondUserInput,
     createProject,
     createThread,
-    subscribeTerminal: () => () => {},
+    subscribeTerminal: (input: Parameters<TuiClient["subscribeTerminal"]>[0]) => {
+      subscribedTerminalIds.push(input.terminalId);
+      return () => {};
+    },
     terminalWrite: async () => {},
     terminalResize: async () => {},
     terminalClear,
@@ -211,7 +216,12 @@ function fakeClient({
     runGitStackedAction: async () => {},
     runGitPull,
   } as unknown as TuiClient;
-  return { client, connect: () => shellSubscriber?.(shellSnapshot), subscribedThreadIds };
+  return {
+    client,
+    connect: () => shellSubscriber?.(shellSnapshot),
+    subscribedThreadIds,
+    subscribedTerminalIds,
+  };
 }
 
 async function selectThread(
@@ -319,8 +329,7 @@ describe("ChatView responsive shell", () => {
 });
 
 describe("ChatView Herdr host", () => {
-  it("Given a Herdr Space, the hosted timeline toggles T3 navigation and opens a native terminal", async () => {
-    const terminals: Array<Parameters<HerdrTuiHost["openThreadTerminal"]>[0]> = [];
+  it("Given a Herdr Space, the hosted timeline toggles T3 navigation and opens the synced terminal drawer", async () => {
     const snapshot = {
       version: "0.7.5",
       protocol: 17,
@@ -397,17 +406,6 @@ describe("ChatView Herdr host", () => {
       reportThread: async (input) => {
         reports.push(input);
       },
-      openThreadTerminal: async (input) => {
-        terminals.push(input);
-        return {
-          paneId: `w1:p${input.index + 2}`,
-          index: input.index,
-          total: input.total,
-          created: true,
-        };
-      },
-      syncThreadTerminals: async () => {},
-      closeThreadTerminal: async () => {},
       openServerPane: async () => {},
     } satisfies HerdrTuiHost;
     const terminalSummary = (terminalId: string) => ({
@@ -487,40 +485,41 @@ describe("ChatView Herdr host", () => {
       setup.mockInput.pressKey("e", { ctrl: true });
       await setup.renderOnce();
     });
-    await setup.waitFor(() => terminals.length === 1);
-    expect(terminals[0]).toMatchObject({
-      threadId: "t1",
-      terminalId: "term-1",
-      index: 1,
-      total: 2,
-      cwd: "/workspace/project-one",
-      fallbackCwd: "/workspace/project-one",
+    const withTerminal = await setup.waitForFrame((frame) =>
+      frame.includes("Terminal · Thread one"),
+    );
+    expect(withTerminal).toContain("+ new");
+    await setup.waitFor(
+      () =>
+        fake.subscribedTerminalIds.includes("term-1") &&
+        fake.subscribedTerminalIds.includes("term-2"),
+    );
+    await React.act(async () => {
+      setup.mockInput.pressKey("p", { ctrl: true });
+      await setup.renderOnce();
     });
-    const withTerminal = setup.captureCharFrame();
-    expect(withTerminal).not.toContain("Terminal ·");
+    await setup.waitForFrame((frame) => frame.includes("^P focus"));
     await React.act(async () => {
       setup.mockInput.pressKey("k", { ctrl: true });
       await setup.renderOnce();
     });
     await setup.waitForFrame((frame) => frame.includes("Type a command"));
     await React.act(async () => {
-      await setup.mockInput.typeText("synced");
+      await setup.mockInput.typeText("new terminal");
       await setup.renderOnce();
     });
-    const terminalCommands = await setup.waitForFrame((frame) =>
-      frame.includes("New synced terminal tab in Herdr"),
-    );
-    expect(terminalCommands).not.toContain("Next Herdr terminal for this thread");
+    const terminalCommands = await setup.waitForFrame((frame) => frame.includes("New terminal"));
+    expect(terminalCommands).toContain("New terminal");
     await React.act(async () => {
       setup.mockInput.pressEnter();
       await setup.renderOnce();
     });
-    await setup.waitFor(() => terminals.length === 2);
-    expect(terminals[1]).toMatchObject({
-      terminalId: "term-3",
-      index: 3,
-      total: 3,
+    await setup.waitFor(() => fake.subscribedTerminalIds.includes("term-3"));
+    await React.act(async () => {
+      setup.mockInput.pressKey("p", { ctrl: true });
+      await setup.renderOnce();
     });
+    await setup.waitForFrame((frame) => frame.includes("^P focus"));
     await React.act(async () => {
       setup.mockInput.pressKey("k", { ctrl: true });
       await setup.renderOnce();
@@ -530,10 +529,8 @@ describe("ChatView Herdr host", () => {
       await setup.mockInput.typeText("terminal");
       await setup.renderOnce();
     });
-    const switchCommands = await setup.waitForFrame((frame) =>
-      frame.includes("Next Herdr terminal for this thread"),
-    );
-    expect(switchCommands).toContain("Previous Herdr terminal for this thread");
+    const switchCommands = await setup.waitForFrame((frame) => frame.includes("Next terminal"));
+    expect(switchCommands).not.toContain("Herdr terminal");
     setup.renderer.destroy();
   });
 
@@ -583,14 +580,6 @@ describe("ChatView Herdr host", () => {
       focusAgent: async () => {},
       interruptAgent: async () => {},
       reportThread: async () => {},
-      openThreadTerminal: async () => ({
-        paneId: "w-new:p2",
-        index: 1,
-        total: 1,
-        created: true,
-      }),
-      syncThreadTerminals: async () => {},
-      closeThreadTerminal: async () => {},
       openServerPane: async () => {},
     } satisfies HerdrTuiHost;
     const createdProjects: Array<Parameters<TuiClient["createProject"]>[0]> = [];

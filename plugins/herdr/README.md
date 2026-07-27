@@ -9,14 +9,13 @@ T3's full projects-and-threads sidebar when you need functionality Herdr's
 native sidebar cannot expose. The current Herdr Space selects the project
 checkout, and the active T3 thread reports semantic working, blocked, or idle
 state into Herdr's native Agents sidebar. `Ctrl-E` opens the selected T3
-terminal as a native Herdr tab, falling back to the project root if an old
-worktree has already been removed. The tab bridges the same server terminal
-session used by the web and standalone TUI, so history, output, and input stay
-shared across clients.
+terminal below the prompt, using the same drawer and terminal tab strip as the
+standalone TUI. It attaches to the same server terminal session used by the web
+and standalone TUI, so history, output, and input stay shared across clients.
 
 Use the T3 command palette (`Ctrl-K`) to create, close, clear, restart, or focus
-the next/previous terminal. Herdr renders each terminal as its own tab, so only
-one terminal is visible at a time and Herdr's normal tab controls work too.
+the next/previous terminal. Only the selected terminal is visible; background
+terminal tabs remain attached and continue buffering output.
 
 Requirements:
 

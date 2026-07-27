@@ -22,6 +22,18 @@ const info: TerminalInfo = {
   worktreePath: null,
 };
 
+async function waitForTerminalUpdate(
+  setup: Awaited<ReturnType<typeof testRender>>,
+  predicate: () => boolean,
+): Promise<void> {
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    await Bun.sleep(10);
+    await setup.renderOnce();
+    if (predicate()) return;
+  }
+  throw new Error("Timed out waiting for terminal emulator output");
+}
+
 describe("ThreadTerminalDrawer tab bar", () => {
   it("Given multiple tabs, then it lists their numbers, a close mark, and '+ new'", async () => {
     const copyRef = React.createRef<(() => string) | null>() as React.MutableRefObject<
@@ -207,10 +219,7 @@ describe("ThreadTerminalDrawer session events", () => {
       terminalId: "term-1",
       data: "$ ",
     } as never);
-    await Bun.sleep(25);
-    await t.renderOnce();
-
-    expect(t.captureCharFrame()).toContain("$ █");
+    await waitForTerminalUpdate(t, () => t.captureCharFrame().includes("$ █"));
     t.renderer.destroy();
   });
 
@@ -265,9 +274,14 @@ describe("ThreadTerminalDrawer session events", () => {
       terminalId: "term-1",
       data: "abc\x1b[2D",
     } as never);
-    await Bun.sleep(25);
-    await t.renderOnce();
-
+    await waitForTerminalUpdate(t, () =>
+      t.captureSpans().lines.some((line) =>
+        line.spans
+          .map((span) => span.text)
+          .join("")
+          .includes("abc"),
+      ),
+    );
     const terminalLine = t.captureSpans().lines.find((line) =>
       line.spans
         .map((span) => span.text)
@@ -330,14 +344,10 @@ describe("ThreadTerminalDrawer session events", () => {
       terminalId: "term-1",
       data: "visible-before-clear",
     } as never);
-    await Bun.sleep(25);
-    await t.renderOnce();
-    expect(t.captureCharFrame()).toContain("visible-before-clear");
+    await waitForTerminalUpdate(t, () => t.captureCharFrame().includes("visible-before-clear"));
 
     onEvent?.({ type: "cleared", threadId: "t1", terminalId: "term-1" } as never);
-    await Bun.sleep(25);
-    await t.renderOnce();
-    expect(t.captureCharFrame()).not.toContain("visible-before-clear");
+    await waitForTerminalUpdate(t, () => !t.captureCharFrame().includes("visible-before-clear"));
     t.renderer.destroy();
   });
 });
