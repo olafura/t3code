@@ -9,7 +9,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as ManagedRuntime from "effect/ManagedRuntime";
 import * as Option from "effect/Option";
-import { Command, GlobalFlag } from "effect/unstable/cli";
+import { Command, Flag, GlobalFlag } from "effect/unstable/cli";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 
 import * as EnvironmentAuth from "../auth/EnvironmentAuth.ts";
@@ -35,6 +35,24 @@ interface MintRequest {
   readonly id?: number;
 }
 
+export type TuiHostMode = "standalone" | "herdr";
+
+export function buildTuiChildEnvironment(input: {
+  readonly environment: NodeJS.ProcessEnv;
+  readonly origin: string;
+  readonly bearerToken: string;
+  readonly logPath: string;
+  readonly host: TuiHostMode;
+}): NodeJS.ProcessEnv {
+  return {
+    ...input.environment,
+    T3_TUI_ORIGIN: input.origin,
+    T3_TUI_BEARER: input.bearerToken,
+    T3_TUI_LOG: input.logPath,
+    T3_TUI_HOST: input.host,
+  };
+}
+
 /**
  * Run the Bun TUI subprocess. The OpenTUI renderer requires Bun, so the Node
  * `t3 tui` command (which holds the server's auth) bootstraps a session here and
@@ -46,6 +64,7 @@ function runBunTui(input: {
   readonly origin: string;
   readonly bearerToken: string;
   readonly logPath: string;
+  readonly host: TuiHostMode;
   readonly mintSocketUrl: () => Promise<string>;
 }): Promise<void> {
   const bunCommand = process.env.T3_TUI_BUN ?? "bun";
@@ -54,12 +73,13 @@ function runBunTui(input: {
   return new Promise<void>((resolve) => {
     const child = NodeChildProcess.spawn(bunCommand, [tuiEntry], {
       stdio: ["inherit", "inherit", "inherit", "ipc"],
-      env: {
-        ...process.env,
-        T3_TUI_ORIGIN: input.origin,
-        T3_TUI_BEARER: input.bearerToken,
-        T3_TUI_LOG: input.logPath,
-      },
+      env: buildTuiChildEnvironment({
+        environment: process.env,
+        origin: input.origin,
+        bearerToken: input.bearerToken,
+        logPath: input.logPath,
+        host: input.host,
+      }),
     });
 
     child.on("message", (message: MintRequest) => {
@@ -93,7 +113,15 @@ function runBunTui(input: {
   });
 }
 
-export const tuiCommand = Command.make("tui", { ...authLocationFlags }).pipe(
+const tuiHostFlag = Flag.choice("tui-host", ["standalone", "herdr"] as const).pipe(
+  Flag.withDescription("Terminal host integration. Herdr mode requires a Herdr plugin pane."),
+  Flag.withDefault("standalone" as const),
+);
+
+export const tuiCommand = Command.make("tui", {
+  ...authLocationFlags,
+  tuiHost: tuiHostFlag,
+}).pipe(
   Command.withDescription(
     "Open a terminal UI for the running local T3 Code server (requires Bun; no port forwarding).",
   ),
@@ -157,6 +185,7 @@ export const tuiCommand = Command.make("tui", { ...authLocationFlags }).pipe(
             origin,
             bearerToken: session.token,
             logPath: `${config.serverRuntimeStatePath}.tui.log`,
+            host: flags.tuiHost,
             mintSocketUrl,
           }),
         );
