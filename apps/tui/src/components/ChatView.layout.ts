@@ -25,9 +25,10 @@ export interface ChatColumnLayout {
 export function resolveChatColumnLayout(
   terminalWidth: number,
   rightPanelVisible: boolean,
+  nativeSidebar = true,
 ): ChatColumnLayout {
   const width = Math.max(1, Math.floor(terminalWidth));
-  const sidebarVisible = width >= LIST_PANE_WIDTH + MIN_CHAT_PANE_WIDTH;
+  const sidebarVisible = nativeSidebar && width >= LIST_PANE_WIDTH + MIN_CHAT_PANE_WIDTH;
   const listWidth = sidebarVisible ? LIST_PANE_WIDTH : 0;
   const mainWidth = Math.max(1, width - listWidth);
   const rightPanelAsMain = rightPanelVisible && mainWidth < RIGHT_PANEL_WIDTH + MIN_CHAT_PANE_WIDTH;

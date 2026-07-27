@@ -67,7 +67,10 @@ export interface Store {
 export function createStore(client: TuiClient, host: TuiHost = standaloneTuiHost): Store {
   let state: StoreState = {
     shell: null,
-    expanded: new Set<string>(),
+    expanded:
+      host.kind === "herdr"
+        ? new Set<string>([herdrSpaceExpansionKey(host.workspaceId)])
+        : new Set<string>(),
     loadedInFull: new Set<string>(),
     selection: null,
     detail: null,
@@ -96,6 +99,7 @@ export function createStore(client: TuiClient, host: TuiHost = standaloneTuiHost
       selectedThreadId(),
       state.filter,
       state.herdr?.snapshot ?? null,
+      host.kind === "herdr" ? { workspaceId: host.workspaceId, cwd: host.workspaceCwd } : null,
     );
 
   const emit = () => {
@@ -210,8 +214,10 @@ export function createStore(client: TuiClient, host: TuiHost = standaloneTuiHost
       if (next) applySelection(selectionFromRow(next));
     },
     moveThreadSelection: (delta) => {
-      const conversations = rowsNow().filter(
-        (row) => row.kind === "thread" || row.kind === "agent",
+      const conversations = rowsNow().filter((row) =>
+        host.kind === "herdr"
+          ? row.kind === "thread"
+          : row.kind === "thread" || row.kind === "agent",
       );
       if (conversations.length === 0) return;
       let index = conversations.findIndex(

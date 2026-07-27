@@ -3,6 +3,7 @@ import { createHerdrTuiHost, standaloneTuiHost, type TuiHost } from "./host.ts";
 export function tuiHostFromEnvironment(
   environment: Readonly<Record<string, string | undefined>>,
   environmentKey: string,
+  workspaceCwd = process.cwd(),
 ): TuiHost {
   if (environment.T3_TUI_HOST !== "herdr") return standaloneTuiHost;
   const socketPath = environment.HERDR_SOCKET_PATH;
@@ -17,6 +18,7 @@ export function tuiHostFromEnvironment(
     socketPath,
     paneId,
     workspaceId,
+    workspaceCwd,
     environmentKey,
     ...(environment.HERDR_PLUGIN_ID ? { pluginId: environment.HERDR_PLUGIN_ID } : {}),
     ...(environment.HERDR_PLUGIN_STATE_DIR

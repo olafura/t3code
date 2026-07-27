@@ -24,8 +24,12 @@ describe("tuiHostFromEnvironment", () => {
         HERDR_PLUGIN_STATE_DIR: "/tmp/t3-herdr",
       },
       "http://localhost:13773",
+      "/workspace/project",
     );
     expect(host.kind).toBe("herdr");
-    if (host.kind === "herdr") host.dispose();
+    if (host.kind === "herdr") {
+      expect(host.workspaceCwd).toBe("/workspace/project");
+      host.dispose();
+    }
   });
 });

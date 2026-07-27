@@ -92,8 +92,14 @@ function fakeProtocol(initial: HerdrSessionSnapshot) {
       current = snapshot([...current.panes, pane]);
       return pane;
     },
-    reportPaneMetadata: async (paneId: string, tokens: unknown) => {
-      calls.push({ method: "pane.report_metadata", value: { paneId, tokens } });
+    reportPaneAgent: async (input: unknown) => {
+      calls.push({ method: "pane.report_agent", value: input });
+    },
+    releasePaneAgent: async (input: unknown) => {
+      calls.push({ method: "pane.release_agent", value: input });
+    },
+    reportPaneMetadata: async (input: unknown) => {
+      calls.push({ method: "pane.report_metadata", value: input });
     },
     openPluginPane: async (input: unknown) => {
       calls.push({ method: "plugin.pane.open", value: input });
@@ -135,6 +141,51 @@ describe("createHerdrTuiHost", () => {
     host.dispose();
   });
 
+  test("reports the selected T3 thread through Herdr's native agent model", async () => {
+    const protocol = fakeProtocol(snapshot());
+    const host = createHerdrTuiHost(
+      {
+        socketPath: "/tmp/herdr.sock",
+        paneId: "w1:p1",
+        workspaceId: "w1",
+        pluginId: "dev.t3code",
+        environmentKey: "local",
+      },
+      protocol as never,
+    );
+
+    await host.reportThread({
+      threadId: "thread-1",
+      title: "Fix terminal integration",
+      state: "working",
+    });
+
+    expect(protocol.calls).toEqual([
+      {
+        method: "pane.report_agent",
+        value: {
+          paneId: "w1:p1",
+          source: "plugin:dev.t3code",
+          agent: "t3-code",
+          state: "working",
+          message: "Fix terminal integration",
+          sessionId: "thread-1",
+        },
+      },
+      {
+        method: "pane.report_metadata",
+        value: {
+          paneId: "w1:p1",
+          source: "plugin:dev.t3code",
+          title: "Fix terminal integration",
+          displayAgent: "T3 Code",
+          tokens: { t3_thread_id: "thread-1", t3_environment: "local" },
+        },
+      },
+    ]);
+    host.dispose();
+  });
+
   test("creates and labels a real split when no linked pane exists", async () => {
     const protocol = fakeProtocol(snapshot());
     const host = createHerdrTuiHost(
@@ -167,10 +218,81 @@ describe("createHerdrTuiHost", () => {
         method: "pane.report_metadata",
         value: {
           paneId: "w1:p3",
+          source: "plugin:dev.t3code",
           tokens: { t3_thread_id: "thread-2", t3_environment: "local" },
+          title: "T3 · Build feature",
         },
       },
     ]);
+    host.dispose();
+  });
+
+  test("does not mistake the reporting dashboard for its thread terminal", async () => {
+    const current = snapshot();
+    const protocol = fakeProtocol({
+      ...current,
+      panes: current.panes.map((pane) =>
+        pane.pane_id === "w1:p1" ? { ...pane, tokens: { t3_thread_id: "thread-dashboard" } } : pane,
+      ),
+    });
+    const host = createHerdrTuiHost(
+      {
+        socketPath: "/tmp/herdr.sock",
+        paneId: "w1:p1",
+        workspaceId: "w1",
+        environmentKey: "local",
+      },
+      protocol as never,
+    );
+    host.start();
+    await Promise.resolve();
+
+    await host.openThreadTerminal({
+      threadId: "thread-dashboard",
+      title: "Dashboard thread",
+      cwd: "/repo/worktree",
+    });
+
+    expect(protocol.calls[0]).toEqual({
+      method: "pane.split",
+      value: {
+        targetPaneId: "w1:p1",
+        workspaceId: "w1",
+        cwd: "/repo/worktree",
+      },
+    });
+    host.dispose();
+  });
+
+  test("falls back to the project when a thread worktree no longer exists", async () => {
+    const protocol = fakeProtocol(snapshot());
+    const host = createHerdrTuiHost(
+      {
+        socketPath: "/tmp/herdr.sock",
+        paneId: "w1:p1",
+        workspaceId: "w1",
+        environmentKey: "local",
+        isDirectory: async (path) => path === "/repo",
+      },
+      protocol as never,
+    );
+    host.start();
+    await Promise.resolve();
+    await host.openThreadTerminal({
+      threadId: "thread-stale",
+      title: "Old worktree",
+      cwd: "/repo/.t3/worktrees/stale",
+      fallbackCwd: "/repo",
+    });
+
+    expect(protocol.calls[0]).toEqual({
+      method: "pane.split",
+      value: {
+        targetPaneId: "w1:p1",
+        workspaceId: "w1",
+        cwd: "/repo",
+      },
+    });
     host.dispose();
   });
 });
