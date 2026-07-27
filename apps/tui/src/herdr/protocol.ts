@@ -231,10 +231,6 @@ export class HerdrProtocolClient {
     this.socketFactory = socketFactory;
   }
 
-  async connect(): Promise<void> {
-    await this.ping();
-  }
-
   onEvent(listener: (event: HerdrEventEnvelope) => void): () => void {
     this.eventListeners.add(listener);
     return () => this.eventListeners.delete(listener);

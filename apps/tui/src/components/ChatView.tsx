@@ -392,6 +392,7 @@ export function ChatView({
         selectedThreadId,
         state.filter,
         state.herdr?.snapshot ?? null,
+        host.kind === "herdr" ? { workspaceId: host.workspaceId, cwd: host.workspaceCwd } : null,
       ),
     [
       state.shell,
@@ -400,6 +401,7 @@ export function ChatView({
       selectedThreadId,
       state.filter,
       state.herdr?.snapshot,
+      host,
     ],
   );
   const detail = state.detail;
@@ -565,6 +567,9 @@ export function ChatView({
       projects.find((p) => p.id === detail.projectId)?.workspaceRoot ??
       process.cwd())
     : process.cwd();
+  const terminalFallbackCwd = detail
+    ? (projects.find((project) => project.id === detail.projectId)?.workspaceRoot ?? terminalCwd)
+    : terminalCwd;
   const composerCwd =
     focus === "new"
       ? ((newWorkspaceMode === "current" ? newContextWorktreePath : null) ??
@@ -939,6 +944,10 @@ export function ChatView({
     ) {
       return;
     }
+    // Herdr owns project navigation. Before its initial snapshot arrives the T3
+    // shell can briefly select a catalogue project; do not turn that transient
+    // standalone fallback into a hosted new-thread screen.
+    if (host.kind === "herdr" && state.selection?.kind === "project") return;
     if (
       state.selection?.kind === "project" &&
       selectedProjectId !== null &&
@@ -949,6 +958,7 @@ export function ChatView({
     openNewThread();
   }, [
     focus,
+    host.kind,
     openNewThread,
     selectedHerdrSpace,
     selectedProjectId,
@@ -1290,6 +1300,25 @@ export function ChatView({
     () => (detail ? derivePendingApprovals(detail.activities) : []),
     [detail],
   );
+  const reportedThreadState = working
+    ? "working"
+    : pendingUserInput !== null || approvals.length > 0
+      ? "blocked"
+      : "idle";
+  React.useEffect(() => {
+    if (host.kind !== "herdr") return;
+    void host
+      .reportThread(
+        detail
+          ? {
+              threadId: detail.id,
+              title: detail.title,
+              state: reportedThreadState,
+            }
+          : null,
+      )
+      .catch((error) => store.setStatus(`Herdr agent sync failed: ${String(error)}`, "error"));
+  }, [detail?.id, detail?.title, host, reportedThreadState, store]);
   // Held across re-derivations; clamp so a shrinking queue can't point past the end.
   const activeApprovalIndex =
     approvals.length > 0 ? Math.min(approvalIndex, approvals.length - 1) : 0;
@@ -1299,10 +1328,14 @@ export function ChatView({
       : null;
   const rightPanelVisible =
     rightPanelOpen && !diffOpen && !filesOpen && !settingsOpen && !expandedImage;
-  const columnLayout = resolveChatColumnLayout(width, rightPanelVisible);
+  const columnLayout = resolveChatColumnLayout(
+    width,
+    rightPanelVisible,
+    host.kind === "standalone",
+  );
   const { sidebarVisible, listWidth, mainWidth, chatWidth, rightWidth, rightPanelAsMain } =
     columnLayout;
-  const sidebarAsMain = !sidebarVisible && focus === "filter";
+  const sidebarAsMain = host.kind === "standalone" && !sidebarVisible && focus === "filter";
   const composerSurfaceWidth = Math.max(8, Math.min(CHAT_CONTENT_MAX_WIDTH, chatWidth - 2));
   const composerContext: ComposerDockContext | null =
     focus === "new"
@@ -1758,6 +1791,7 @@ export function ChatView({
           threadId: detail.id,
           title: detail.title,
           cwd: terminalCwd,
+          fallbackCwd: terminalFallbackCwd,
         })
         .then(
           () => store.setStatus("Terminal focused in Herdr.", "success"),
@@ -2298,13 +2332,15 @@ export function ChatView({
       keywords: "git",
       run: () => runCommand(toggleRightPanel),
     });
-    list.push({
-      id: "filter",
-      title: "Filter threads",
-      hint: "^F",
-      keywords: "search",
-      run: () => runCommand(() => setFocus("filter")),
-    });
+    if (host.kind === "standalone") {
+      list.push({
+        id: "filter",
+        title: "Filter threads",
+        hint: "^F",
+        keywords: "search",
+        run: () => runCommand(() => setFocus("filter")),
+      });
+    }
     if (detail || focus === "new") {
       list.push({
         id: "files",
@@ -2603,7 +2639,13 @@ export function ChatView({
       setRenameDraft("");
       setFocus("compose");
     },
-    onOpenFilter: () => setFocus("filter"),
+    onOpenFilter: () => {
+      if (host.kind === "standalone") {
+        setFocus("filter");
+      } else {
+        store.setStatus("Use Herdr’s sidebar to navigate Spaces and agents.");
+      }
+    },
     onCommitFilter: () => setFocus("compose"),
     onCancelFilter: () => {
       store.setFilter("");
@@ -2680,7 +2722,9 @@ export function ChatView({
   // approvals). The persistent state (^B/^O/model/reasoning) lives in the controls
   // row, so it isn't duplicated here.
   const composeHint = [
-    "Alt+↑/↓ threads",
+    ...(host.kind === "herdr"
+      ? ["Herdr sidebar: Spaces & Agents", "Alt+↑/↓ T3 threads"]
+      : ["Alt+↑/↓ threads"]),
     "Enter send",
     "^G editor",
     "^↑/^↓ size",
@@ -2691,7 +2735,7 @@ export function ChatView({
       ? [approvals.length > 1 ? "^A/^R approve (↑/↓)" : "^A/^R approve"]
       : []),
     "^K commands",
-    "^F find",
+    ...(host.kind === "standalone" ? ["^F find"] : []),
     `^L panel ${rightPanelOpen ? "▾" : "▸"}`,
     ...(composerWorking ? ["Esc stop"] : focus === "new" ? ["Esc clear"] : []),
     "^C quit",
@@ -2725,7 +2769,7 @@ export function ChatView({
   const statusLabel = `${statusStyle.glyph} ${state.status}`;
   const statusWidth = Math.min(
     Math.max(0, mainWidth - 2),
-    Math.max(8, Math.min(32, statusLabel.length)),
+    Math.max(8, Math.min(state.statusKind === "error" ? 96 : 32, statusLabel.length)),
   );
   const hintWidth = Math.max(0, mainWidth - 2 - statusWidth);
 

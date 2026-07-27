@@ -167,6 +167,7 @@ export function buildRows(
   selectedThreadId: string | null,
   filter = "",
   herdr: HerdrSessionSnapshot | null = null,
+  herdrContext: { readonly workspaceId: string; readonly cwd: string } | null = null,
 ): Row[] {
   if (!shell) return [];
   const needle = filter.trim().toLowerCase();
@@ -214,7 +215,11 @@ export function buildRows(
 
   if (herdr) {
     for (const workspace of herdr.workspaces) {
-      const cwd = canonicalPath(herdrWorkspaceCwd(herdr, workspace.workspace_id));
+      const cwd = canonicalPath(
+        workspace.workspace_id === herdrContext?.workspaceId
+          ? herdrContext.cwd
+          : herdrWorkspaceCwd(herdr, workspace.workspace_id),
+      );
       const agents = herdr.agents.filter((agent) => agent.workspace_id === workspace.workspace_id);
       const directProjects = shell.projects.filter(
         (project) => canonicalPath(project.workspaceRoot) === cwd,

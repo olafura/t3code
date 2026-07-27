@@ -310,8 +310,7 @@ describe("ChatView responsive shell", () => {
 });
 
 describe("ChatView Herdr host", () => {
-  it("Given a native Herdr agent, when selected and prompted, then its real output uses the shared composer", async () => {
-    const prompts: Array<{ readonly target: string; readonly text: string }> = [];
+  it("Given a Herdr Space, the hosted timeline leaves navigation to Herdr and opens a native terminal", async () => {
     const terminals: Array<Parameters<HerdrTuiHost["openThreadTerminal"]>[0]> = [];
     const snapshot = {
       version: "0.7.5",
@@ -356,10 +355,21 @@ describe("ChatView Herdr host", () => {
         },
       ],
     } as const satisfies HerdrSessionSnapshot;
+    const reports: Array<Parameters<HerdrTuiHost["reportThread"]>[0]> = [];
+    let herdrConnected = false;
+    let notifyHost = () => {};
     const host = {
       kind: "herdr",
-      getState: () => ({ connection: "connected", snapshot, error: null }) as const,
-      subscribe: () => () => {},
+      workspaceId: "w1",
+      workspaceCwd: "/workspace/project-one",
+      getState: () =>
+        herdrConnected
+          ? ({ connection: "connected", snapshot, error: null } as const)
+          : ({ connection: "connecting", snapshot: null, error: null } as const),
+      subscribe: (listener: () => void) => {
+        notifyHost = listener;
+        return () => {};
+      },
       start: () => {},
       dispose: () => {},
       readAgent: async () => ({
@@ -372,12 +382,12 @@ describe("ChatView Herdr host", () => {
         revision: 7,
         truncated: false,
       }),
-      promptAgent: async (target: string, text: string) => {
-        prompts.push({ target, text });
-        return snapshot.agents[0]!;
-      },
+      promptAgent: async () => snapshot.agents[0]!,
       focusAgent: async () => {},
       interruptAgent: async () => {},
+      reportThread: async (input) => {
+        reports.push(input);
+      },
       openThreadTerminal: async (input) => {
         terminals.push(input);
       },
@@ -394,21 +404,17 @@ describe("ChatView Herdr host", () => {
       await setup.renderOnce();
       await setup.flush();
     });
-    const collapsed = await setup.waitForFrame((frame) => frame.includes("Project one"));
-    const spaceRow = collapsed
-      .split("\n")
-      .findIndex((line) => line.includes("Project one") && line.includes("("));
+    expect(setup.captureCharFrame()).not.toContain("What should we build");
     await React.act(async () => {
-      await setup.mockMouse.click(4, spaceRow);
+      herdrConnected = true;
+      notifyHost();
+      await setup.renderOnce();
       await setup.flush();
     });
-    const expanded = await setup.waitForFrame((frame) => frame.includes("Reviewer"));
-    const threadRow = expanded.split("\n").findIndex((line) => line.includes("Thread one"));
-    await React.act(async () => {
-      await setup.mockMouse.click(8, threadRow);
-      await setup.flush();
-    });
-    await setup.waitForFrame((frame) => frame.includes("Ask anything"));
+    const hosted = await setup.waitForFrame((frame) => frame.includes("Ask anything"));
+    expect(hosted).not.toContain("Search projects");
+    expect(hosted).not.toContain("Reviewer");
+    await setup.waitFor(() => reports.some((report) => report?.threadId === "t1"));
     await React.act(async () => {
       setup.mockInput.pressKey("e", { ctrl: true });
       await setup.renderOnce();
@@ -417,31 +423,10 @@ describe("ChatView Herdr host", () => {
     expect(terminals[0]).toMatchObject({
       threadId: "t1",
       cwd: "/workspace/project-one",
+      fallbackCwd: "/workspace/project-one",
     });
     const withTerminal = setup.captureCharFrame();
     expect(withTerminal).not.toContain("Terminal ·");
-
-    const agentRow = withTerminal.split("\n").findIndex((line) => line.includes("Reviewer"));
-    await React.act(async () => {
-      await setup.mockMouse.click(8, agentRow);
-      await setup.flush();
-    });
-    const agentFrame = await setup.waitForFrame(
-      (frame) => frame.includes("native agent output") && frame.includes("Prompt Reviewer"),
-    );
-    expect(agentFrame).not.toContain("model gpt-5");
-
-    await React.act(async () => {
-      await setup.mockInput.typeText("review the implementation");
-      await setup.renderOnce();
-    });
-    await setup.waitForFrame((frame) => frame.includes("review the implementation"));
-    await React.act(async () => {
-      setup.mockInput.pressEnter();
-      await setup.renderOnce();
-    });
-    await setup.waitFor(() => prompts.length === 1);
-    expect(prompts).toEqual([{ target: "w1:p2", text: "review the implementation" }]);
     setup.renderer.destroy();
   });
 
@@ -476,6 +461,8 @@ describe("ChatView Herdr host", () => {
     } as const satisfies HerdrSessionSnapshot;
     const host = {
       kind: "herdr",
+      workspaceId: "w-new",
+      workspaceCwd: "/workspace/new-service",
       getState: () => ({ connection: "connected", snapshot, error: null }) as const,
       subscribe: () => () => {},
       start: () => {},
@@ -488,6 +475,7 @@ describe("ChatView Herdr host", () => {
       },
       focusAgent: async () => {},
       interruptAgent: async () => {},
+      reportThread: async () => {},
       openThreadTerminal: async () => {},
       openServerPane: async () => {},
     } satisfies HerdrTuiHost;

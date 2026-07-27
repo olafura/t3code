@@ -26,6 +26,14 @@ describe("responsive chat layout", () => {
     expect(layout.chatWidth).toBe(72);
   });
 
+  it("Given Herdr owns navigation, the conversation uses the full hosted pane", () => {
+    const layout = resolveChatColumnLayout(160, false, false);
+    expect(layout.sidebarVisible).toBe(false);
+    expect(layout.listWidth).toBe(0);
+    expect(layout.mainWidth).toBe(160);
+    expect(layout.chatWidth).toBe(160);
+  });
+
   it("Given a narrow main column, an open detail panel replaces the conversation", () => {
     const layout = resolveChatColumnLayout(100, true);
     expect(layout.rightPanelAsMain).toBe(true);
