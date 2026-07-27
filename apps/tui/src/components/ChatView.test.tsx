@@ -329,7 +329,7 @@ describe("ChatView responsive shell", () => {
 });
 
 describe("ChatView Herdr host", () => {
-  it("Given a Herdr Space, the hosted timeline toggles T3 navigation and opens the synced terminal drawer", async () => {
+  it("Given a Herdr Space, the hosted timeline toggles T3 navigation and opens one synced native terminal pane", async () => {
     const snapshot = {
       version: "0.7.5",
       protocol: 17,
@@ -374,6 +374,7 @@ describe("ChatView Herdr host", () => {
       ],
     } as const satisfies HerdrSessionSnapshot;
     const reports: Array<Parameters<HerdrTuiHost["reportThread"]>[0]> = [];
+    const openedTerminals: string[] = [];
     let herdrConnected = false;
     let notifyHost = () => {};
     const host = {
@@ -406,6 +407,17 @@ describe("ChatView Herdr host", () => {
       reportThread: async (input) => {
         reports.push(input);
       },
+      openThreadTerminal: async (input) => {
+        openedTerminals.push(input.terminalId);
+        return {
+          paneId: "w1:p3",
+          index: input.index,
+          total: input.total,
+          created: false,
+        };
+      },
+      focusThreadTerminalPane: async () => true,
+      closeThreadTerminalPane: async () => {},
       openServerPane: async () => {},
     } satisfies HerdrTuiHost;
     const terminalSummary = (terminalId: string) => ({
@@ -453,7 +465,7 @@ describe("ChatView Herdr host", () => {
       await setup.renderOnce();
     });
     const withT3Sidebar = await setup.waitForFrame((frame) => frame.includes("Search projects"));
-    expect(withT3Sidebar).toContain("Reviewer");
+    expect(withT3Sidebar).not.toContain("Reviewer");
     await React.act(async () => {
       setup.mockInput.pressKey("f", { ctrl: true });
       await setup.renderOnce();
@@ -489,11 +501,7 @@ describe("ChatView Herdr host", () => {
       frame.includes("Terminal · Thread one"),
     );
     expect(withTerminal).toContain("+ new");
-    await setup.waitFor(
-      () =>
-        fake.subscribedTerminalIds.includes("term-1") &&
-        fake.subscribedTerminalIds.includes("term-2"),
-    );
+    await setup.waitFor(() => openedTerminals.includes("term-1"));
     await React.act(async () => {
       setup.mockInput.pressKey("p", { ctrl: true });
       await setup.renderOnce();
@@ -514,7 +522,7 @@ describe("ChatView Herdr host", () => {
       setup.mockInput.pressEnter();
       await setup.renderOnce();
     });
-    await setup.waitFor(() => fake.subscribedTerminalIds.includes("term-3"));
+    await setup.waitFor(() => openedTerminals.includes("term-3"));
     await React.act(async () => {
       setup.mockInput.pressKey("p", { ctrl: true });
       await setup.renderOnce();
@@ -580,6 +588,14 @@ describe("ChatView Herdr host", () => {
       focusAgent: async () => {},
       interruptAgent: async () => {},
       reportThread: async () => {},
+      openThreadTerminal: async (input) => ({
+        paneId: "w-new:p2",
+        index: input.index,
+        total: input.total,
+        created: false,
+      }),
+      focusThreadTerminalPane: async () => true,
+      closeThreadTerminalPane: async () => {},
       openServerPane: async () => {},
     } satisfies HerdrTuiHost;
     const createdProjects: Array<Parameters<TuiClient["createProject"]>[0]> = [];

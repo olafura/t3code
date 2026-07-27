@@ -3,6 +3,7 @@ import {
   type GitStackedAction,
   type VcsStatusResult,
 } from "@t3tools/contracts";
+import * as NodePath from "node:path";
 
 import type { OrchestrationShellSnapshot, OrchestrationThread, TuiClient } from "./connection.ts";
 import { gitActionNeedsCommitMessage } from "./gitActions.logic.ts";
@@ -67,10 +68,7 @@ export interface Store {
 export function createStore(client: TuiClient, host: TuiHost = standaloneTuiHost): Store {
   let state: StoreState = {
     shell: null,
-    expanded:
-      host.kind === "herdr"
-        ? new Set<string>([herdrSpaceExpansionKey(host.workspaceId)])
-        : new Set<string>(),
+    expanded: new Set<string>(),
     loadedInFull: new Set<string>(),
     selection: null,
     detail: null,
@@ -98,8 +96,8 @@ export function createStore(client: TuiClient, host: TuiHost = standaloneTuiHost
       state.loadedInFull,
       selectedThreadId(),
       state.filter,
-      state.herdr?.snapshot ?? null,
-      host.kind === "herdr" ? { workspaceId: host.workspaceId, cwd: host.workspaceCwd } : null,
+      null,
+      null,
     );
 
   const emit = () => {
@@ -187,9 +185,18 @@ export function createStore(client: TuiClient, host: TuiHost = standaloneTuiHost
           b.updatedAt.localeCompare(a.updatedAt),
         );
         const nextShell = { ...shell, threads: sortedThreads };
+        const expanded = new Set(state.expanded);
+        if (host.kind === "herdr") {
+          const workspaceRoot = NodePath.resolve(host.workspaceCwd);
+          const workspaceProject = nextShell.projects.find(
+            (project) => NodePath.resolve(project.workspaceRoot) === workspaceRoot,
+          );
+          if (workspaceProject) expanded.add(workspaceProject.id);
+        }
         state = {
           ...state,
           shell: nextShell,
+          expanded,
           status: `${nextShell.projects.length} project(s) · ${sortedThreads.length} thread(s)`,
           statusKind: "info",
         };

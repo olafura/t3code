@@ -1,3 +1,6 @@
+import * as NodeFSP from "node:fs/promises";
+import * as NodePath from "node:path";
+
 import {
   HerdrProtocolClient,
   type HerdrAgentInfo,
@@ -5,6 +8,7 @@ import {
   type HerdrReportedAgentState,
   type HerdrSessionSnapshot,
 } from "./protocol.ts";
+import { encodeHerdrTerminalSwitch, type HerdrTerminalTarget } from "./terminalBridge.ts";
 
 export type HerdrConnectionState = "connecting" | "connected" | "disconnected" | "error";
 
@@ -20,15 +24,40 @@ export interface HerdrHostOptions {
   readonly workspaceId: string;
   readonly workspaceCwd?: string;
   readonly pluginId?: string;
+  readonly stateDirectory?: string;
   readonly environmentKey: string;
+  readonly mintSocketUrl?: () => Promise<string>;
+  readonly terminalBridgeEntry?: string;
   readonly reconnectBaseMs?: number;
   readonly reconnectMaxMs?: number;
+  readonly isDirectory?: (path: string) => Promise<boolean>;
+}
+
+export interface OpenThreadTerminalInput {
+  readonly threadId: string;
+  readonly terminalId: string;
+  readonly index: number;
+  readonly total: number;
+  readonly title: string;
+  readonly cwd: string;
+  readonly worktreePath?: string | null;
+  readonly fallbackCwd?: string;
 }
 
 export interface ReportThreadAgentInput {
   readonly threadId: string;
   readonly title: string;
   readonly state: HerdrReportedAgentState;
+  readonly project?: string;
+  readonly branch?: string | null;
+  readonly model?: string | null;
+}
+
+export interface HerdrThreadTerminalResult {
+  readonly paneId: string;
+  readonly index: number;
+  readonly total: number;
+  readonly created: boolean;
 }
 
 export interface HerdrTuiHost {
@@ -44,6 +73,11 @@ export interface HerdrTuiHost {
   readonly focusAgent: (target: string) => Promise<void>;
   readonly interruptAgent: (target: string) => Promise<void>;
   readonly reportThread: (input: ReportThreadAgentInput | null) => Promise<void>;
+  readonly openThreadTerminal: (
+    input: OpenThreadTerminalInput,
+  ) => Promise<HerdrThreadTerminalResult>;
+  readonly focusThreadTerminalPane: () => Promise<boolean>;
+  readonly closeThreadTerminalPane: () => Promise<void>;
   readonly openServerPane: () => Promise<void>;
 }
 
@@ -57,6 +91,63 @@ export const standaloneTuiHost: StandaloneTuiHost = { kind: "standalone" };
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+async function isDirectory(path: string): Promise<boolean> {
+  try {
+    return (await NodeFSP.stat(path)).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+async function terminalCwd(
+  input: OpenThreadTerminalInput,
+  checkDirectory: (path: string) => Promise<boolean>,
+): Promise<string> {
+  if (!input.fallbackCwd || input.fallbackCwd === input.cwd) return input.cwd;
+  if (await checkDirectory(input.cwd)) return input.cwd;
+  if (await checkDirectory(input.fallbackCwd)) return input.fallbackCwd;
+  throw new Error("Neither the thread worktree nor its project directory exists.");
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", "'\\''")}'`;
+}
+
+export function herdrTerminalBridgeCommand(input: {
+  readonly executable: string;
+  readonly entry: string;
+  readonly target: HerdrTerminalTarget;
+  readonly herdrSocketPath: string;
+  readonly dashboardPaneId: string;
+  readonly logPath: string;
+}): string {
+  return [
+    input.executable,
+    input.entry,
+    "--herdr-terminal-bridge",
+    "--socket-url",
+    input.target.socketUrl,
+    "--origin",
+    input.target.origin,
+    "--thread-id",
+    input.target.threadId,
+    "--terminal-id",
+    input.target.terminalId,
+    "--cwd",
+    input.target.cwd,
+    "--worktree-path",
+    input.target.worktreePath ?? "-",
+    "--herdr-socket-path",
+    input.herdrSocketPath,
+    "--dashboard-pane-id",
+    input.dashboardPaneId,
+    "--log-path",
+    input.logPath,
+  ]
+    .map(shellQuote)
+    .join(" ");
 }
 
 export function createHerdrTuiHost(
@@ -75,9 +166,19 @@ export function createHerdrTuiHost(
   let reconnectAttempt = 0;
   let refreshTimer: ReturnType<typeof setTimeout> | null = null;
   let syncing: Promise<void> | null = null;
+  let terminalOperations: Promise<void> = Promise.resolve();
   let threadReported = false;
   const agentName = "t3-code";
   const pluginSource = `plugin:${options.pluginId ?? "dev.t3code"}`;
+  const environmentToken = options.environmentKey.slice(0, 80);
+
+  const terminalBridgePane = (snapshot: HerdrSessionSnapshot) =>
+    snapshot.panes.find(
+      (pane) =>
+        pane.pane_id !== options.paneId &&
+        pane.tokens?.t3_environment === environmentToken &&
+        pane.tokens.t3_terminal_bridge === "1",
+    );
 
   const emit = () => {
     for (const listener of listeners) listener();
@@ -115,6 +216,15 @@ export function createHerdrTuiHost(
       });
     }, 25);
     refreshTimer.unref?.();
+  };
+
+  const runTerminalOperation = <A>(operation: () => Promise<A>): Promise<A> => {
+    const result = terminalOperations.then(operation, operation);
+    terminalOperations = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
   };
 
   const sync = async (): Promise<void> => {
@@ -194,14 +304,101 @@ export function createHerdrTuiHost(
         paneId: options.paneId,
         source: pluginSource,
         title: input.title,
-        displayAgent: "T3 Code",
+        displayAgent: input.title,
         tokens: {
           t3_thread_id: input.threadId,
-          t3_environment: options.environmentKey.slice(0, 80),
+          t3_environment: environmentToken,
+          t3_project: input.project?.slice(0, 80) ?? null,
+          t3_branch: input.branch?.slice(0, 80) ?? null,
+          t3_model: input.model?.slice(0, 80) ?? null,
         },
       });
       threadReported = true;
     },
+    openThreadTerminal: (input) =>
+      runTerminalOperation(async () => {
+        if (!options.mintSocketUrl || !options.terminalBridgeEntry) {
+          throw new Error("The T3 terminal bridge is unavailable in this Herdr pane.");
+        }
+        const cwd = await terminalCwd(input, options.isDirectory ?? isDirectory);
+        const target: HerdrTerminalTarget = {
+          socketUrl: await options.mintSocketUrl(),
+          origin: options.environmentKey,
+          threadId: input.threadId,
+          terminalId: input.terminalId,
+          cwd,
+          worktreePath: input.worktreePath ?? null,
+        };
+        const current = await client.snapshot();
+        let pane = terminalBridgePane(current);
+        const created = !pane;
+        if (!pane) {
+          pane = await client.splitPane({
+            targetPaneId: options.paneId,
+            workspaceId: options.workspaceId,
+            cwd,
+            direction: "down",
+            ratio: 0.62,
+          });
+        }
+        const terminalTitle = `Terminal ${input.index}/${input.total} · ${input.title}`;
+        await client.reportPaneAgent({
+          paneId: pane.pane_id,
+          source: pluginSource,
+          agent: "t3-terminal",
+          state: "idle",
+          message: terminalTitle,
+        });
+        await client.reportPaneMetadata({
+          paneId: pane.pane_id,
+          source: pluginSource,
+          tokens: {
+            t3_thread_id: input.threadId,
+            t3_environment: environmentToken,
+            t3_terminal_bridge: "1",
+            t3_terminal_id: input.terminalId.slice(0, 80),
+            t3_terminal_index: String(input.index),
+          },
+          title: terminalTitle,
+          displayAgent: terminalTitle,
+        });
+        if (created) {
+          const command = herdrTerminalBridgeCommand({
+            executable: process.execPath,
+            entry: options.terminalBridgeEntry,
+            target,
+            herdrSocketPath: options.socketPath,
+            dashboardPaneId: options.paneId,
+            logPath: options.stateDirectory
+              ? NodePath.join(options.stateDirectory, "terminal-bridge.log")
+              : "/tmp/t3-herdr-terminal.log",
+          });
+          await client.sendPaneInput(pane.pane_id, command, ["enter"]);
+        } else {
+          await client.sendPaneInput(pane.pane_id, encodeHerdrTerminalSwitch(target));
+          await client.focusPane(pane.pane_id);
+        }
+        await refreshSnapshot();
+        return {
+          paneId: pane.pane_id,
+          index: input.index,
+          total: input.total,
+          created,
+        };
+      }),
+    focusThreadTerminalPane: async () => {
+      const pane = terminalBridgePane(await client.snapshot());
+      if (!pane) return false;
+      await client.focusPane(pane.pane_id);
+      return true;
+    },
+    closeThreadTerminalPane: () =>
+      runTerminalOperation(async () => {
+        const pane = terminalBridgePane(await client.snapshot());
+        if (!pane) return;
+        await client.closePane(pane.pane_id);
+        await refreshSnapshot();
+      }),
     openServerPane: async () => {
       if (!options.pluginId) {
         throw new Error("The Herdr plugin id is unavailable.");

@@ -7,6 +7,7 @@ import { buildTuiRuntime, makeTuiClient, type TuiOptions } from "./connection.ts
 import { detectKittyGraphicsTerminal } from "./terminalGraphics.ts";
 import { prepareTerminalViewport, TUI_RENDERER_CONFIG } from "./terminalStartup.ts";
 import { tuiHostFromEnvironment } from "./herdr/environment.ts";
+import { HERDR_TERMINAL_BRIDGE_FLAG, runHerdrTerminalBridge } from "./herdr/terminalBridge.ts";
 
 // This is the Bun entry point spawned by the Node `t3 tui` command. It receives
 // the server origin + a bearer token via env, and mints fresh websocket URLs by
@@ -88,7 +89,7 @@ async function main(): Promise<void> {
   const options: TuiOptions = { origin, bearerToken, mintSocketUrl, logPath };
   const runtime = buildTuiRuntime(options);
   const client = makeTuiClient(runtime, origin);
-  const host = tuiHostFromEnvironment(process.env, origin, process.cwd());
+  const host = tuiHostFromEnvironment(process.env, origin, process.cwd(), mintSocketUrl);
 
   // A tmux pane can still be showing scrollback when this child starts. Return it
   // to the live screen before entering OpenTUI's alternate screen so the complete
@@ -153,7 +154,11 @@ async function main(): Promise<void> {
   process.exit(0);
 }
 
-main().catch((error) => {
+const bridgeFlagIndex = process.argv.indexOf(HERDR_TERMINAL_BRIDGE_FLAG);
+const program =
+  bridgeFlagIndex >= 0 ? runHerdrTerminalBridge(process.argv.slice(bridgeFlagIndex + 1)) : main();
+
+program.catch((error) => {
   process.stderr.write(`t3 tui crashed: ${String(error)}\n`);
   process.exit(1);
 });

@@ -4,18 +4,21 @@ This plugin hosts the existing T3 Code terminal UI inside Herdr. T3 Code keeps
 ownership of structured projects, threads, and timelines; Herdr supplies Spaces,
 native agents, and real terminal panes.
 
-In hosted mode, Herdr owns navigation by default. Press `Ctrl-F` to show or hide
-T3's full projects-and-threads sidebar when you need functionality Herdr's
-native sidebar cannot expose. The current Herdr Space selects the project
-checkout, and the active T3 thread reports semantic working, blocked, or idle
-state into Herdr's native Agents sidebar. `Ctrl-E` opens the selected T3
-terminal below the prompt, using the same drawer and terminal tab strip as the
-standalone TUI. It attaches to the same server terminal session used by the web
-and standalone TUI, so history, output, and input stay shared across clients.
+In hosted mode, Herdr owns Spaces and Agents. The active T3 thread is reported
+as a native Herdr Agent, including its title, project, branch, model, and
+working/blocked/idle state. Press `Ctrl-F` to show or hide T3's own
+projects-and-threads sidebar; Herdr's plugin API can decorate and filter native
+Space/Agent rows, but cannot inject an arbitrary project/thread tree.
 
-Use the T3 command palette (`Ctrl-K`) to create, close, clear, restart, or focus
-the next/previous terminal. Only the selected terminal is visible; background
-terminal tabs remain attached and continue buffering output.
+`Ctrl-E` asks Herdr to split one real terminal pane below the dashboard. T3's
+compact terminal tab strip switches which server terminal that pane is attached
+to, so opening more terminal instances does not create more Herdr panes or
+top-level tabs. History, output, and input stay shared with the web and
+standalone clients. Press `Ctrl-P` in the terminal to focus the T3 dashboard.
+
+Use the T3 command palette (`Ctrl-K`) to create, close, clear, restart, or switch
+terminal instances. Only the selected terminal is attached to the native pane;
+the server continues owning the other sessions.
 
 Requirements:
 
