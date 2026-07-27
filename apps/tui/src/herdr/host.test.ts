@@ -234,6 +234,7 @@ describe("createHerdrTuiHost", () => {
     const sends = protocol.calls.filter((call) => call.method === "pane.send_input");
     expect(sends).toHaveLength(2);
     expect(JSON.stringify(sends[0]?.value)).toContain("--herdr-terminal-bridge");
+    expect(JSON.stringify(sends[0]?.value)).toContain("--terminal-pane-id");
     expect(JSON.stringify(sends[1]?.value)).toContain("\\u001bP+t3-terminal;");
     expect(protocol.calls).toContainEqual({ method: "pane.focus", value: "w1:p3" });
     host.dispose();

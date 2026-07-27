@@ -126,3 +126,29 @@ export function reduceKnownTerminals(
   else next.set(event.threadId, ids);
   return next;
 }
+
+/**
+ * Keep the dashboard's terminal drawer state aligned with Herdr's native pane.
+ * Absence is only considered a close after the pane has appeared once, because
+ * opening the split and receiving the next Herdr snapshot are asynchronous.
+ */
+export function reconcileHostedTerminalPaneVisibility(input: {
+  readonly open: boolean;
+  readonly panePresent: boolean;
+  readonly paneSeen: boolean;
+}): {
+  readonly paneSeen: boolean;
+  readonly shouldCloseLocalTerminal: boolean;
+} {
+  if (input.panePresent) {
+    return {
+      paneSeen: true,
+      shouldCloseLocalTerminal: false,
+    };
+  }
+
+  return {
+    paneSeen: false,
+    shouldCloseLocalTerminal: input.open && input.paneSeen,
+  };
+}
