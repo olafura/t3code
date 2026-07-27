@@ -1,9 +1,20 @@
 import * as NodeNet from "node:net";
 
 export const HERDR_MIN_PROTOCOL = 17;
+export const HERDR_SIDEBAR_PROTOCOL = 19;
 
 export type HerdrAgentStatus = "idle" | "working" | "blocked" | "done" | "unknown";
 export type HerdrReportedAgentState = Exclude<HerdrAgentStatus, "done">;
+
+export interface HerdrAgentViewItem {
+  readonly id: string;
+  readonly targetPaneId: string;
+  readonly label: string;
+  readonly status: HerdrAgentStatus;
+  readonly seen: boolean;
+  readonly tokens: Readonly<Record<string, string>>;
+  readonly activationInput: string;
+}
 
 export interface HerdrWorktreeInfo {
   readonly repo_key: string;
@@ -401,6 +412,34 @@ export class HerdrProtocolClient {
 
   async sendAgentKeys(target: string, keys: ReadonlyArray<string>): Promise<void> {
     await this.request("agent.send_keys", { target, keys });
+  }
+
+  async setAgentView(input: {
+    readonly source: string;
+    readonly label?: string;
+    readonly filter?: Readonly<Record<string, unknown>>;
+    readonly sort?: ReadonlyArray<Readonly<Record<string, unknown>>>;
+    readonly items: ReadonlyArray<HerdrAgentViewItem>;
+  }): Promise<void> {
+    await this.request("agent.view.set", {
+      source: input.source,
+      ...(input.label ? { label: input.label } : {}),
+      ...(input.filter ? { filter: input.filter } : {}),
+      ...(input.sort ? { sort: input.sort } : {}),
+      items: input.items.map((item) => ({
+        id: item.id,
+        target_pane_id: item.targetPaneId,
+        label: item.label,
+        status: item.status,
+        seen: item.seen,
+        tokens: item.tokens,
+        activation_input: item.activationInput,
+      })),
+    });
+  }
+
+  async clearAgentView(source: string): Promise<void> {
+    await this.request("agent.view.clear", { source });
   }
 
   async focusPane(paneId: string): Promise<void> {

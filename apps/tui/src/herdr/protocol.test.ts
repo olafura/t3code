@@ -258,6 +258,54 @@ describe("HerdrProtocolClient", () => {
     });
   });
 
+  test("preserves interactive native sidebar item fields", async () => {
+    const fixture = await withServer((request, socket) => {
+      socket.write(`${JSON.stringify({ id: request.id, result: { type: "agent_view_set" } })}\n`);
+    });
+    const client = new HerdrProtocolClient(fixture.socketPath);
+    cleanups.push(async () => client.dispose());
+
+    await client.setAgentView({
+      source: "plugin:dev.t3code",
+      label: "T3 Code",
+      filter: { op: "not", filter: { op: "exists", field: { token: "other" } } },
+      sort: [{ field: { token: "t3_order" }, order: "asc" }],
+      items: [
+        {
+          id: "thread:t1",
+          targetPaneId: "w1:p1",
+          label: "Fix sidebar",
+          status: "working",
+          seen: true,
+          tokens: { project: "t3code", selected: "1", t3_order: "000002" },
+          activationInput: "\u001bP+t3-sidebar;payload\u001b\\",
+        },
+      ],
+    });
+
+    expect(fixture.requests[0]).toEqual({
+      id: "t3_1",
+      method: "agent.view.set",
+      params: {
+        source: "plugin:dev.t3code",
+        label: "T3 Code",
+        filter: { op: "not", filter: { op: "exists", field: { token: "other" } } },
+        sort: [{ field: { token: "t3_order" }, order: "asc" }],
+        items: [
+          {
+            id: "thread:t1",
+            target_pane_id: "w1:p1",
+            label: "Fix sidebar",
+            status: "working",
+            seen: true,
+            tokens: { project: "t3code", selected: "1", t3_order: "000002" },
+            activation_input: "\u001bP+t3-sidebar;payload\u001b\\",
+          },
+        ],
+      },
+    });
+  });
+
   test("feeds and closes the plugin-owned terminal pane", async () => {
     const fixture = await withServer((request, socket) => {
       socket.write(`${JSON.stringify({ id: request.id, result: { type: "ok" } })}\n`);

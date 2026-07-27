@@ -53,6 +53,7 @@ import { useKittyGraphicsSupport } from "../hooks/useKittyGraphicsSupport.ts";
 import { latestActionableProposedPlan } from "../proposedPlan.ts";
 import { createStore } from "../store.ts";
 import { herdrWorkspaceCwd, standaloneTuiHost, type TuiHost } from "../herdr/host.ts";
+import { buildHerdrSidebarItems } from "../herdr/sidebar.ts";
 import { statusGlyphColor, usePalette } from "../theme.ts";
 import {
   currentModelIndex,
@@ -328,10 +329,10 @@ export function ChatView({
   const [loadingOlder, setLoadingOlder] = React.useState(false);
   const [rightPanelFocused, setRightPanelFocused] = React.useState(false);
   const [rightPanelIndex, setRightPanelIndex] = React.useState(0);
-  // Herdr owns the default navigation sidebar, but its native sidebar cannot
-  // expose every T3 project/thread action. Keep the full T3 sidebar available
-  // on demand without permanently duplicating Herdr's navigation.
-  const [hostedSidebarOpen, setHostedSidebarOpen] = React.useState(false);
+  // Keep T3's full navigation visible until native Herdr sidebar integration is
+  // confirmed. It is also the editable search/new-thread surface reached from
+  // the corresponding native sidebar actions.
+  const [hostedSidebarOpen, setHostedSidebarOpen] = React.useState(host.kind === "herdr");
   // User-set prompt height in editor rows; null = auto-grow with content.
   const [promptHeight, setPromptHeight] = React.useState<number | null>(null);
   // Multiple terminals per thread (the TUI form of the web's terminal groups):
@@ -417,6 +418,22 @@ export function ChatView({
       host,
     ],
   );
+  const herdrSidebarItems = React.useMemo(
+    () =>
+      host.kind === "herdr"
+        ? buildHerdrSidebarItems({
+            rows,
+            selection: state.selection,
+          })
+        : [],
+    [host.kind, rows, state.selection],
+  );
+  React.useEffect(() => {
+    if (host.kind !== "herdr") return;
+    void host
+      .reportSidebar(herdrSidebarItems)
+      .catch((error) => store.setStatus(`Herdr sidebar sync failed: ${String(error)}`, "error"));
+  }, [herdrSidebarItems, host, store]);
   const detail = state.detail;
   const [herdrAgentRead, setHerdrAgentRead] = React.useState<HerdrAgentReadState>({
     status: "loading",
@@ -953,6 +970,28 @@ export function ChatView({
     state.herdr?.snapshot,
     state.selection?.kind,
   ]);
+
+  React.useEffect(() => {
+    if (host.kind !== "herdr") return;
+    return host.subscribeSidebarActions((action) => {
+      setTerminalFocused(false);
+      if (action.kind === "search") {
+        setHostedSidebarOpen(true);
+        setFocus("filter");
+      } else if (action.kind === "new") {
+        openNewThread();
+      } else if (action.kind === "project") {
+        store.toggleProject(action.id);
+        setFocus("compose");
+      } else if (action.kind === "thread") {
+        store.select({ kind: "thread", id: action.id });
+        setFocus("compose");
+      } else {
+        store.loadMore(action.id);
+        setFocus("compose");
+      }
+    });
+  }, [host, openNewThread, store]);
 
   React.useEffect(() => {
     if (
