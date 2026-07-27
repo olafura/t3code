@@ -4,6 +4,7 @@ export function tuiHostFromEnvironment(
   environment: Readonly<Record<string, string | undefined>>,
   environmentKey: string,
   workspaceCwd = process.cwd(),
+  mintSocketUrl?: () => Promise<string>,
 ): TuiHost {
   if (environment.T3_TUI_HOST !== "herdr") return standaloneTuiHost;
   const socketPath = environment.HERDR_SOCKET_PATH;
@@ -20,6 +21,8 @@ export function tuiHostFromEnvironment(
     workspaceId,
     workspaceCwd,
     environmentKey,
+    ...(mintSocketUrl ? { mintSocketUrl } : {}),
+    ...(process.argv[1] ? { terminalBridgeEntry: process.argv[1] } : {}),
     ...(environment.HERDR_PLUGIN_ID ? { pluginId: environment.HERDR_PLUGIN_ID } : {}),
     ...(environment.HERDR_PLUGIN_STATE_DIR
       ? { stateDirectory: environment.HERDR_PLUGIN_STATE_DIR }

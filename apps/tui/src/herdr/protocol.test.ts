@@ -258,6 +258,59 @@ describe("HerdrProtocolClient", () => {
     });
   });
 
+  test("creates a native tab and starts its terminal bridge through pane input", async () => {
+    const fixture = await withServer((request, socket) => {
+      const result =
+        request.method === "tab.create"
+          ? {
+              type: "tab_created",
+              root_pane: {
+                pane_id: "w1:p9",
+                terminal_id: "native-9",
+                workspace_id: "w1",
+                tab_id: "w1:t9",
+                focused: true,
+                agent_status: "unknown",
+                revision: 0,
+              },
+            }
+          : { type: "ok" };
+      socket.write(`${JSON.stringify({ id: request.id, result })}\n`);
+    });
+    const client = new HerdrProtocolClient(fixture.socketPath);
+    cleanups.push(async () => client.dispose());
+
+    const pane = await client.createTab({
+      workspaceId: "w1",
+      cwd: "/repo",
+      label: "Terminal 2",
+      focus: false,
+    });
+    await client.sendPaneInput(pane.pane_id, "bun bridge", ["enter"]);
+
+    expect(fixture.requests).toEqual([
+      {
+        id: "t3_1",
+        method: "tab.create",
+        params: {
+          workspace_id: "w1",
+          cwd: "/repo",
+          label: "Terminal 2",
+          focus: false,
+        },
+      },
+      {
+        id: "t3_2",
+        method: "pane.send_input",
+        params: {
+          pane_id: "w1:p9",
+          text: "bun bridge",
+          keys: ["enter"],
+        },
+      },
+    ]);
+  });
+
   test("reports a T3 thread through Herdr's semantic agent state", async () => {
     const fixture = await withServer((request, socket) => {
       socket.write(`${JSON.stringify({ id: request.id, result: { type: "ok" } })}\n`);

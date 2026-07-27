@@ -92,6 +92,27 @@ function fakeProtocol(initial: HerdrSessionSnapshot) {
       current = snapshot([...current.panes, pane]);
       return pane;
     },
+    createTab: async (input: unknown) => {
+      calls.push({ method: "tab.create", value: input });
+      const pane: HerdrPaneInfo = {
+        pane_id: "w1:p3",
+        terminal_id: "native-3",
+        workspace_id: "w1",
+        tab_id: "w1:t3",
+        focused: true,
+        agent_status: "unknown",
+        revision: 0,
+        cwd: "/repo/worktree",
+      };
+      current = snapshot([...current.panes, pane]);
+      return pane;
+    },
+    sendPaneInput: async (paneId: string, text: string, keys: ReadonlyArray<string>) => {
+      calls.push({ method: "pane.send_input", value: { paneId, text, keys } });
+    },
+    closePane: async (paneId: string) => {
+      calls.push({ method: "pane.close", value: paneId });
+    },
     reportPaneAgent: async (input: unknown) => {
       calls.push({ method: "pane.report_agent", value: input });
     },
@@ -108,6 +129,15 @@ function fakeProtocol(initial: HerdrSessionSnapshot) {
   };
 }
 
+const hostOptions = {
+  socketPath: "/tmp/herdr.sock",
+  paneId: "w1:p1",
+  workspaceId: "w1",
+  environmentKey: "http://127.0.0.1:5733",
+  mintSocketUrl: async () => "ws://127.0.0.1/ws?wsTicket=test",
+  terminalBridgeEntry: "/repo/apps/tui/dist/index.js",
+} as const;
+
 describe("createHerdrTuiHost", () => {
   test("reuses a pane linked by thread metadata", async () => {
     const protocol = fakeProtocol(
@@ -120,37 +150,34 @@ describe("createHerdrTuiHost", () => {
           focused: false,
           agent_status: "unknown",
           revision: 0,
-          tokens: { t3_thread_id: "thread-1", t3_terminal_index: "1" },
+          tokens: {
+            t3_thread_id: "thread-1",
+            t3_terminal_id: "term-1",
+            t3_terminal_index: "1",
+          },
         },
       ]),
     );
-    const host = createHerdrTuiHost(
-      {
-        socketPath: "/tmp/herdr.sock",
-        paneId: "w1:p1",
-        workspaceId: "w1",
-        environmentKey: "local",
-      },
-      protocol as never,
-    );
+    const host = createHerdrTuiHost(hostOptions, protocol as never);
     host.start();
     await Promise.resolve();
-    await host.openThreadTerminal({ threadId: "thread-1", title: "Fix it", cwd: "/repo" });
+    await host.openThreadTerminal({
+      threadId: "thread-1",
+      terminalId: "term-1",
+      index: 1,
+      total: 1,
+      title: "Fix it",
+      cwd: "/repo",
+    });
 
-    expect(protocol.calls).toEqual([{ method: "pane.focus", value: "w1:p8" }]);
+    expect(protocol.calls).toEqual([{ method: "agent.focus", value: "w1:p8" }]);
     host.dispose();
   });
 
   test("reports the selected T3 thread through Herdr's native agent model", async () => {
     const protocol = fakeProtocol(snapshot());
     const host = createHerdrTuiHost(
-      {
-        socketPath: "/tmp/herdr.sock",
-        paneId: "w1:p1",
-        workspaceId: "w1",
-        pluginId: "dev.t3code",
-        environmentKey: "local",
-      },
+      { ...hostOptions, pluginId: "dev.t3code", environmentKey: "local" },
       protocol as never,
     );
 
@@ -186,34 +213,29 @@ describe("createHerdrTuiHost", () => {
     host.dispose();
   });
 
-  test("creates and labels a real split when no linked pane exists", async () => {
+  test("creates and labels a server-backed native terminal tab", async () => {
     const protocol = fakeProtocol(snapshot());
-    const host = createHerdrTuiHost(
-      {
-        socketPath: "/tmp/herdr.sock",
-        paneId: "w1:p1",
-        workspaceId: "w1",
-        environmentKey: "local",
-      },
-      protocol as never,
-    );
+    const host = createHerdrTuiHost(hostOptions, protocol as never);
     host.start();
     await Promise.resolve();
     await host.openThreadTerminal({
       threadId: "thread-2",
+      terminalId: "term-2",
+      index: 2,
+      total: 3,
       title: "Build feature",
       cwd: "/repo/worktree",
+      worktreePath: "/repo/worktree",
     });
 
-    expect(protocol.calls).toEqual([
+    expect(protocol.calls.slice(0, 3)).toEqual([
       {
-        method: "pane.split",
+        method: "tab.create",
         value: {
-          targetPaneId: "w1:p1",
           workspaceId: "w1",
           cwd: "/repo/worktree",
-          direction: "down",
-          ratio: 0.62,
+          label: "Terminal 2 · Build feature",
+          focus: true,
         },
       },
       {
@@ -223,7 +245,7 @@ describe("createHerdrTuiHost", () => {
           source: "plugin:dev.t3code",
           agent: "t3-terminal",
           state: "idle",
-          message: "Terminal 1 · Build feature",
+          message: "Terminal 2 · Build feature",
         },
       },
       {
@@ -233,14 +255,22 @@ describe("createHerdrTuiHost", () => {
           source: "plugin:dev.t3code",
           tokens: {
             t3_thread_id: "thread-2",
-            t3_environment: "local",
-            t3_terminal_index: "1",
+            t3_environment: "http://127.0.0.1:5733",
+            t3_terminal_id: "term-2",
+            t3_terminal_index: "2",
           },
-          title: "Terminal 1 · Build feature",
+          title: "Terminal 2 · Build feature",
           displayAgent: "T3 Terminal",
         },
       },
     ]);
+    const launch = protocol.calls.find((call) => call.method === "pane.send_input");
+    expect(launch).toMatchObject({
+      value: { paneId: "w1:p3", keys: ["enter"] },
+    });
+    const launchText = launch ? (launch.value as { text?: string }).text : undefined;
+    expect(launchText).toContain("--terminal-id");
+    expect(launchText).toContain("term-2");
     host.dispose();
   });
 
@@ -252,32 +282,71 @@ describe("createHerdrTuiHost", () => {
         pane.pane_id === "w1:p1" ? { ...pane, tokens: { t3_thread_id: "thread-dashboard" } } : pane,
       ),
     });
-    const host = createHerdrTuiHost(
-      {
-        socketPath: "/tmp/herdr.sock",
-        paneId: "w1:p1",
-        workspaceId: "w1",
-        environmentKey: "local",
-      },
-      protocol as never,
-    );
+    const host = createHerdrTuiHost(hostOptions, protocol as never);
     host.start();
     await Promise.resolve();
 
     await host.openThreadTerminal({
       threadId: "thread-dashboard",
+      terminalId: "term-1",
+      index: 1,
+      total: 1,
       title: "Dashboard thread",
       cwd: "/repo/worktree",
     });
 
     expect(protocol.calls[0]).toEqual({
-      method: "pane.split",
+      method: "tab.create",
       value: {
-        targetPaneId: "w1:p1",
         workspaceId: "w1",
         cwd: "/repo/worktree",
-        direction: "down",
-        ratio: 0.62,
+        label: "Terminal 1 · Dashboard thread",
+        focus: true,
+      },
+    });
+    host.dispose();
+  });
+
+  test("materializes discovered server terminals as background Herdr tabs", async () => {
+    const protocol = fakeProtocol(
+      snapshot([
+        {
+          pane_id: "w1:p-old",
+          terminal_id: "native-old",
+          workspace_id: "w1",
+          tab_id: "w1:t-old",
+          focused: false,
+          agent_status: "idle",
+          revision: 1,
+          tokens: {
+            t3_thread_id: "thread-old",
+            t3_terminal_id: "term-1",
+            t3_environment: "http://127.0.0.1:5733",
+          },
+        },
+      ]),
+    );
+    const host = createHerdrTuiHost(hostOptions, protocol as never);
+
+    await host.syncThreadTerminals("thread-synced", [
+      {
+        threadId: "thread-synced",
+        terminalId: "term-4",
+        index: 4,
+        total: 4,
+        title: "Synced tabs",
+        cwd: "/repo",
+      },
+    ]);
+
+    expect(protocol.calls[0]).toEqual({ method: "pane.close", value: "w1:p-old" });
+    expect(protocol.calls[1]).toEqual({
+      method: "tab.create",
+      value: {
+        workspaceId: "w1",
+        cwd: "/repo",
+        label: "Terminal 4 · Synced tabs",
+        focus: false,
       },
     });
     host.dispose();
@@ -286,91 +355,65 @@ describe("createHerdrTuiHost", () => {
   test("falls back to the project when a thread worktree no longer exists", async () => {
     const protocol = fakeProtocol(snapshot());
     const host = createHerdrTuiHost(
-      {
-        socketPath: "/tmp/herdr.sock",
-        paneId: "w1:p1",
-        workspaceId: "w1",
-        environmentKey: "local",
-        isDirectory: async (path) => path === "/repo",
-      },
+      { ...hostOptions, isDirectory: async (path) => path === "/repo" },
       protocol as never,
     );
     host.start();
     await Promise.resolve();
     await host.openThreadTerminal({
       threadId: "thread-stale",
+      terminalId: "term-1",
+      index: 1,
+      total: 1,
       title: "Old worktree",
       cwd: "/repo/.t3/worktrees/stale",
       fallbackCwd: "/repo",
     });
 
     expect(protocol.calls[0]).toEqual({
-      method: "pane.split",
+      method: "tab.create",
       value: {
-        targetPaneId: "w1:p1",
         workspaceId: "w1",
         cwd: "/repo",
-        direction: "down",
-        ratio: 0.62,
+        label: "Terminal 1 · Old worktree",
+        focus: true,
       },
     });
     host.dispose();
   });
 
-  test("creates and cycles multiple native terminal instances", async () => {
-    const protocol = fakeProtocol(snapshot());
-    const host = createHerdrTuiHost(
-      {
-        socketPath: "/tmp/herdr.sock",
-        paneId: "w1:p1",
-        workspaceId: "w1",
-        environmentKey: "local",
-      },
-      protocol as never,
-    );
-    host.start();
-    await Promise.resolve();
+  test("closes the native tab for one exact synced terminal", async () => {
     const input = {
       threadId: "thread-many",
+      terminalId: "term-2",
+      index: 2,
+      total: 2,
       title: "Multiple terminals",
       cwd: "/repo",
     } as const;
-
-    await host.createThreadTerminal(input);
-    protocol.setSnapshot(
+    const protocol = fakeProtocol(
       snapshot([
         {
-          pane_id: "w1:p3",
-          terminal_id: "term-3",
-          workspace_id: "w1",
-          tab_id: "w1:t1",
-          focused: false,
-          agent_status: "idle",
-          revision: 1,
-          tokens: { t3_thread_id: "thread-many", t3_terminal_index: "1" },
-        },
-        {
           pane_id: "w1:p4",
-          terminal_id: "term-4",
+          terminal_id: "native-4",
           workspace_id: "w1",
-          tab_id: "w1:t1",
+          tab_id: "w1:t4",
           focused: false,
           agent_status: "idle",
           revision: 1,
-          tokens: { t3_thread_id: "thread-many", t3_terminal_index: "2" },
+          tokens: {
+            t3_thread_id: "thread-many",
+            t3_terminal_id: "term-2",
+            t3_terminal_index: "2",
+          },
         },
       ]),
     );
+    const host = createHerdrTuiHost(hostOptions, protocol as never);
 
-    const focused = await host.cycleThreadTerminal(input, 1);
+    await host.closeThreadTerminal(input);
 
-    expect(focused).toEqual({
-      paneId: "w1:p4",
-      index: 2,
-      total: 2,
-      created: false,
-    });
-    expect(protocol.calls.at(-1)).toEqual({ method: "pane.focus", value: "w1:p4" });
+    expect(protocol.calls).toEqual([{ method: "pane.close", value: "w1:p4" }]);
     host.dispose();
   });
 });
