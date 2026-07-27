@@ -390,7 +390,20 @@ describe("ChatView Herdr host", () => {
       },
       openThreadTerminal: async (input) => {
         terminals.push(input);
+        return { paneId: "w1:p3", index: 1, total: 1, created: true };
       },
+      createThreadTerminal: async () => ({
+        paneId: "w1:p4",
+        index: 2,
+        total: 2,
+        created: true,
+      }),
+      cycleThreadTerminal: async () => ({
+        paneId: "w1:p3",
+        index: 1,
+        total: 2,
+        created: false,
+      }),
       openServerPane: async () => {},
     } satisfies HerdrTuiHost;
     const fake = fakeClient({ detail: thread() });
@@ -427,6 +440,20 @@ describe("ChatView Herdr host", () => {
     });
     const withTerminal = setup.captureCharFrame();
     expect(withTerminal).not.toContain("Terminal ·");
+    await React.act(async () => {
+      setup.mockInput.pressKey("k", { ctrl: true });
+      await setup.renderOnce();
+    });
+    await setup.waitForFrame((frame) => frame.includes("Type a command"));
+    await React.act(async () => {
+      await setup.mockInput.typeText("terminal");
+      await setup.renderOnce();
+    });
+    const terminalCommands = await setup.waitForFrame((frame) =>
+      frame.includes("New real terminal below timeline"),
+    );
+    expect(terminalCommands).toContain("Next Herdr terminal for this thread");
+    expect(terminalCommands).toContain("Previous Herdr terminal for this thread");
     setup.renderer.destroy();
   });
 
@@ -476,7 +503,24 @@ describe("ChatView Herdr host", () => {
       focusAgent: async () => {},
       interruptAgent: async () => {},
       reportThread: async () => {},
-      openThreadTerminal: async () => {},
+      openThreadTerminal: async () => ({
+        paneId: "w-new:p2",
+        index: 1,
+        total: 1,
+        created: true,
+      }),
+      createThreadTerminal: async () => ({
+        paneId: "w-new:p3",
+        index: 2,
+        total: 2,
+        created: true,
+      }),
+      cycleThreadTerminal: async () => ({
+        paneId: "w-new:p2",
+        index: 1,
+        total: 2,
+        created: false,
+      }),
       openServerPane: async () => {},
     } satisfies HerdrTuiHost;
     const createdProjects: Array<Parameters<TuiClient["createProject"]>[0]> = [];

@@ -120,7 +120,7 @@ describe("createHerdrTuiHost", () => {
           focused: false,
           agent_status: "unknown",
           revision: 0,
-          tokens: { t3_thread_id: "thread-1" },
+          tokens: { t3_thread_id: "thread-1", t3_terminal_index: "1" },
         },
       ]),
     );
@@ -212,6 +212,18 @@ describe("createHerdrTuiHost", () => {
           targetPaneId: "w1:p1",
           workspaceId: "w1",
           cwd: "/repo/worktree",
+          direction: "down",
+          ratio: 0.62,
+        },
+      },
+      {
+        method: "pane.report_agent",
+        value: {
+          paneId: "w1:p3",
+          source: "plugin:dev.t3code",
+          agent: "t3-terminal",
+          state: "idle",
+          message: "Terminal 1 · Build feature",
         },
       },
       {
@@ -219,8 +231,13 @@ describe("createHerdrTuiHost", () => {
         value: {
           paneId: "w1:p3",
           source: "plugin:dev.t3code",
-          tokens: { t3_thread_id: "thread-2", t3_environment: "local" },
-          title: "T3 · Build feature",
+          tokens: {
+            t3_thread_id: "thread-2",
+            t3_environment: "local",
+            t3_terminal_index: "1",
+          },
+          title: "Terminal 1 · Build feature",
+          displayAgent: "T3 Terminal",
         },
       },
     ]);
@@ -259,6 +276,8 @@ describe("createHerdrTuiHost", () => {
         targetPaneId: "w1:p1",
         workspaceId: "w1",
         cwd: "/repo/worktree",
+        direction: "down",
+        ratio: 0.62,
       },
     });
     host.dispose();
@@ -291,8 +310,67 @@ describe("createHerdrTuiHost", () => {
         targetPaneId: "w1:p1",
         workspaceId: "w1",
         cwd: "/repo",
+        direction: "down",
+        ratio: 0.62,
       },
     });
+    host.dispose();
+  });
+
+  test("creates and cycles multiple native terminal instances", async () => {
+    const protocol = fakeProtocol(snapshot());
+    const host = createHerdrTuiHost(
+      {
+        socketPath: "/tmp/herdr.sock",
+        paneId: "w1:p1",
+        workspaceId: "w1",
+        environmentKey: "local",
+      },
+      protocol as never,
+    );
+    host.start();
+    await Promise.resolve();
+    const input = {
+      threadId: "thread-many",
+      title: "Multiple terminals",
+      cwd: "/repo",
+    } as const;
+
+    await host.createThreadTerminal(input);
+    protocol.setSnapshot(
+      snapshot([
+        {
+          pane_id: "w1:p3",
+          terminal_id: "term-3",
+          workspace_id: "w1",
+          tab_id: "w1:t1",
+          focused: false,
+          agent_status: "idle",
+          revision: 1,
+          tokens: { t3_thread_id: "thread-many", t3_terminal_index: "1" },
+        },
+        {
+          pane_id: "w1:p4",
+          terminal_id: "term-4",
+          workspace_id: "w1",
+          tab_id: "w1:t1",
+          focused: false,
+          agent_status: "idle",
+          revision: 1,
+          tokens: { t3_thread_id: "thread-many", t3_terminal_index: "2" },
+        },
+      ]),
+    );
+
+    const focused = await host.cycleThreadTerminal(input, 1);
+
+    expect(focused).toEqual({
+      paneId: "w1:p4",
+      index: 2,
+      total: 2,
+      created: false,
+    });
+    expect(protocol.calls.at(-1)).toEqual({ method: "pane.focus", value: "w1:p4" });
     host.dispose();
   });
 });

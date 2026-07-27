@@ -411,10 +411,12 @@ export class HerdrProtocolClient {
     readonly targetPaneId: string;
     readonly cwd: string;
     readonly workspaceId: string;
+    readonly direction: "right" | "down";
+    readonly ratio?: number;
   }): Promise<HerdrPaneInfo> {
     const result = await this.request("pane.split", {
-      direction: "right",
-      ratio: 0.5,
+      direction: input.direction,
+      ratio: input.ratio ?? 0.5,
       target_pane_id: input.targetPaneId,
       workspace_id: input.workspaceId,
       cwd: input.cwd,

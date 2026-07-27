@@ -31,11 +31,11 @@ export interface HerdrHostOptions {
 }
 
 interface PersistedLinks {
-  readonly version: 1;
-  readonly terminals: Readonly<Record<string, string>>;
+  readonly version: 2;
+  readonly terminals: Readonly<Record<string, ReadonlyArray<string>>>;
 }
 
-const EMPTY_LINKS: PersistedLinks = { version: 1, terminals: {} };
+const EMPTY_LINKS: PersistedLinks = { version: 2, terminals: {} };
 
 export interface OpenThreadTerminalInput {
   readonly threadId: string;
@@ -48,6 +48,13 @@ export interface ReportThreadAgentInput {
   readonly threadId: string;
   readonly title: string;
   readonly state: HerdrReportedAgentState;
+}
+
+export interface HerdrThreadTerminalResult {
+  readonly paneId: string;
+  readonly index: number;
+  readonly total: number;
+  readonly created: boolean;
 }
 
 export interface HerdrTuiHost {
@@ -63,7 +70,16 @@ export interface HerdrTuiHost {
   readonly focusAgent: (target: string) => Promise<void>;
   readonly interruptAgent: (target: string) => Promise<void>;
   readonly reportThread: (input: ReportThreadAgentInput | null) => Promise<void>;
-  readonly openThreadTerminal: (input: OpenThreadTerminalInput) => Promise<void>;
+  readonly openThreadTerminal: (
+    input: OpenThreadTerminalInput,
+  ) => Promise<HerdrThreadTerminalResult>;
+  readonly createThreadTerminal: (
+    input: OpenThreadTerminalInput,
+  ) => Promise<HerdrThreadTerminalResult>;
+  readonly cycleThreadTerminal: (
+    input: OpenThreadTerminalInput,
+    delta: 1 | -1,
+  ) => Promise<HerdrThreadTerminalResult>;
   readonly openServerPane: () => Promise<void>;
 }
 
@@ -104,11 +120,23 @@ async function terminalCwd(
 async function loadLinks(filePath: string | null): Promise<PersistedLinks> {
   if (!filePath) return EMPTY_LINKS;
   try {
-    const parsed = JSON.parse(await NodeFSP.readFile(filePath, "utf8")) as Partial<PersistedLinks>;
-    if (parsed.version !== 1 || typeof parsed.terminals !== "object" || !parsed.terminals) {
+    const parsed = JSON.parse(await NodeFSP.readFile(filePath, "utf8")) as {
+      readonly version?: unknown;
+      readonly terminals?: unknown;
+    };
+    if (typeof parsed.terminals !== "object" || !parsed.terminals) {
       return EMPTY_LINKS;
     }
-    return { version: 1, terminals: parsed.terminals };
+    const terminals = Object.fromEntries(
+      Object.entries(parsed.terminals).flatMap(([key, value]) => {
+        if (typeof value === "string") return [[key, [value]]];
+        if (Array.isArray(value) && value.every((item) => typeof item === "string")) {
+          return [[key, value]];
+        }
+        return [];
+      }),
+    );
+    return { version: 2, terminals };
   } catch {
     return EMPTY_LINKS;
   }
@@ -143,8 +171,25 @@ export function createHerdrTuiHost(
   let refreshTimer: ReturnType<typeof setTimeout> | null = null;
   let syncing: Promise<void> | null = null;
   let threadReported = false;
+  const lastFocusedTerminal = new Map<string, string>();
   const agentName = "t3-code";
   const pluginSource = `plugin:${options.pluginId ?? "dev.t3code"}`;
+
+  const threadTerminalPanes = (
+    snapshot: HerdrSessionSnapshot,
+    links: PersistedLinks,
+    input: OpenThreadTerminalInput,
+  ) => {
+    const linkKey = terminalLinkKey(options.environmentKey, input.threadId);
+    const linkedIds = new Set(links.terminals[linkKey] ?? []);
+    return snapshot.panes.filter(
+      (pane) =>
+        pane.pane_id !== options.paneId &&
+        (linkedIds.has(pane.terminal_id) ||
+          (pane.tokens?.t3_thread_id === input.threadId &&
+            pane.tokens.t3_terminal_index !== undefined)),
+    );
+  };
 
   const emit = () => {
     for (const listener of listeners) listener();
@@ -270,44 +315,50 @@ export function createHerdrTuiHost(
       threadReported = true;
     },
     openThreadTerminal: async (input) => {
-      const snapshot = state.snapshot ?? (await client.snapshot());
+      const snapshot = await client.snapshot();
       const links = await linksPromise;
-      const linkKey = terminalLinkKey(options.environmentKey, input.threadId);
-      const terminalId = links.terminals[linkKey];
-      const linkedPane =
-        snapshot.panes.find(
-          (pane) => pane.pane_id !== options.paneId && pane.terminal_id === terminalId,
-        ) ??
-        snapshot.panes.find(
-          (pane) => pane.pane_id !== options.paneId && pane.tokens?.t3_thread_id === input.threadId,
-        );
+      const terminals = threadTerminalPanes(snapshot, links, input);
+      const linkedPane = terminals[0];
       if (linkedPane) {
         await client.focusPane(linkedPane.pane_id);
-        return;
+        lastFocusedTerminal.set(input.threadId, linkedPane.pane_id);
+        return {
+          paneId: linkedPane.pane_id,
+          index: 1,
+          total: terminals.length,
+          created: false,
+        };
       }
 
-      const cwd = await terminalCwd(input, options.isDirectory ?? isDirectory);
-      const pane = await client.splitPane({
-        targetPaneId: options.paneId,
-        workspaceId: options.workspaceId,
-        cwd,
-      });
-      await client.reportPaneMetadata({
-        paneId: pane.pane_id,
-        source: pluginSource,
-        tokens: {
-          t3_thread_id: input.threadId,
-          t3_environment: options.environmentKey.slice(0, 80),
-        },
-        title: `T3 · ${input.title}`,
-      });
-      const nextLinks: PersistedLinks = {
-        version: 1,
-        terminals: { ...links.terminals, [linkKey]: pane.terminal_id },
+      return createThreadTerminal(input);
+    },
+    createThreadTerminal: async (input) => createThreadTerminal(input),
+    cycleThreadTerminal: async (input, delta) => {
+      const snapshot = await client.snapshot();
+      const links = await linksPromise;
+      const terminals = threadTerminalPanes(snapshot, links, input);
+      if (terminals.length === 0) {
+        throw new Error("This thread has no Herdr terminal instances.");
+      }
+      const focusedPaneId =
+        terminals.find((pane) => pane.pane_id === snapshot.focused_pane_id)?.pane_id ??
+        lastFocusedTerminal.get(input.threadId);
+      const focusedIndex = terminals.findIndex((pane) => pane.pane_id === focusedPaneId);
+      const nextIndex =
+        focusedIndex < 0
+          ? delta > 0
+            ? 0
+            : terminals.length - 1
+          : (focusedIndex + delta + terminals.length) % terminals.length;
+      const terminal = terminals[nextIndex]!;
+      await client.focusPane(terminal.pane_id);
+      lastFocusedTerminal.set(input.threadId, terminal.pane_id);
+      return {
+        paneId: terminal.pane_id,
+        index: nextIndex + 1,
+        total: terminals.length,
+        created: false,
       };
-      linksPromise = Promise.resolve(nextLinks);
-      await writeLinks(linksPath, nextLinks);
-      await refreshSnapshot();
     },
     openServerPane: async () => {
       if (!options.pluginId) {
@@ -321,6 +372,55 @@ export function createHerdrTuiHost(
       });
     },
   };
+
+  async function createThreadTerminal(
+    input: OpenThreadTerminalInput,
+  ): Promise<HerdrThreadTerminalResult> {
+    const snapshot = await client.snapshot();
+    const links = await linksPromise;
+    const existing = threadTerminalPanes(snapshot, links, input);
+    const cwd = await terminalCwd(input, options.isDirectory ?? isDirectory);
+    const pane = await client.splitPane({
+      targetPaneId: options.paneId,
+      workspaceId: options.workspaceId,
+      cwd,
+      direction: "down",
+      ratio: 0.62,
+    });
+    const index = existing.length + 1;
+    const terminalTitle = `Terminal ${index} · ${input.title}`;
+    await client.reportPaneAgent({
+      paneId: pane.pane_id,
+      source: pluginSource,
+      agent: "t3-terminal",
+      state: "idle",
+      message: terminalTitle,
+    });
+    await client.reportPaneMetadata({
+      paneId: pane.pane_id,
+      source: pluginSource,
+      tokens: {
+        t3_thread_id: input.threadId,
+        t3_environment: options.environmentKey.slice(0, 80),
+        t3_terminal_index: String(index),
+      },
+      title: terminalTitle,
+      displayAgent: "T3 Terminal",
+    });
+    const linkKey = terminalLinkKey(options.environmentKey, input.threadId);
+    const nextLinks: PersistedLinks = {
+      version: 2,
+      terminals: {
+        ...links.terminals,
+        [linkKey]: [...(links.terminals[linkKey] ?? []), pane.terminal_id],
+      },
+    };
+    linksPromise = Promise.resolve(nextLinks);
+    lastFocusedTerminal.set(input.threadId, pane.pane_id);
+    await writeLinks(linksPath, nextLinks);
+    await refreshSnapshot();
+    return { paneId: pane.pane_id, index, total: index, created: true };
+  }
 }
 
 export function herdrWorkspaceCwd(

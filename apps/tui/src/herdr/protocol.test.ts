@@ -129,6 +129,8 @@ describe("HerdrProtocolClient", () => {
       targetPaneId: "w1:p1",
       workspaceId: "w1",
       cwd: "/repo/worktree",
+      direction: "down",
+      ratio: 0.62,
     });
 
     expect(fixture.requests).toEqual([
@@ -141,8 +143,8 @@ describe("HerdrProtocolClient", () => {
         id: "t3_2",
         method: "pane.split",
         params: {
-          direction: "right",
-          ratio: 0.5,
+          direction: "down",
+          ratio: 0.62,
           target_pane_id: "w1:p1",
           workspace_id: "w1",
           cwd: "/repo/worktree",

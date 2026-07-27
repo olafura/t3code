@@ -1777,26 +1777,35 @@ export function ChatView({
     updateThreadTabs(detailIdForTabs, (tabs) => tabsWithDiscovered(tabs, discovered));
   }, [terminalOpen, detailIdForTabs, knownTerminals]);
 
-  // ^E shows/hides the drawer (opening focuses it); ^P flips focus between the
-  // prompt and the terminal. Opening seeds a default terminal tab for the thread.
-  const toggleTerminal = () => {
-    if (host.kind === "herdr") {
-      if (!detail) {
-        store.setStatus("Select a T3 thread before opening its terminal.");
-        return;
-      }
-      store.setStatus("Opening real terminal in Herdr…", "busy");
-      void host
-        .openThreadTerminal({
+  // ^E toggles the embedded drawer in standalone mode and opens or focuses the
+  // current thread's native shell pane when Herdr hosts the TUI.
+  const currentHerdrTerminalInput = () =>
+    detail
+      ? {
           threadId: detail.id,
           title: detail.title,
           cwd: terminalCwd,
           fallbackCwd: terminalFallbackCwd,
-        })
-        .then(
-          () => store.setStatus("Terminal focused in Herdr.", "success"),
-          (error) => store.setStatus(`terminal failed: ${String(error)}`, "error"),
-        );
+        }
+      : null;
+  const describeHerdrTerminal = (index: number, total: number, created: boolean) =>
+    `${created ? "Opened" : "Focused"} terminal ${index}/${total} in Herdr. Switch from the Agents sidebar or with Herdr’s pane-cycle keys.`;
+  const toggleTerminal = () => {
+    if (host.kind === "herdr") {
+      const input = currentHerdrTerminalInput();
+      if (!input) {
+        store.setStatus("Select a T3 thread before opening its terminal.");
+        return;
+      }
+      store.setStatus("Opening real terminal in Herdr…", "busy");
+      void host.openThreadTerminal(input).then(
+        (result) =>
+          store.setStatus(
+            describeHerdrTerminal(result.index, result.total, result.created),
+            "success",
+          ),
+        (error) => store.setStatus(`terminal failed: ${String(error)}`, "error"),
+      );
       return;
     }
     if (terminalOpen) {
@@ -1810,9 +1819,23 @@ export function ChatView({
     setTerminalFocused(true);
   };
 
-  // Open a fresh terminal tab on the selected thread (server creates it on attach).
+  // Open another terminal instance for the selected thread.
   const newTerminal = () => {
     if (!detail) return;
+    if (host.kind === "herdr") {
+      const input = currentHerdrTerminalInput();
+      if (!input) return;
+      store.setStatus("Opening another real terminal in Herdr…", "busy");
+      void host.createThreadTerminal(input).then(
+        (result) =>
+          store.setStatus(
+            describeHerdrTerminal(result.index, result.total, result.created),
+            "success",
+          ),
+        (error) => store.setStatus(`terminal failed: ${String(error)}`, "error"),
+      );
+      return;
+    }
     setTerminalOpen(true);
     setTerminalFocused(true);
     updateThreadTabs(detail.id, (tabs) => {
@@ -1834,6 +1857,19 @@ export function ChatView({
 
   const cycleTerminal = (delta: 1 | -1) => {
     if (!detail) return;
+    if (host.kind === "herdr") {
+      const input = currentHerdrTerminalInput();
+      if (!input) return;
+      void host.cycleThreadTerminal(input, delta).then(
+        (result) =>
+          store.setStatus(
+            describeHerdrTerminal(result.index, result.total, result.created),
+            "success",
+          ),
+        (error) => store.setStatus(`terminal switch failed: ${String(error)}`, "error"),
+      );
+      return;
+    }
     updateThreadTabs(detail.id, (tabs) =>
       tabs ? { ids: tabs.ids, activeId: cycleActiveId(tabs, delta) } : tabs,
     );
@@ -2283,15 +2319,28 @@ export function ChatView({
           }),
       });
     }
-    if (detail && host.kind === "standalone") {
+    if (detail) {
       list.push({
         id: "terminal-new",
-        title: "New terminal",
-        keywords: "shell group tab",
+        title: host.kind === "herdr" ? "New real terminal below timeline" : "New terminal",
+        keywords: "shell group tab pane",
         run: () => runCommand(newTerminal),
       });
     }
-    if (host.kind === "standalone" && detailTabs && detailTabs.ids.length > 1) {
+    if (detail && host.kind === "herdr") {
+      list.push({
+        id: "terminal-next",
+        title: "Next Herdr terminal for this thread",
+        keywords: "shell pane switch",
+        run: () => runCommand(() => cycleTerminal(1)),
+      });
+      list.push({
+        id: "terminal-prev",
+        title: "Previous Herdr terminal for this thread",
+        keywords: "shell pane switch",
+        run: () => runCommand(() => cycleTerminal(-1)),
+      });
+    } else if (detailTabs && detailTabs.ids.length > 1) {
       list.push({
         id: "terminal-next",
         title: "Next terminal",
@@ -2730,6 +2779,7 @@ export function ChatView({
     "^↑/^↓ size",
     "^N new",
     "^E term",
+    ...(host.kind === "herdr" ? ["^K new/switch terminals"] : []),
     ...(focus !== "new" && actionablePlan ? ["^Y implement"] : []),
     ...(focus !== "new" && approvals.length > 0
       ? [approvals.length > 1 ? "^A/^R approve (↑/↓)" : "^A/^R approve"]
