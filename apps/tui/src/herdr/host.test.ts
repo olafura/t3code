@@ -100,6 +100,31 @@ function fakeProtocol(initial: HerdrSessionSnapshot) {
     },
     reportPaneMetadata: async (input: unknown) => {
       calls.push({ method: "pane.report_metadata", value: input });
+      const report = input as {
+        readonly paneId: string;
+        readonly tokens: Readonly<Record<string, string | null>>;
+      };
+      current = snapshot(
+        current.panes.map((pane) =>
+          pane.pane_id === report.paneId
+            ? {
+                ...pane,
+                tokens: Object.fromEntries(
+                  Object.entries({ ...pane.tokens, ...report.tokens }).filter(
+                    (entry): entry is [string, string] => entry[1] !== null,
+                  ),
+                ),
+              }
+            : pane,
+        ),
+      );
+    },
+    sendPaneInput: async (paneId: string, text: string, keys: ReadonlyArray<string> = []) => {
+      calls.push({ method: "pane.send_input", value: { paneId, text, keys } });
+    },
+    closePane: async (paneId: string) => {
+      calls.push({ method: "pane.close", value: paneId });
+      current = snapshot(current.panes.filter((pane) => pane.pane_id !== paneId));
     },
     openPluginPane: async (input: unknown) => {
       calls.push({ method: "plugin.pane.open", value: input });
@@ -147,11 +172,70 @@ describe("createHerdrTuiHost", () => {
           paneId: "w1:p1",
           source: "plugin:dev.t3code",
           title: "Fix terminal integration",
-          displayAgent: "T3 Code",
-          tokens: { t3_thread_id: "thread-1", t3_environment: "local" },
+          displayAgent: "Fix terminal integration",
+          tokens: {
+            t3_thread_id: "thread-1",
+            t3_environment: "local",
+            t3_project: null,
+            t3_branch: null,
+            t3_model: null,
+          },
         },
       },
     ]);
+    host.dispose();
+  });
+
+  test("keeps one native bottom pane and retargets it between T3 terminal tabs", async () => {
+    const protocol = fakeProtocol(snapshot());
+    let ticket = 0;
+    const host = createHerdrTuiHost(
+      {
+        ...hostOptions,
+        pluginId: "dev.t3code",
+        terminalBridgeEntry: "/checkout/apps/tui/src/index.tsx",
+        mintSocketUrl: async () => `ws://127.0.0.1/ws?ticket=${++ticket}`,
+        isDirectory: async () => true,
+      },
+      protocol as never,
+    );
+
+    await host.openThreadTerminal({
+      threadId: "thread-1",
+      terminalId: "term-1",
+      index: 1,
+      total: 2,
+      title: "Fix terminal integration",
+      cwd: "/repo/worktree",
+      worktreePath: "/repo/worktree",
+    });
+    await host.openThreadTerminal({
+      threadId: "thread-1",
+      terminalId: "term-2",
+      index: 2,
+      total: 2,
+      title: "Fix terminal integration",
+      cwd: "/repo/worktree",
+      worktreePath: "/repo/worktree",
+    });
+
+    expect(protocol.calls.filter((call) => call.method === "pane.split")).toEqual([
+      {
+        method: "pane.split",
+        value: {
+          targetPaneId: "w1:p1",
+          workspaceId: "w1",
+          cwd: "/repo/worktree",
+          direction: "down",
+          ratio: 0.62,
+        },
+      },
+    ]);
+    const sends = protocol.calls.filter((call) => call.method === "pane.send_input");
+    expect(sends).toHaveLength(2);
+    expect(JSON.stringify(sends[0]?.value)).toContain("--herdr-terminal-bridge");
+    expect(JSON.stringify(sends[1]?.value)).toContain("\\u001bP+t3-terminal;");
+    expect(protocol.calls).toContainEqual({ method: "pane.focus", value: "w1:p3" });
     host.dispose();
   });
 });

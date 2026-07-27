@@ -83,6 +83,7 @@ import { ComposerDock, type ComposerDockContext } from "./ComposerDock.tsx";
 import { FilesView, type FilesStatus, type ViewingFile } from "./FilesView.tsx";
 import { SettingsView } from "./SettingsView.tsx";
 import { HerdrAgentView, type HerdrAgentReadState } from "./HerdrAgentView.tsx";
+import { HerdrTerminalDock } from "./HerdrTerminalDock.tsx";
 import { MessagesTimeline } from "./MessagesTimeline.tsx";
 import { ImageLightbox, type ExpandedImagePreview } from "./ImageLightbox.tsx";
 import { RightPanel } from "./RightPanel.tsx";
@@ -368,7 +369,11 @@ export function ChatView({
       ? (state.herdr?.snapshot?.workspaces.find(
           (workspace) => workspace.workspace_id === state.selection?.id,
         ) ?? null)
-      : null;
+      : host.kind === "herdr"
+        ? (state.herdr?.snapshot?.workspaces.find(
+            (workspace) => workspace.workspace_id === host.workspaceId,
+          ) ?? null)
+        : null;
   const selectedSpaceProject = selectedHerdrSpace
     ? findProjectForHerdrSpace(
         state.shell,
@@ -379,7 +384,9 @@ export function ChatView({
   const selectedProjectId =
     state.selection?.kind === "project"
       ? state.selection.id
-      : ((selectedSpaceProject?.id as string | undefined) ?? null);
+      : state.selection?.kind === "space"
+        ? ((selectedSpaceProject?.id as string | undefined) ?? null)
+        : null;
   const selectedThreadId = state.selection?.kind === "thread" ? state.selection.id : null;
   const selectedHerdrAgent =
     state.selection?.kind === "agent"
@@ -395,8 +402,8 @@ export function ChatView({
         state.loadedInFull,
         selectedThreadId,
         state.filter,
-        state.herdr?.snapshot ?? null,
-        host.kind === "herdr" ? { workspaceId: host.workspaceId, cwd: host.workspaceCwd } : null,
+        null,
+        null,
       ),
     [
       state.shell,
@@ -508,14 +515,14 @@ export function ChatView({
   React.useEffect(() => {
     if (focus !== "new") return;
     if (selectedHerdrSpace && !selectedSpaceProject) {
-      setNewBranchRefs([]);
-      setNewBranchRefsStatus("empty");
+      setNewBranchRefs((current) => (current.length === 0 ? current : []));
+      setNewBranchRefsStatus((current) => (current === "empty" ? current : "empty"));
       return;
     }
     const project = projects[activeProjectIndex];
     if (!project) {
-      setNewBranchRefs([]);
-      setNewBranchRefsStatus("empty");
+      setNewBranchRefs((current) => (current.length === 0 ? current : []));
+      setNewBranchRefsStatus((current) => (current === "empty" ? current : "empty"));
       return;
     }
     let cancelled = false;
@@ -1307,6 +1314,9 @@ export function ChatView({
     : pendingUserInput !== null || approvals.length > 0
       ? "blocked"
       : "idle";
+  const reportedProjectTitle = detail
+    ? projects.find((project) => project.id === detail.projectId)?.title
+    : undefined;
   React.useEffect(() => {
     if (host.kind !== "herdr") return;
     void host
@@ -1316,11 +1326,25 @@ export function ChatView({
               threadId: detail.id,
               title: detail.title,
               state: reportedThreadState,
+              ...(reportedProjectTitle ? { project: reportedProjectTitle } : {}),
+              branch: state.vcsStatus?.refName ?? detail.branch,
+              model: threadModelSelection?.model ?? null,
             }
           : null,
       )
       .catch((error) => store.setStatus(`Herdr agent sync failed: ${String(error)}`, "error"));
-  }, [detail?.id, detail?.title, host, reportedThreadState, store]);
+  }, [
+    detail?.branch,
+    detail?.id,
+    detail?.projectId,
+    detail?.title,
+    host,
+    reportedProjectTitle,
+    reportedThreadState,
+    state.vcsStatus?.refName,
+    store,
+    threadModelSelection?.model,
+  ]);
   // Held across re-derivations; clamp so a shrinking queue can't point past the end.
   const activeApprovalIndex =
     approvals.length > 0 ? Math.min(approvalIndex, approvals.length - 1) : 0;
@@ -1431,11 +1455,12 @@ export function ChatView({
     (specialComposer ? 0 : attachmentPreviewHeight) +
     (compactComposerFooter ? 1 : 0) +
     (composerContext ? 1 : 0);
+  const hostedTerminalDockRows = host.kind === "herdr" && activeTerminal ? 3 : 0;
   const verticalLayout = resolveChatVerticalLayout({
-    terminalHeight: height,
+    terminalHeight: Math.max(1, height - hostedTerminalDockRows),
     desiredEditorRows: desiredPromptLines,
     composerChromeRows,
-    terminalOpen: activeTerminal !== null,
+    terminalOpen: host.kind === "standalone" && activeTerminal !== null,
     preferredTerminalRows: terminalHeight ?? Math.floor(height * 0.4),
     wantedPopoverRows: pickerWanted + commandWanted + revertWanted + confirmWanted,
   });
@@ -1790,25 +1815,57 @@ export function ChatView({
   const tabsForOpenDrawer = (threadId: string, tabs: ThreadTabs | null): ThreadTabs =>
     tabs ?? tabsWithDiscovered(null, knownTerminals.get(threadId) ?? []) ?? initialTabs();
 
-  // ^E toggles the same server-backed terminal drawer in standalone and Herdr
-  // modes. Herdr hosts the T3 pane; it does not replace T3's internal layout.
+  // In Herdr, one native pane below this dashboard owns the real terminal. The
+  // T3 tabs remain the source of truth, and changing the active id retargets that
+  // one pane instead of opening a tab or split for every server terminal.
+  React.useEffect(() => {
+    if (host.kind !== "herdr" || !terminalOpen || !activeTerminal || !detailTabs) return;
+    const index = Math.max(0, detailTabs.ids.indexOf(activeTerminal.terminalId)) + 1;
+    void host
+      .openThreadTerminal({
+        ...activeTerminal,
+        index,
+        total: detailTabs.ids.length,
+        fallbackCwd:
+          projects.find((project) => project.id === detail?.projectId)?.workspaceRoot ??
+          activeTerminal.cwd,
+      })
+      .catch((error) => store.setStatus(`Could not open terminal: ${String(error)}`, "error"));
+  }, [
+    activeTerminal?.cwd,
+    activeTerminal?.terminalId,
+    activeTerminal?.threadId,
+    activeTerminal?.title,
+    activeTerminal?.worktreePath,
+    detail?.projectId,
+    host,
+    terminalOpen,
+  ]);
+
+  // ^E toggles the embedded xterm drawer in standalone mode and the single
+  // native bottom split in Herdr mode.
   const toggleTerminal = () => {
     if (terminalOpen) {
       setTerminalOpen(false);
       setTerminalFocused(false);
+      if (host.kind === "herdr") {
+        void host
+          .closeThreadTerminalPane()
+          .catch((error) => store.setStatus(`Could not close terminal: ${String(error)}`, "error"));
+      }
       return;
     }
     if (!detail) return;
     updateThreadTabs(detail.id, (tabs) => tabsForOpenDrawer(detail.id, tabs));
     setTerminalOpen(true);
-    setTerminalFocused(true);
+    setTerminalFocused(host.kind === "standalone");
   };
 
   // Open another terminal instance for the selected thread.
   const newTerminal = () => {
     if (!detail) return;
     setTerminalOpen(true);
-    setTerminalFocused(true);
+    setTerminalFocused(host.kind === "standalone");
     updateThreadTabs(detail.id, (tabs) => {
       const current = tabsForOpenDrawer(detail.id, tabs);
       if (current.ids.length >= MAX_TERMINALS_PER_THREAD) {
@@ -1824,7 +1881,11 @@ export function ChatView({
     updateThreadTabs(detail.id, (tabs) =>
       tabs && tabs.ids.includes(id) ? { ids: tabs.ids, activeId: id } : tabs,
     );
-    setTerminalFocused(true);
+    if (host.kind === "standalone") {
+      setTerminalFocused(true);
+    } else if (detailTabs?.activeId === id) {
+      void host.focusThreadTerminalPane();
+    }
   };
 
   const cycleTerminal = (delta: 1 | -1) => {
@@ -1832,7 +1893,7 @@ export function ChatView({
     updateThreadTabs(detail.id, (tabs) =>
       tabs ? { ids: tabs.ids, activeId: cycleActiveId(tabs, delta) } : tabs,
     );
-    setTerminalFocused(true);
+    setTerminalFocused(host.kind === "standalone");
   };
 
   // Close a terminal tab: free its server session, drop it, and fall back to a
@@ -1847,6 +1908,7 @@ export function ChatView({
     if (willBeEmpty) {
       setTerminalOpen(false);
       setTerminalFocused(false);
+      if (host.kind === "herdr") void host.closeThreadTerminalPane().catch(() => {});
     }
   };
 
@@ -2056,11 +2118,18 @@ export function ChatView({
   };
 
   const toggleFocus = () => {
-    if (activeTerminal) setTerminalFocused((focused) => !focused);
+    if (!activeTerminal) return;
+    if (host.kind === "herdr") {
+      void host
+        .focusThreadTerminalPane()
+        .catch((error) => store.setStatus(`Could not focus terminal: ${String(error)}`, "error"));
+      return;
+    }
+    setTerminalFocused((focused) => !focused);
   };
 
   const resizeTerminal = (delta: number) => {
-    if (!activeTerminal) return;
+    if (!activeTerminal || host.kind === "herdr") return;
     setTerminalHeight((current) => Math.max((current ?? Math.floor(height * 0.4)) + delta, 6));
   };
 
@@ -2412,7 +2481,7 @@ export function ChatView({
 
   const keyMode = expandedImage
     ? "imagePreview"
-    : activeTerminal && terminalFocused
+    : host.kind === "standalone" && activeTerminal && terminalFocused
       ? "terminal"
       : settingsOpen
         ? "settings"
@@ -2444,7 +2513,7 @@ export function ChatView({
     mode: keyMode,
     onExit,
     onTerminalKey: (sequence) => {
-      if (activeTerminal) {
+      if (host.kind === "standalone" && activeTerminal) {
         void client
           .terminalWrite(activeTerminal.threadId, activeTerminal.terminalId, sequence, "keyboard")
           .catch(() => {});
@@ -2740,7 +2809,9 @@ export function ChatView({
       : focus !== "new" && pendingUserInput && userInputDeferred
         ? "⚠ question pending — ^U to answer · ^C quit"
         : activeTerminal
-          ? "^P prompt · ^E close term · ^↑/^↓ size term · keys → shell"
+          ? host.kind === "herdr"
+            ? "terminal below · ^P focus · ^E close · switch with tabs or commands"
+            : "^P prompt · ^E close term · ^↑/^↓ size term · keys → shell"
           : composeHint;
 
   const statusStyle = statusGlyphColor(state.statusKind);
@@ -2945,7 +3016,10 @@ export function ChatView({
             />
           </ComposerDock>
 
-          {activeTerminal && detailTabs && terminalDrawerHeight >= 6 ? (
+          {host.kind === "standalone" &&
+          activeTerminal &&
+          detailTabs &&
+          terminalDrawerHeight >= 6 ? (
             <ThreadTerminalDrawer
               client={client}
               info={activeTerminal}
@@ -2954,6 +3028,18 @@ export function ChatView({
               focused={terminalFocused}
               copyRef={terminalCopyRef}
               scrollRef={terminalScrollRef}
+              tabIds={detailTabs.ids}
+              activeTabId={detailTabs.activeId}
+              onSelectTab={selectTerminal}
+              onNewTab={newTerminal}
+              onCloseTab={closeTerminal}
+            />
+          ) : null}
+
+          {host.kind === "herdr" && activeTerminal && detailTabs ? (
+            <HerdrTerminalDock
+              title={activeTerminal.title}
+              width={mainWidth}
               tabIds={detailTabs.ids}
               activeTabId={detailTabs.activeId}
               onSelectTab={selectTerminal}

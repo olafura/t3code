@@ -407,6 +407,22 @@ export class HerdrProtocolClient {
     await this.request("pane.focus", { pane_id: paneId });
   }
 
+  async sendPaneInput(
+    paneId: string,
+    text: string,
+    keys: ReadonlyArray<string> = [],
+  ): Promise<void> {
+    await this.request("pane.send_input", {
+      pane_id: paneId,
+      text,
+      keys,
+    });
+  }
+
+  async closePane(paneId: string): Promise<void> {
+    await this.request("pane.close", { pane_id: paneId });
+  }
+
   async splitPane(input: {
     readonly targetPaneId: string;
     readonly cwd: string;

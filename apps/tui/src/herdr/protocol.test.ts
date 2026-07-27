@@ -258,6 +258,30 @@ describe("HerdrProtocolClient", () => {
     });
   });
 
+  test("feeds and closes the plugin-owned terminal pane", async () => {
+    const fixture = await withServer((request, socket) => {
+      socket.write(`${JSON.stringify({ id: request.id, result: { type: "ok" } })}\n`);
+    });
+    const client = new HerdrProtocolClient(fixture.socketPath);
+    cleanups.push(async () => client.dispose());
+
+    await client.sendPaneInput("w1:p3", "switch-frame");
+    await client.closePane("w1:p3");
+
+    expect(fixture.requests).toEqual([
+      {
+        id: "t3_1",
+        method: "pane.send_input",
+        params: { pane_id: "w1:p3", text: "switch-frame", keys: [] },
+      },
+      {
+        id: "t3_2",
+        method: "pane.close",
+        params: { pane_id: "w1:p3" },
+      },
+    ]);
+  });
+
   test("reports a T3 thread through Herdr's semantic agent state", async () => {
     const fixture = await withServer((request, socket) => {
       socket.write(`${JSON.stringify({ id: request.id, result: { type: "ok" } })}\n`);
