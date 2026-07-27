@@ -326,6 +326,10 @@ export function ChatView({
   const [loadingOlder, setLoadingOlder] = React.useState(false);
   const [rightPanelFocused, setRightPanelFocused] = React.useState(false);
   const [rightPanelIndex, setRightPanelIndex] = React.useState(0);
+  // Herdr owns the default navigation sidebar, but its native sidebar cannot
+  // expose every T3 project/thread action. Keep the full T3 sidebar available
+  // on demand without permanently duplicating Herdr's navigation.
+  const [hostedSidebarOpen, setHostedSidebarOpen] = React.useState(false);
   // User-set prompt height in editor rows; null = auto-grow with content.
   const [promptHeight, setPromptHeight] = React.useState<number | null>(null);
   // Multiple terminals per thread (the TUI form of the web's terminal groups):
@@ -1330,14 +1334,23 @@ export function ChatView({
       : null;
   const rightPanelVisible =
     rightPanelOpen && !diffOpen && !filesOpen && !settingsOpen && !expandedImage;
-  const columnLayout = resolveChatColumnLayout(
-    width,
-    rightPanelVisible,
-    host.kind === "standalone",
-  );
+  const t3SidebarEnabled = host.kind === "standalone" || hostedSidebarOpen;
+  const columnLayout = resolveChatColumnLayout(width, rightPanelVisible, t3SidebarEnabled);
   const { sidebarVisible, listWidth, mainWidth, chatWidth, rightWidth, rightPanelAsMain } =
     columnLayout;
-  const sidebarAsMain = host.kind === "standalone" && !sidebarVisible && focus === "filter";
+  const sidebarAsMain = t3SidebarEnabled && !sidebarVisible && focus === "filter";
+  const t3SidebarShown = sidebarVisible || sidebarAsMain;
+  const toggleT3Sidebar = React.useCallback(() => {
+    if (host.kind === "standalone") {
+      setFocus("filter");
+      return;
+    }
+    // On narrow terminals an enabled sidebar is only shown while search owns
+    // the main pane. Treat that collapsed state as closed so ^F opens it again.
+    const shouldOpen = !hostedSidebarOpen || (!sidebarVisible && focus !== "filter");
+    setHostedSidebarOpen(shouldOpen);
+    setFocus(shouldOpen ? "filter" : "compose");
+  }, [focus, host.kind, hostedSidebarOpen, sidebarVisible]);
   const composerSurfaceWidth = Math.max(8, Math.min(CHAT_CONTENT_MAX_WIDTH, chatWidth - 2));
   const composerContext: ComposerDockContext | null =
     focus === "new"
@@ -2446,6 +2459,14 @@ export function ChatView({
         keywords: "search",
         run: () => runCommand(() => setFocus("filter")),
       });
+    } else {
+      list.push({
+        id: "t3-sidebar",
+        title: t3SidebarShown ? "Hide T3 sidebar" : "Show T3 sidebar",
+        hint: "^F",
+        keywords: "projects threads navigation search",
+        run: () => runCommand(toggleT3Sidebar),
+      });
     }
     if (detail || focus === "new") {
       list.push({
@@ -2504,6 +2525,8 @@ export function ChatView({
     newContextWorktreePath,
     activeProjectIndex,
     host.kind,
+    t3SidebarShown,
+    toggleT3Sidebar,
     selectedHerdrAgent?.pane_id,
   ]);
 
@@ -2744,13 +2767,7 @@ export function ChatView({
       setRenameDraft("");
       setFocus("compose");
     },
-    onOpenFilter: () => {
-      if (host.kind === "standalone") {
-        setFocus("filter");
-      } else {
-        store.setStatus("Use Herdr’s sidebar to navigate Spaces and agents.");
-      }
-    },
+    onOpenFilter: toggleT3Sidebar,
     onCommitFilter: () => setFocus("compose"),
     onCancelFilter: () => {
       store.setFilter("");
@@ -2841,7 +2858,7 @@ export function ChatView({
       ? [approvals.length > 1 ? "^A/^R approve (↑/↓)" : "^A/^R approve"]
       : []),
     "^K commands",
-    ...(host.kind === "standalone" ? ["^F find"] : []),
+    host.kind === "standalone" ? "^F find" : `^F T3 sidebar ${t3SidebarShown ? "▾" : "▸"}`,
     `^L panel ${rightPanelOpen ? "▾" : "▸"}`,
     ...(composerWorking ? ["Esc stop"] : focus === "new" ? ["Esc clear"] : []),
     "^C quit",
