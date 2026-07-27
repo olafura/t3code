@@ -5,7 +5,7 @@ import type { HerdrTuiHost } from "./herdr/host.ts";
 import { createStore } from "./store.ts";
 
 /** A fake TuiClient that captures the shell/thread callbacks so the test can drive them. */
-function fakeClient() {
+function fakeClient(options?: { readonly immediateThread?: OrchestrationThread }) {
   let onShell: ((s: OrchestrationShellSnapshot) => void) | null = null;
   const threadSubs: string[] = [];
   const client = {
@@ -13,8 +13,9 @@ function fakeClient() {
       onShell = cb;
       return () => {};
     },
-    subscribeThread: (threadId: string) => {
+    subscribeThread: (threadId: string, cb: (thread: OrchestrationThread) => void) => {
       threadSubs.push(threadId);
+      if (options?.immediateThread?.id === threadId) cb(options.immediateThread);
       return () => {};
     },
     peekThread: () => null as OrchestrationThread | null,
@@ -80,6 +81,36 @@ describe("createStore", () => {
 
     expect(store.getState().expanded.has("p1")).toBe(true);
     expect(store.getState().selection).toEqual({ kind: "thread", id: "t1" });
+  });
+
+  it("Given a cold cache, when the selected thread snapshot arrives during subscription, then it is retained", () => {
+    const detail = {
+      id: "t1",
+      projectId: "p1",
+      title: "Immediate thread",
+    } as OrchestrationThread;
+    const f = fakeClient({ immediateThread: detail });
+    const host = {
+      kind: "herdr",
+      workspaceId: "w1",
+      workspaceCwd: "/workspace/project-one",
+      getState: () => ({ connection: "connected", snapshot: null, error: null }) as const,
+      subscribe: () => () => {},
+      start: () => {},
+      dispose: () => {},
+    } as unknown as HerdrTuiHost;
+    const store = createStore(f.client, host);
+    store.start();
+
+    f.pushShell(
+      shell(
+        [{ id: "p1", title: "P1", workspaceRoot: "/workspace/project-one" }],
+        [{ id: "t1", projectId: "p1", updatedAt: "2020-01-02T00:00:00.000Z" }],
+      ),
+    );
+
+    expect(store.getState().selection).toEqual({ kind: "thread", id: "t1" });
+    expect(store.getState().detail).toBe(detail);
   });
 
   it("Given a collapsed project, when toggled, then it expands and selects it", () => {

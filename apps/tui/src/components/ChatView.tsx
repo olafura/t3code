@@ -372,7 +372,7 @@ export function ChatView({
       ? (state.herdr?.snapshot?.workspaces.find(
           (workspace) => workspace.workspace_id === state.selection?.id,
         ) ?? null)
-      : host.kind === "herdr"
+      : host.kind === "herdr" && state.selection === null
         ? (state.herdr?.snapshot?.workspaces.find(
             (workspace) => workspace.workspace_id === host.workspaceId,
           ) ?? null)
