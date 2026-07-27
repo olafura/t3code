@@ -145,11 +145,16 @@ export function createStore(client: TuiClient, host: TuiHost = standaloneTuiHost
 
   const applySelection = (selection: Selection | null) => {
     const threadId = selection?.kind === "thread" ? selection.id : null;
-    subscribeDetail(threadId);
+    // Record the new selection before subscribing. The connection is allowed to
+    // deliver its cached snapshot synchronously from subscribeThread; subscribing
+    // first made that snapshot look stale because state.selection still pointed
+    // at the previous row, so it was discarded and a cold cache stayed blank.
+    subscribeDetail(null);
     // Seed from the warm cache so re-selecting a thread paints instantly; the
     // live value streams in immediately after (no refetch, no blank).
     const cached = threadId ? client.peekThread(threadId as never) : null;
     set({ selection, detail: cached });
+    subscribeDetail(threadId);
     syncVcs();
   };
 

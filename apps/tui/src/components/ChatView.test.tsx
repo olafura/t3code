@@ -376,6 +376,7 @@ describe("ChatView Herdr host", () => {
         },
       ],
     } as const satisfies HerdrSessionSnapshot;
+    let activeSnapshot: HerdrSessionSnapshot = snapshot;
     const reports: Array<Parameters<HerdrTuiHost["reportThread"]>[0]> = [];
     const sidebarReports: Array<Parameters<HerdrTuiHost["reportSidebar"]>[0]> = [];
     let activateSidebar: Parameters<HerdrTuiHost["subscribeSidebarActions"]>[0] = () => {};
@@ -389,7 +390,7 @@ describe("ChatView Herdr host", () => {
       workspaceCwd: "/workspace/project-one",
       getState: () =>
         herdrConnected
-          ? ({ connection: "connected", snapshot, error: null } as const)
+          ? ({ connection: "connected", snapshot: activeSnapshot, error: null } as const)
           : ({ connection: "connecting", snapshot: null, error: null } as const),
       subscribe: (listener: () => void) => {
         notifyHost = listener;
@@ -490,6 +491,27 @@ describe("ChatView Herdr host", () => {
       await setup.flush();
     });
     expect(sidebarReports).toHaveLength(sidebarReportCount);
+    activeSnapshot = {
+      ...activeSnapshot,
+      workspaces: activeSnapshot.workspaces.map((workspace) => ({
+        ...workspace,
+        worktree: workspace.worktree
+          ? {
+              ...workspace.worktree,
+              repo_root: "/workspace/herdr-only",
+              checkout_path: "/workspace/herdr-only",
+            }
+          : null,
+      })),
+    };
+    await React.act(async () => {
+      notifyHost();
+      activateSidebar({ kind: "thread", id: "t1" });
+      await setup.renderOnce();
+      await setup.flush();
+    });
+    expect(setup.captureCharFrame()).toContain("Ask anything");
+    expect(setup.captureCharFrame()).not.toContain("What should we build");
     await React.act(async () => {
       setup.mockInput.pressKey("f", { ctrl: true });
       await setup.renderOnce();
