@@ -121,6 +121,7 @@ export function herdrTerminalBridgeCommand(input: {
   readonly target: HerdrTerminalTarget;
   readonly herdrSocketPath: string;
   readonly dashboardPaneId: string;
+  readonly terminalPaneId: string;
   readonly logPath: string;
 }): string {
   return [
@@ -143,6 +144,8 @@ export function herdrTerminalBridgeCommand(input: {
     input.herdrSocketPath,
     "--dashboard-pane-id",
     input.dashboardPaneId,
+    "--terminal-pane-id",
+    input.terminalPaneId,
     "--log-path",
     input.logPath,
   ]
@@ -369,6 +372,7 @@ export function createHerdrTuiHost(
             target,
             herdrSocketPath: options.socketPath,
             dashboardPaneId: options.paneId,
+            terminalPaneId: pane.pane_id,
             logPath: options.stateDirectory
               ? NodePath.join(options.stateDirectory, "terminal-bridge.log")
               : "/tmp/t3-herdr-terminal.log",

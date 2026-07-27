@@ -6,6 +6,7 @@ import {
   cycleActiveId,
   initialTabs,
   nextTerminalId,
+  reconcileHostedTerminalPaneVisibility,
   reduceKnownTerminals,
   tabsWithDiscovered,
 } from "./terminalTabs.ts";
@@ -106,5 +107,42 @@ describe("reduceKnownTerminals", () => {
     });
     expect(map.has("t2")).toBe(false);
     expect(map.get("t1")).toEqual(["term-1", "term-2"]);
+  });
+});
+
+describe("reconcileHostedTerminalPaneVisibility", () => {
+  it("waits for the pane to appear before treating its absence as a close", () => {
+    expect(
+      reconcileHostedTerminalPaneVisibility({
+        open: true,
+        panePresent: false,
+        paneSeen: false,
+      }),
+    ).toEqual({
+      paneSeen: false,
+      shouldCloseLocalTerminal: false,
+    });
+
+    expect(
+      reconcileHostedTerminalPaneVisibility({
+        open: true,
+        panePresent: true,
+        paneSeen: false,
+      }),
+    ).toEqual({
+      paneSeen: true,
+      shouldCloseLocalTerminal: false,
+    });
+
+    expect(
+      reconcileHostedTerminalPaneVisibility({
+        open: true,
+        panePresent: false,
+        paneSeen: true,
+      }),
+    ).toEqual({
+      paneSeen: false,
+      shouldCloseLocalTerminal: true,
+    });
   });
 });

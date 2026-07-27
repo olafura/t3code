@@ -107,6 +107,7 @@ import {
   closeTab,
   cycleActiveId,
   initialTabs,
+  reconcileHostedTerminalPaneVisibility,
   reduceKnownTerminals,
   tabsWithDiscovered,
   type ThreadTabs,
@@ -337,6 +338,7 @@ export function ChatView({
   // each thread keeps a list of client-chosen terminal ids + the active one; the
   // drawer shows the selected thread's active terminal with a tab bar.
   const [terminalOpen, setTerminalOpen] = React.useState(false);
+  const hostedTerminalPaneSeenRef = React.useRef(false);
   const [terminalTabs, setTerminalTabs] = React.useState<ReadonlyMap<string, ThreadTabs>>(
     () => new Map(),
   );
@@ -596,6 +598,12 @@ export function ChatView({
         }
       : null;
   const activeTerminal = terminalOpen ? selectedTerminal : null;
+  const hostedTerminalPanePresent =
+    host.kind === "herdr" &&
+    (state.herdr?.snapshot?.panes.some(
+      (pane) => pane.workspace_id === host.workspaceId && pane.tokens?.t3_terminal_bridge === "1",
+    ) ??
+      false);
   const newReasoning = React.useMemo(
     () => reasoningChoicesForSelection(modelOptions, resolvedNewModelSelection),
     [modelOptions, resolvedNewModelSelection],
@@ -1847,6 +1855,25 @@ export function ChatView({
 
   const tabsForOpenDrawer = (threadId: string, tabs: ThreadTabs | null): ThreadTabs =>
     tabs ?? tabsWithDiscovered(null, knownTerminals.get(threadId) ?? []) ?? initialTabs();
+
+  React.useEffect(() => {
+    if (host.kind !== "herdr") {
+      hostedTerminalPaneSeenRef.current = false;
+      return;
+    }
+
+    const next = reconcileHostedTerminalPaneVisibility({
+      open: terminalOpen,
+      panePresent: hostedTerminalPanePresent,
+      paneSeen: hostedTerminalPaneSeenRef.current,
+    });
+    hostedTerminalPaneSeenRef.current = next.paneSeen;
+
+    if (next.shouldCloseLocalTerminal) {
+      setTerminalOpen(false);
+      setTerminalFocused(false);
+    }
+  }, [host.kind, hostedTerminalPanePresent, terminalOpen]);
 
   // In Herdr, one native pane below this dashboard owns the real terminal. The
   // T3 tabs remain the source of truth, and changing the active id retargets that

@@ -8,6 +8,7 @@ export const HERDR_TERMINAL_BRIDGE_FLAG = "--herdr-terminal-bridge";
 const CONTROL_PREFIX = "\u001bP+t3-terminal;";
 const CONTROL_SUFFIX = "\u001b\\";
 const FOCUS_DASHBOARD = "\u0010";
+const CLOSE_TERMINAL = "\u0005";
 
 export interface HerdrTerminalTarget {
   readonly socketUrl: string;
@@ -21,6 +22,7 @@ export interface HerdrTerminalTarget {
 export interface HerdrTerminalBridgeOptions extends HerdrTerminalTarget {
   readonly herdrSocketPath: string;
   readonly dashboardPaneId: string;
+  readonly terminalPaneId: string;
   readonly logPath: string;
 }
 
@@ -52,8 +54,29 @@ export function parseHerdrTerminalBridgeArgs(
     worktreePath: worktreePath && worktreePath !== "-" ? worktreePath : null,
     herdrSocketPath: required(values, "--herdr-socket-path"),
     dashboardPaneId: required(values, "--dashboard-pane-id"),
+    terminalPaneId: required(values, "--terminal-pane-id"),
     logPath: values.get("--log-path") ?? "/tmp/t3-herdr-terminal.log",
   };
+}
+
+export function routeHerdrTerminalShortcuts(
+  data: string,
+  handlers: {
+    readonly onInput: (data: string) => void;
+    readonly onFocusDashboard: () => void;
+    readonly onCloseTerminal: () => void;
+  },
+): void {
+  let start = 0;
+  for (let index = 0; index < data.length; index += 1) {
+    const value = data[index];
+    if (value !== FOCUS_DASHBOARD && value !== CLOSE_TERMINAL) continue;
+    if (index > start) handlers.onInput(data.slice(start, index));
+    if (value === FOCUS_DASHBOARD) handlers.onFocusDashboard();
+    else handlers.onCloseTerminal();
+    start = index + 1;
+  }
+  if (start < data.length) handlers.onInput(data.slice(start));
 }
 
 export function encodeHerdrTerminalSwitch(target: HerdrTerminalTarget): string {
@@ -154,6 +177,7 @@ export async function runHerdrTerminalBridge(
       readonly dispose: () => Promise<void>;
     };
     readonly focusDashboard?: () => Promise<void>;
+    readonly closeTerminal?: () => Promise<void>;
   } = {},
 ): Promise<void> {
   const options = parseHerdrTerminalBridgeArgs(args);
@@ -161,11 +185,18 @@ export async function runHerdrTerminalBridge(
   const stdout = process.stdout;
   const cols = () => Math.max(1, stdout.columns ?? 80);
   const rows = () => Math.max(1, stdout.rows ?? 24);
-  const herdr = dependencies.focusDashboard
-    ? null
-    : new HerdrProtocolClient(options.herdrSocketPath);
+  const herdr =
+    dependencies.focusDashboard && dependencies.closeTerminal
+      ? null
+      : new HerdrProtocolClient(options.herdrSocketPath);
   const focusDashboard =
     dependencies.focusDashboard ?? (() => herdr!.focusPane(options.dashboardPaneId));
+  const closeTerminal =
+    dependencies.closeTerminal ??
+    (async () => {
+      await focusDashboard();
+      await herdr!.closePane(options.terminalPaneId);
+    });
 
   let active:
     | {
@@ -246,18 +277,11 @@ export async function runHerdrTerminalBridge(
   });
 
   const onInput = (data: Buffer) => {
-    const text = data.toString("utf8");
-    let offset = 0;
-    while (true) {
-      const shortcut = text.indexOf(FOCUS_DASHBOARD, offset);
-      if (shortcut < 0) {
-        parser.push(text.slice(offset));
-        return;
-      }
-      parser.push(text.slice(offset, shortcut));
-      void focusDashboard().catch(() => {});
-      offset = shortcut + FOCUS_DASHBOARD.length;
-    }
+    routeHerdrTerminalShortcuts(data.toString("utf8"), {
+      onInput: parser.push,
+      onFocusDashboard: () => void focusDashboard().catch(() => {}),
+      onCloseTerminal: () => void closeTerminal().catch(() => {}),
+    });
   };
   const onResize = () => {
     const current = active;

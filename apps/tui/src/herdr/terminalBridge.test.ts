@@ -4,6 +4,7 @@ import {
   createHerdrTerminalInputParser,
   encodeHerdrTerminalSwitch,
   parseHerdrTerminalBridgeArgs,
+  routeHerdrTerminalShortcuts,
   terminalBridgeOutput,
   type HerdrTerminalTarget,
 } from "./terminalBridge.ts";
@@ -37,6 +38,8 @@ describe("Herdr terminal bridge", () => {
         "/tmp/herdr.sock",
         "--dashboard-pane-id",
         "w1:p1",
+        "--terminal-pane-id",
+        "w1:p2",
       ]),
     ).toMatchObject({
       threadId: "thread-1",
@@ -45,7 +48,28 @@ describe("Herdr terminal bridge", () => {
       worktreePath: null,
       herdrSocketPath: "/tmp/herdr.sock",
       dashboardPaneId: "w1:p1",
+      terminalPaneId: "w1:p2",
     });
+  });
+
+  test("routes Ctrl-P and Ctrl-E as host shortcuts instead of shell input", () => {
+    const input: string[] = [];
+    let focusCount = 0;
+    let closeCount = 0;
+
+    routeHerdrTerminalShortcuts("git st\r\u0010pwd\r\u0005", {
+      onInput: (value) => input.push(value),
+      onFocusDashboard: () => {
+        focusCount += 1;
+      },
+      onCloseTerminal: () => {
+        closeCount += 1;
+      },
+    });
+
+    expect(input.join("")).toBe("git st\rpwd\r");
+    expect(focusCount).toBe(1);
+    expect(closeCount).toBe(1);
   });
 
   test("switches terminals without leaking private control bytes into the PTY", () => {
