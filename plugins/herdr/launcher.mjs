@@ -1,4 +1,10 @@
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const launcherPath = fileURLToPath(import.meta.url);
+const repositoryRoot = resolve(dirname(launcherPath), "../..");
 
 function pluginContext() {
   try {
@@ -24,13 +30,41 @@ export function resolveWorkspaceCwd(context = pluginContext()) {
   return firstString(context, ["workspace_cwd", "checkout_path", "foreground_cwd", "cwd"]);
 }
 
-export function launcherCommand(entrypoint) {
-  if (entrypoint === "server") return ["t3", ["serve", "--no-browser"]];
-  if (entrypoint === "dashboard") return ["t3", ["tui", "--tui-host", "herdr"]];
-  throw new Error(`Unknown T3 Code plugin entrypoint: ${entrypoint}`);
+export function launcherCommand(
+  entrypoint,
+  {
+    executable = process.env.T3_CODE_BIN,
+    devUrl = process.env.T3_CODE_DEV_URL ?? "http://localhost:5733",
+    root = repositoryRoot,
+    fileExists = existsSync,
+  } = {},
+) {
+  const args =
+    entrypoint === "server"
+      ? ["serve", "--no-browser"]
+      : entrypoint === "dashboard"
+        ? ["tui", "--tui-host", "herdr"]
+        : null;
+  if (!args) {
+    throw new Error(`Unknown T3 Code plugin entrypoint: ${entrypoint}`);
+  }
+
+  if (executable) return [executable, args];
+
+  const sourceCli = resolve(root, "apps/server/src/bin.ts");
+  if (fileExists(sourceCli)) {
+    const sourceArgs = entrypoint === "dashboard" ? [...args, "--dev-url", devUrl] : args;
+    return [process.execPath, [sourceCli, ...sourceArgs]];
+  }
+
+  return ["t3", args];
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+export function isMainModule(argvEntry = process.argv[1], cwd = process.cwd()) {
+  return typeof argvEntry === "string" && resolve(cwd, argvEntry) === launcherPath;
+}
+
+if (isMainModule()) {
   const [command, args] = launcherCommand(process.argv[2] ?? "");
   const cwd = resolveWorkspaceCwd() ?? process.cwd();
   const child = spawn(command, args, {

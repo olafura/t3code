@@ -7,7 +7,8 @@ native agents, and real terminal panes.
 Requirements:
 
 - Herdr 0.7.5 or newer on Linux or macOS
-- the `t3` and `bun` executables available on `PATH`
+- the `bun` executable available on `PATH`
+- either a linked T3 Code source checkout or the `t3` executable on `PATH`
 - a running T3 Code server
 
 For local development, link the plugin and open its dashboard pane:
@@ -16,6 +17,12 @@ For local development, link the plugin and open its dashboard pane:
 herdr plugin link ./plugins/herdr
 herdr plugin pane open --plugin dev.t3code --entrypoint dashboard
 ```
+
+A locally linked plugin launches `apps/server/src/bin.ts` from that checkout, so
+it uses the same build and `http://localhost:5733` development server as
+`pnpm run tui:dev`. Run `pnpm run tui:build` after TUI source changes. Set
+`T3_CODE_DEV_URL` to use another development server, or `T3_CODE_BIN` to
+override the executable explicitly.
 
 If T3 Code is not already running, open the `server` entrypoint in a separate
 Herdr tab:
