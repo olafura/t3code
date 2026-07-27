@@ -4,11 +4,16 @@ This plugin hosts the existing T3 Code terminal UI inside Herdr. T3 Code keeps
 ownership of structured projects, threads, and timelines; Herdr supplies Spaces,
 native agents, and real terminal panes.
 
-In hosted mode, Herdr owns Spaces and Agents. The active T3 thread is reported
-as a native Herdr Agent, including its title, project, branch, model, and
-working/blocked/idle state. Press `Ctrl-F` to show or hide T3's own
-projects-and-threads sidebar; Herdr's plugin API can decorate and filter native
-Space/Agent rows, but cannot inject an arbitrary project/thread tree.
+In hosted mode, T3 publishes its complete visible navigation model into Herdr's
+native Agents sidebar: search, new thread, project expansion, thread selection,
+status, and show-more actions all target the existing dashboard pane. The active
+T3 thread is also reported as a native Herdr Agent with its title, project,
+branch, model, and working/blocked/idle state. This native integration requires
+Herdr socket protocol 19 (the `agent.view.set.items` extension).
+
+T3's full projects-and-threads sidebar starts visible inside the dashboard as a
+compatibility fallback for Herdr 0.7.5/protocol 17. Press `Ctrl-F` to show or
+hide it; native sidebar actions remain available on protocol 19.
 
 `Ctrl-E` asks Herdr to split one real terminal pane below the dashboard. T3's
 compact terminal tab strip switches which server terminal that pane is attached

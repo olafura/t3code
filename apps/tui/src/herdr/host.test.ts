@@ -51,7 +51,7 @@ function fakeProtocol(initial: HerdrSessionSnapshot) {
       current = next;
     },
     connect: async () => {},
-    ping: async () => ({ version: "0.7.5", protocol: 17 }),
+    ping: async () => ({ version: current.version, protocol: current.protocol }),
     snapshot: async () => current,
     subscribeToLifecycleEvents: async () => {},
     onEvent: () => () => {},
@@ -73,6 +73,12 @@ function fakeProtocol(initial: HerdrSessionSnapshot) {
     },
     sendAgentKeys: async (target: string, keys: ReadonlyArray<string>) => {
       calls.push({ method: "agent.send_keys", value: { target, keys } });
+    },
+    setAgentView: async (input: unknown) => {
+      calls.push({ method: "agent.view.set", value: input });
+    },
+    clearAgentView: async (source: string) => {
+      calls.push({ method: "agent.view.clear", value: source });
     },
     focusPane: async (paneId: string) => {
       calls.push({ method: "pane.focus", value: paneId });
@@ -183,6 +189,62 @@ describe("createHerdrTuiHost", () => {
         },
       },
     ]);
+    host.dispose();
+  });
+
+  test("publishes native sidebar items and dispatches their private actions", async () => {
+    const protocol = fakeProtocol(snapshot([], { protocol: 19 }));
+    const host = createHerdrTuiHost(
+      { ...hostOptions, pluginId: "dev.t3code", environmentKey: "local" },
+      protocol as never,
+    );
+    host.start();
+    await Bun.sleep(5);
+    const actions: unknown[] = [];
+    host.subscribeSidebarActions((action) => actions.push(action));
+    const activationInput = "\u001bP+t3-sidebar;eyJraW5kIjoidGhyZWFkIiwiaWQiOiJ0MSJ9\u001b\\";
+
+    await expect(
+      host.reportSidebar([
+        {
+          id: "thread:t1",
+          label: "Fix sidebar",
+          status: "working",
+          seen: true,
+          tokens: { project: "t3code", selected: "1", t3_order: "000002" },
+          activationInput,
+        },
+      ]),
+    ).resolves.toBe(true);
+    expect(host.handleInput(activationInput)).toBe(true);
+    expect(actions).toEqual([{ kind: "thread", id: "t1" }]);
+    expect(protocol.calls).toContainEqual({
+      method: "agent.view.set",
+      value: {
+        source: "plugin:dev.t3code",
+        label: "T3 Code",
+        filter: {
+          op: "not",
+          filter: {
+            op: "eq",
+            field: { token: "t3_environment" },
+            value: "local",
+          },
+        },
+        sort: [{ field: { token: "t3_order" }, order: "asc" }],
+        items: [
+          {
+            id: "thread:t1",
+            targetPaneId: "w1:p1",
+            label: "Fix sidebar",
+            status: "working",
+            seen: true,
+            tokens: { project: "t3code", selected: "1", t3_order: "000002" },
+            activationInput,
+          },
+        ],
+      },
+    });
     host.dispose();
   });
 

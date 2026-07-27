@@ -108,6 +108,9 @@ async function main(): Promise<void> {
   installKittyClipboardExtension(renderer, {
     tmuxPassthrough,
   });
+  const herdrInputHandler =
+    host.kind === "herdr" ? (sequence: string) => host.handleInput(sequence) : null;
+  if (herdrInputHandler) renderer.prependInputHandler(herdrInputHandler);
 
   try {
     let resolveDone: () => void = () => {};
@@ -119,6 +122,7 @@ async function main(): Promise<void> {
       if (exiting) return;
       exiting = true;
       try {
+        if (herdrInputHandler) renderer.removeInputHandler(herdrInputHandler);
         renderer.destroy();
       } catch {
         // best effort — destroy restores the terminal
@@ -138,6 +142,7 @@ async function main(): Promise<void> {
     // Restore the terminal before the error propagates — otherwise it's left in
     // raw/alt-screen mode with a garbled message.
     try {
+      if (herdrInputHandler) renderer.removeInputHandler(herdrInputHandler);
       renderer.destroy();
     } catch {
       // best effort

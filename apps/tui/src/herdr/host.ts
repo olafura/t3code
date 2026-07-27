@@ -4,10 +4,13 @@ import * as NodePath from "node:path";
 import {
   HerdrProtocolClient,
   type HerdrAgentInfo,
+  type HerdrAgentViewItem,
   type HerdrPaneReadResult,
   type HerdrReportedAgentState,
   type HerdrSessionSnapshot,
+  HERDR_SIDEBAR_PROTOCOL,
 } from "./protocol.ts";
+import { decodeHerdrSidebarAction, type HerdrSidebarAction } from "./sidebar.ts";
 import { encodeHerdrTerminalSwitch, type HerdrTerminalTarget } from "./terminalBridge.ts";
 
 export type HerdrConnectionState = "connecting" | "connected" | "disconnected" | "error";
@@ -73,6 +76,11 @@ export interface HerdrTuiHost {
   readonly focusAgent: (target: string) => Promise<void>;
   readonly interruptAgent: (target: string) => Promise<void>;
   readonly reportThread: (input: ReportThreadAgentInput | null) => Promise<void>;
+  readonly reportSidebar: (
+    items: ReadonlyArray<Omit<HerdrAgentViewItem, "targetPaneId">>,
+  ) => Promise<boolean>;
+  readonly subscribeSidebarActions: (listener: (action: HerdrSidebarAction) => void) => () => void;
+  readonly handleInput: (input: string) => boolean;
   readonly openThreadTerminal: (
     input: OpenThreadTerminalInput,
   ) => Promise<HerdrThreadTerminalResult>;
@@ -163,6 +171,7 @@ export function createHerdrTuiHost(
     error: null,
   };
   const listeners = new Set<() => void>();
+  const sidebarActionListeners = new Set<(action: HerdrSidebarAction) => void>();
   let started = false;
   let disposed = false;
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
@@ -170,6 +179,7 @@ export function createHerdrTuiHost(
   let refreshTimer: ReturnType<typeof setTimeout> | null = null;
   let syncing: Promise<void> | null = null;
   let terminalOperations: Promise<void> = Promise.resolve();
+  let sidebarOperations: Promise<void> = Promise.resolve();
   let threadReported = false;
   const agentName = "t3-code";
   const pluginSource = `plugin:${options.pluginId ?? "dev.t3code"}`;
@@ -271,6 +281,7 @@ export function createHerdrTuiHost(
       void sync();
     },
     dispose: () => {
+      if (disposed) return;
       disposed = true;
       started = false;
       if (reconnectTimer) clearTimeout(reconnectTimer);
@@ -278,7 +289,11 @@ export function createHerdrTuiHost(
       reconnectTimer = null;
       refreshTimer = null;
       listeners.clear();
-      client.dispose();
+      sidebarActionListeners.clear();
+      void client
+        .clearAgentView(pluginSource)
+        .catch(() => {})
+        .finally(() => client.dispose());
     },
     readAgent: (target, lines) => client.readAgent(target, lines),
     promptAgent: (target, text) => client.promptAgent(target, text),
@@ -317,6 +332,38 @@ export function createHerdrTuiHost(
         },
       });
       threadReported = true;
+    },
+    reportSidebar: async (items) => {
+      if ((state.snapshot?.protocol ?? 0) < HERDR_SIDEBAR_PROTOCOL) return false;
+      const operation = sidebarOperations.then(() =>
+        client.setAgentView({
+          source: pluginSource,
+          label: "T3 Code",
+          filter: {
+            op: "not",
+            filter: {
+              op: "eq",
+              field: { token: "t3_environment" },
+              value: environmentToken,
+            },
+          },
+          sort: [{ field: { token: "t3_order" }, order: "asc" }],
+          items: items.map((item) => ({ ...item, targetPaneId: options.paneId })),
+        }),
+      );
+      sidebarOperations = operation.catch(() => {});
+      await operation;
+      return true;
+    },
+    subscribeSidebarActions: (listener) => {
+      sidebarActionListeners.add(listener);
+      return () => sidebarActionListeners.delete(listener);
+    },
+    handleInput: (input) => {
+      const action = decodeHerdrSidebarAction(input);
+      if (!action) return false;
+      for (const listener of sidebarActionListeners) listener(action);
+      return true;
     },
     openThreadTerminal: (input) =>
       runTerminalOperation(async () => {

@@ -377,6 +377,8 @@ describe("ChatView Herdr host", () => {
       ],
     } as const satisfies HerdrSessionSnapshot;
     const reports: Array<Parameters<HerdrTuiHost["reportThread"]>[0]> = [];
+    const sidebarReports: Array<Parameters<HerdrTuiHost["reportSidebar"]>[0]> = [];
+    let activateSidebar: Parameters<HerdrTuiHost["subscribeSidebarActions"]>[0] = () => {};
     const openedTerminals: string[] = [];
     const openedTerminalTotals: number[] = [];
     let herdrConnected = false;
@@ -411,6 +413,15 @@ describe("ChatView Herdr host", () => {
       reportThread: async (input) => {
         reports.push(input);
       },
+      reportSidebar: async (items) => {
+        sidebarReports.push(items);
+        return true;
+      },
+      subscribeSidebarActions: (listener) => {
+        activateSidebar = listener;
+        return () => {};
+      },
+      handleInput: () => false,
       openThreadTerminal: async (input) => {
         openedTerminals.push(input.terminalId);
         openedTerminalTotals.push(input.total);
@@ -464,8 +475,18 @@ describe("ChatView Herdr host", () => {
       await setup.flush();
     });
     const hosted = await setup.waitForFrame((frame) => frame.includes("Ask anything"));
-    expect(hosted).not.toContain("Search projects");
+    expect(hosted).toContain("Search projects");
     expect(hosted).not.toContain("Reviewer");
+    await setup.waitFor(() =>
+      sidebarReports.some((items) =>
+        items.some((item) => item.id === "thread:t1" && item.tokens.selected === "1"),
+      ),
+    );
+    await React.act(async () => {
+      setup.mockInput.pressKey("f", { ctrl: true });
+      await setup.renderOnce();
+    });
+    await setup.waitForFrame((frame) => !frame.includes("Search projects"));
     await React.act(async () => {
       setup.mockInput.pressKey("f", { ctrl: true });
       await setup.renderOnce();
@@ -498,17 +519,27 @@ describe("ChatView Herdr host", () => {
       await setup.renderOnce();
     });
     await setup.waitForFrame((frame) => !frame.includes("Search projects"));
+    await React.act(async () => {
+      activateSidebar({ kind: "search" });
+      await setup.renderOnce();
+    });
+    await setup.waitForFrame((frame) => frame.includes("Search projects"));
+    await React.act(async () => {
+      setup.mockInput.pressKey("f", { ctrl: true });
+      await setup.renderOnce();
+    });
+    await setup.waitForFrame((frame) => !frame.includes("Search projects"));
     await setup.waitFor(() => reports.some((report) => report?.threadId === "t1"));
     await React.act(async () => {
       setup.mockInput.pressKey("e", { ctrl: true });
       await setup.renderOnce();
     });
-    const withTerminal = await setup.waitForFrame((frame) =>
-      frame.includes("Terminal · Thread one"),
+    const withTerminal = await setup.waitForFrame(
+      (frame) => frame.includes("Thread one") && frame.includes("Terminal 1"),
     );
-    expect(withTerminal).toContain("+ new");
-    expect(withTerminal).toContain("▸1");
-    expect(withTerminal).toContain("2");
+    expect(withTerminal).toContain("+ New");
+    expect(withTerminal).toContain("▸ Terminal 1");
+    expect(withTerminal).toContain("Terminal 2");
     await setup.waitFor(() => openedTerminals.includes("term-1"));
     expect(openedTerminalTotals).toContain(2);
     await React.act(async () => {
@@ -597,6 +628,9 @@ describe("ChatView Herdr host", () => {
       focusAgent: async () => {},
       interruptAgent: async () => {},
       reportThread: async () => {},
+      reportSidebar: async () => true,
+      subscribeSidebarActions: () => () => {},
+      handleInput: () => false,
       openThreadTerminal: async (input) => ({
         paneId: "w-new:p2",
         index: input.index,
