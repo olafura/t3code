@@ -180,6 +180,10 @@ export function createHerdrTuiHost(
   let syncing: Promise<void> | null = null;
   let terminalOperations: Promise<void> = Promise.resolve();
   let sidebarOperations: Promise<void> = Promise.resolve();
+  let sidebarRequest: {
+    readonly fingerprint: string;
+    readonly result: Promise<boolean>;
+  } | null = null;
   let threadReported = false;
   const agentName = "t3-code";
   const pluginSource = `plugin:${options.pluginId ?? "dev.t3code"}`;
@@ -335,6 +339,8 @@ export function createHerdrTuiHost(
     },
     reportSidebar: async (items) => {
       if ((state.snapshot?.protocol ?? 0) < HERDR_SIDEBAR_PROTOCOL) return false;
+      const fingerprint = JSON.stringify(items);
+      if (sidebarRequest?.fingerprint === fingerprint) return sidebarRequest.result;
       const operation = sidebarOperations.then(() =>
         client.setAgentView({
           source: pluginSource,
@@ -352,8 +358,12 @@ export function createHerdrTuiHost(
         }),
       );
       sidebarOperations = operation.catch(() => {});
-      await operation;
-      return true;
+      const result = operation.then(() => true);
+      sidebarRequest = { fingerprint, result };
+      void result.catch(() => {
+        if (sidebarRequest?.fingerprint === fingerprint) sidebarRequest = null;
+      });
+      return result;
     },
     subscribeSidebarActions: (listener) => {
       sidebarActionListeners.add(listener);

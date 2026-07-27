@@ -482,6 +482,14 @@ describe("ChatView Herdr host", () => {
         items.some((item) => item.id === "thread:t1" && item.tokens.selected === "1"),
       ),
     );
+    const sidebarReportCount = sidebarReports.length;
+    await React.act(async () => {
+      notifyHost();
+      notifyHost();
+      await setup.renderOnce();
+      await setup.flush();
+    });
+    expect(sidebarReports).toHaveLength(sidebarReportCount);
     await React.act(async () => {
       setup.mockInput.pressKey("f", { ctrl: true });
       await setup.renderOnce();

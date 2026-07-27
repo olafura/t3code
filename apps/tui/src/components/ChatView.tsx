@@ -408,15 +408,7 @@ export function ChatView({
         null,
         null,
       ),
-    [
-      state.shell,
-      state.expanded,
-      state.loadedInFull,
-      selectedThreadId,
-      state.filter,
-      state.herdr?.snapshot,
-      host,
-    ],
+    [state.shell, state.expanded, state.loadedInFull, selectedThreadId, state.filter],
   );
   const herdrSidebarItems = React.useMemo(
     () =>
