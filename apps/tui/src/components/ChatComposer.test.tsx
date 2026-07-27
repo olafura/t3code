@@ -116,6 +116,14 @@ describe("ChatComposer", () => {
     t.renderer.destroy();
   });
 
+  it("Given a native host agent, then provider-only controls are hidden but Send remains", async () => {
+    const frame = await frameOf(
+      <ChatComposer {...base} mode="compose" inputFocused controls={null} />,
+    );
+    expect(frame).not.toContain("model gpt-5");
+    expect(frame).toContain("▸ Send");
+  });
+
   it("Given a staged image, when the composer renders, then it shows a removal affordance", async () => {
     const attachment = {
       relativePath: "docs/diagram.png",

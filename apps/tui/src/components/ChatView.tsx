@@ -52,6 +52,7 @@ import { useKeyBindings } from "../hooks/useKeyBindings.ts";
 import { useKittyGraphicsSupport } from "../hooks/useKittyGraphicsSupport.ts";
 import { latestActionableProposedPlan } from "../proposedPlan.ts";
 import { createStore } from "../store.ts";
+import { herdrWorkspaceCwd, standaloneTuiHost, type TuiHost } from "../herdr/host.ts";
 import { statusGlyphColor, usePalette } from "../theme.ts";
 import {
   currentModelIndex,
@@ -63,7 +64,7 @@ import {
 } from "../models.ts";
 import { isWorking, revertableCheckpoints } from "../timeline.ts";
 import { buildUserInputAnswers, derivePendingUserInputs } from "../userInput.ts";
-import { buildRows, selectionEquals } from "./Sidebar.logic.ts";
+import { buildRows, findProjectForHerdrSpace, selectionEquals } from "./Sidebar.logic.ts";
 import { ChatComposer } from "./ChatComposer.tsx";
 import {
   CHAT_CONTENT_MAX_WIDTH,
@@ -81,6 +82,7 @@ import { CommandPalette } from "./CommandPalette.tsx";
 import { ComposerDock, type ComposerDockContext } from "./ComposerDock.tsx";
 import { FilesView, type FilesStatus, type ViewingFile } from "./FilesView.tsx";
 import { SettingsView } from "./SettingsView.tsx";
+import { HerdrAgentView, type HerdrAgentReadState } from "./HerdrAgentView.tsx";
 import { MessagesTimeline } from "./MessagesTimeline.tsx";
 import { ImageLightbox, type ExpandedImagePreview } from "./ImageLightbox.tsx";
 import { RightPanel } from "./RightPanel.tsx";
@@ -146,16 +148,18 @@ function branchPickerOptions(refs: ReadonlyArray<VcsRef>): ReadonlyArray<SelectO
 
 export function ChatView({
   client,
+  host = standaloneTuiHost,
   onExit,
 }: {
   readonly client: TuiClient;
+  readonly host?: TuiHost;
   readonly onExit: () => void;
 }): React.ReactNode {
   const { width, height } = useTerminalDimensions();
   const renderer = useRenderer();
   const inlineImagesSupported = useKittyGraphicsSupport();
   const palette = usePalette();
-  const store = React.useMemo(() => createStore(client), [client]);
+  const store = React.useMemo(() => createStore(client, host), [client, host]);
   const syntaxStyle = React.useMemo(() => SyntaxStyle.create(), []);
   const state = React.useSyncExternalStore(store.subscribe, store.getState);
   const [modelOptions, setModelOptions] = React.useState<ReadonlyArray<ModelOption>>([]);
@@ -305,6 +309,7 @@ export function ChatView({
   const newSubmissionPendingRef = React.useRef(false);
   const newDraftOriginSelectionRef = React.useRef<string | null>(null);
   const [newSubmissionPending, setNewSubmissionPending] = React.useState(false);
+  const [spaceImportConfirmation, setSpaceImportConfirmation] = React.useState<string | null>(null);
   const [newThreadSettings, setNewThreadSettings] = React.useState(DEFAULT_SERVER_SETTINGS);
   // Which pending approval ^A/^R act on; ↑/↓ move it while an approval is up.
   const [approvalIndex, setApprovalIndex] = React.useState(0);
@@ -341,6 +346,7 @@ export function ChatView({
   // User-set terminal-drawer height in rows; null = the default proportion.
   const [terminalHeight, setTerminalHeight] = React.useState<number | null>(null);
   const scrollRef = React.useRef<ScrollBoxRenderable | null>(null);
+  const herdrAgentScrollRef = React.useRef<ScrollBoxRenderable | null>(null);
   // Filled by the terminal drawer with a getter for its viewport text (for ^O copy).
   const terminalCopyRef = React.useRef<(() => string) | null>(null);
   // Routes key-driven scrollback navigation to the active terminal pane.
@@ -353,15 +359,88 @@ export function ChatView({
   // list can't leave it pointing past the end (projects[projectIndex] = undefined).
   const activeProjectIndex = projects.length > 0 ? Math.min(projectIndex, projects.length - 1) : 0;
   const activeNewThreadProject = projects[activeProjectIndex] ?? null;
-  const selectedProjectId = state.selection?.kind === "project" ? state.selection.id : null;
+  const selectedHerdrSpace =
+    state.selection?.kind === "space"
+      ? (state.herdr?.snapshot?.workspaces.find(
+          (workspace) => workspace.workspace_id === state.selection?.id,
+        ) ?? null)
+      : null;
+  const selectedSpaceProject = selectedHerdrSpace
+    ? findProjectForHerdrSpace(
+        state.shell,
+        state.herdr?.snapshot ?? null,
+        selectedHerdrSpace.workspace_id,
+      )
+    : null;
+  const selectedProjectId =
+    state.selection?.kind === "project"
+      ? state.selection.id
+      : ((selectedSpaceProject?.id as string | undefined) ?? null);
   const selectedThreadId = state.selection?.kind === "thread" ? state.selection.id : null;
+  const selectedHerdrAgent =
+    state.selection?.kind === "agent"
+      ? (state.herdr?.snapshot?.agents.find((agent) => agent.pane_id === state.selection?.id) ??
+        null)
+      : null;
   const selectionKey = state.selection ? `${state.selection.kind}:${state.selection.id}` : "none";
   const rows = React.useMemo(
     () =>
-      buildRows(state.shell, state.expanded, state.loadedInFull, selectedThreadId, state.filter),
-    [state.shell, state.expanded, state.loadedInFull, selectedThreadId, state.filter],
+      buildRows(
+        state.shell,
+        state.expanded,
+        state.loadedInFull,
+        selectedThreadId,
+        state.filter,
+        state.herdr?.snapshot ?? null,
+      ),
+    [
+      state.shell,
+      state.expanded,
+      state.loadedInFull,
+      selectedThreadId,
+      state.filter,
+      state.herdr?.snapshot,
+    ],
   );
   const detail = state.detail;
+  const [herdrAgentRead, setHerdrAgentRead] = React.useState<HerdrAgentReadState>({
+    status: "loading",
+    read: null,
+  });
+  React.useEffect(() => {
+    if (host.kind !== "herdr" || !selectedHerdrAgent) {
+      setHerdrAgentRead({ status: "loading", read: null });
+      return;
+    }
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let lastRevision = -1;
+    const poll = async () => {
+      try {
+        const read = await host.readAgent(selectedHerdrAgent.pane_id, 160);
+        if (cancelled) return;
+        if (read.revision !== lastRevision) {
+          lastRevision = read.revision;
+          setHerdrAgentRead({ status: "ready", read });
+        }
+      } catch {
+        if (!cancelled) {
+          setHerdrAgentRead((current) => ({ status: "error", read: current.read }));
+        }
+      } finally {
+        if (!cancelled) {
+          timer = setTimeout(() => void poll(), 1_000);
+          timer.unref?.();
+        }
+      }
+    };
+    setHerdrAgentRead({ status: "loading", read: null });
+    void poll();
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [host, selectedHerdrAgent?.pane_id]);
   const threadInteractionMode = detail
     ? (threadInteractionModes.get(detail.id) ?? detail.interactionMode)
     : "default";
@@ -404,7 +483,29 @@ export function ChatView({
   }, [focus, selectionKey]);
 
   React.useEffect(() => {
+    setSpaceImportConfirmation(null);
+  }, [selectionKey]);
+
+  React.useEffect(() => {
+    if (
+      focus !== "new" ||
+      !selectedHerdrSpace ||
+      selectedSpaceProject ||
+      newModelSelection ||
+      !modelOptions[0]
+    ) {
+      return;
+    }
+    setNewModelSelection(modelSelectionForOption(modelOptions[0]));
+  }, [focus, modelOptions, newModelSelection, selectedHerdrSpace, selectedSpaceProject]);
+
+  React.useEffect(() => {
     if (focus !== "new") return;
+    if (selectedHerdrSpace && !selectedSpaceProject) {
+      setNewBranchRefs([]);
+      setNewBranchRefsStatus("empty");
+      return;
+    }
     const project = projects[activeProjectIndex];
     if (!project) {
       setNewBranchRefs([]);
@@ -449,7 +550,14 @@ export function ChatView({
     return () => {
       cancelled = true;
     };
-  }, [activeProjectIndex, client, focus, projects]);
+  }, [
+    activeProjectIndex,
+    client,
+    focus,
+    projects,
+    selectedHerdrSpace?.workspace_id,
+    selectedSpaceProject?.id,
+  ]);
   // The selected thread's terminal tabs + the single active terminal the drawer
   // renders (derived so the existing single-terminal usages keep working).
   const terminalCwd = detail
@@ -493,7 +601,8 @@ export function ChatView({
   // The agent is actively running a turn — show the red stop affordance (mirrors
   // the web composer swapping its send button for a stop button while running).
   const working = !!detail && isWorking(detail);
-  const composerWorking = focus !== "new" && working;
+  const composerWorking =
+    selectedHerdrAgent?.agent_status === "working" || (focus !== "new" && working);
 
   // ── Older-history lazy-load ────────────────────────────────────────────────
   const detailId = detail?.id ?? null;
@@ -771,6 +880,20 @@ export function ChatView({
   const openNewThread = React.useCallback(() => {
     if (focus === "new") return;
     newDraftOriginSelectionRef.current = selectionKey;
+    if (selectedHerdrSpace && !selectedSpaceProject && state.herdr?.snapshot) {
+      const cwd = herdrWorkspaceCwd(state.herdr.snapshot, selectedHerdrSpace.workspace_id);
+      setNewModelSelection(modelOptions[0] ? modelSelectionForOption(modelOptions[0]) : null);
+      setNewRuntimeMode("full-access");
+      setNewInteractionMode("default");
+      setNewWorkspaceMode("current");
+      setNewBranch(null);
+      setNewContextWorktreePath(cwd);
+      setDraft("");
+      setNewComposerImages([]);
+      setComposerEpoch((epoch) => epoch + 1);
+      setFocus("new");
+      return;
+    }
     const context = resolveNewThreadContext({
       projects,
       selectedProjectId:
@@ -803,14 +926,37 @@ export function ChatView({
     projects,
     selectedProjectId,
     selectionKey,
+    selectedHerdrSpace,
+    selectedSpaceProject,
+    state.herdr?.snapshot,
     state.selection?.kind,
   ]);
 
   React.useEffect(() => {
-    if (focus !== "compose" || selectedProjectId === null) return;
-    if (!state.expanded.has(selectedProjectId)) store.toggleProject(selectedProjectId);
+    if (
+      focus !== "compose" ||
+      (selectedProjectId === null && !(selectedHerdrSpace && !selectedSpaceProject))
+    ) {
+      return;
+    }
+    if (
+      state.selection?.kind === "project" &&
+      selectedProjectId !== null &&
+      !state.expanded.has(selectedProjectId)
+    ) {
+      store.toggleProject(selectedProjectId);
+    }
     openNewThread();
-  }, [focus, openNewThread, selectedProjectId, state.expanded, store]);
+  }, [
+    focus,
+    openNewThread,
+    selectedHerdrSpace,
+    selectedProjectId,
+    selectedSpaceProject,
+    state.expanded,
+    state.selection?.kind,
+    store,
+  ]);
 
   const implementPlan = () => {
     if (!detail || !actionablePlan) return;
@@ -822,6 +968,13 @@ export function ChatView({
 
   // Interrupt the running turn — the red stop button and Esc both call this.
   const stopTurn = () => {
+    if (selectedHerdrAgent && host.kind === "herdr") {
+      void host.interruptAgent(selectedHerdrAgent.pane_id).then(
+        () => store.setStatus("Interrupt sent to Herdr agent.", "success"),
+        (error) => store.setStatus(`interrupt failed: ${String(error)}`, "error"),
+      );
+      return;
+    }
     if (!detail) return;
     void client.interrupt(detail.id).catch(() => {});
     store.setStatus("Interrupt sent.", "success");
@@ -1153,17 +1306,22 @@ export function ChatView({
   const composerSurfaceWidth = Math.max(8, Math.min(CHAT_CONTENT_MAX_WIDTH, chatWidth - 2));
   const composerContext: ComposerDockContext | null =
     focus === "new"
-      ? {
-          workspace:
-            newWorkspaceMode === "new-worktree"
-              ? "New worktree"
-              : newContextWorktreePath
-                ? "Current worktree"
-                : "Project workspace",
-          branch: newBranch ?? "(current)",
-          onOpenWorkspace: openWorkspacePicker,
-          onOpenBranch: openBranchPicker,
-        }
+      ? selectedHerdrSpace && !selectedSpaceProject
+        ? {
+            workspace: `Herdr Space · ${selectedHerdrSpace.label}`,
+            branch: "current",
+          }
+        : {
+            workspace:
+              newWorkspaceMode === "new-worktree"
+                ? "New worktree"
+                : newContextWorktreePath
+                  ? "Current worktree"
+                  : "Project workspace",
+            branch: newBranch ?? "(current)",
+            onOpenWorkspace: openWorkspacePicker,
+            onOpenBranch: openBranchPicker,
+          }
       : detail && state.vcsStatus?.isRepo
         ? {
             workspace: detail.worktreePath ? "Worktree checkout" : "Local checkout",
@@ -1280,7 +1438,38 @@ export function ChatView({
     if (typedText.length === 0 && composerImages.length === 0) {
       // Empty prompt → Enter activates the highlighted row.
       if (state.selection?.kind === "project") store.toggleProject(state.selection.id);
-      else if (state.selection?.kind === "more") store.loadMore(state.selection.id);
+      else if (state.selection?.kind === "space") store.toggleSpace(state.selection.id);
+      else if (selectedHerdrAgent && host.kind === "herdr") {
+        void host.focusAgent(selectedHerdrAgent.pane_id).catch((error) => {
+          store.setStatus(`focus failed: ${String(error)}`, "error");
+        });
+      } else if (state.selection?.kind === "more") store.loadMore(state.selection.id);
+      return;
+    }
+    if (selectedHerdrAgent && host.kind === "herdr") {
+      if (composerImages.length > 0) {
+        store.setStatus("Herdr agent prompts do not support image attachments.", "error");
+        return;
+      }
+      if (typedText.length === 0) return;
+      const submittedReply = reply;
+      replySubmissionPendingRef.current = true;
+      setReplySubmissionPending(true);
+      store.setStatus(`Prompting ${selectedHerdrAgent.display_agent ?? "Herdr agent"}…`, "busy");
+      void host.promptAgent(selectedHerdrAgent.pane_id, typedText).then(
+        () => {
+          replySubmissionPendingRef.current = false;
+          setReplySubmissionPending(false);
+          setReply((current) => (current === submittedReply ? "" : current));
+          setComposerEpoch((epoch) => epoch + 1);
+          store.setStatus("Agent prompted.", "success");
+        },
+        (error) => {
+          replySubmissionPendingRef.current = false;
+          setReplySubmissionPending(false);
+          store.setStatus(`prompt failed: ${String(error)}`, "error");
+        },
+      );
       return;
     }
     if (!detail) {
@@ -1383,7 +1572,6 @@ export function ChatView({
       store.setStatus("Wait for the branch switch to finish.", "info");
       return;
     }
-    const project = projects[activeProjectIndex];
     const typedMessage = draft.trim();
     const message =
       typedMessage.length > 0
@@ -1391,6 +1579,79 @@ export function ChatView({
         : newComposerImages.length > 0
           ? IMAGE_ONLY_PROMPT
           : "";
+    if (selectedHerdrSpace && !selectedSpaceProject && state.herdr?.snapshot) {
+      const cwd = herdrWorkspaceCwd(state.herdr.snapshot, selectedHerdrSpace.workspace_id);
+      if (!cwd) {
+        store.setStatus("Herdr could not resolve this Space's working directory.", "error");
+        return;
+      }
+      if (!message) {
+        store.setStatus("Write the first message for this project.", "error");
+        return;
+      }
+      if (!resolvedNewModelSelection) {
+        store.setStatus("Choose a model before creating the project.", "error");
+        return;
+      }
+      if (spaceImportConfirmation !== selectedHerdrSpace.workspace_id) {
+        setSpaceImportConfirmation(selectedHerdrSpace.workspace_id);
+        store.setStatus(
+          `Press Enter again to add ${selectedHerdrSpace.label} to T3 Code and start this thread.`,
+          "info",
+        );
+        return;
+      }
+      newSubmissionPendingRef.current = true;
+      setNewSubmissionPending(true);
+      store.setStatus(`Adding ${selectedHerdrSpace.label} and creating its first thread…`, "busy");
+      void client
+        .createProject({
+          title: selectedHerdrSpace.label,
+          workspaceRoot: cwd,
+          defaultModelSelection: resolvedNewModelSelection,
+        })
+        .then((projectId) =>
+          client
+            .createThread({
+              projectId,
+              projectCwd: cwd,
+              title: typedMessage.length > 0 ? truncate(typedMessage) : "Image attachment",
+              modelSelection: resolvedNewModelSelection,
+              firstMessage: message,
+              attachments: newComposerImages.map((image) => image.upload),
+              runtimeMode: newRuntimeMode,
+              interactionMode: newInteractionMode,
+              branch: null,
+              worktreePath: null,
+              createWorktree: false,
+              startFromOrigin: false,
+            })
+            .then((threadId) => ({ projectId, threadId })),
+        )
+        .then(
+          ({ projectId, threadId }) => {
+            setDraft("");
+            setNewComposerImages([]);
+            setSpaceImportConfirmation(null);
+            setNewContextWorktreePath(null);
+            newDraftOriginSelectionRef.current = null;
+            setComposerEpoch((epoch) => epoch + 1);
+            setFocus("compose");
+            if (!store.getState().expanded.has(projectId)) store.toggleProject(projectId);
+            store.select({ kind: "thread", id: threadId });
+            store.setStatus("Project and thread created.", "success");
+          },
+          (error) => {
+            store.setStatus(`create failed: ${String(error)}`, "error");
+          },
+        )
+        .finally(() => {
+          newSubmissionPendingRef.current = false;
+          setNewSubmissionPending(false);
+        });
+      return;
+    }
+    const project = projects[activeProjectIndex];
     const validationError = validateNewThread({
       hasProject: !!project,
       message,
@@ -1466,11 +1727,12 @@ export function ChatView({
   // Discover terminals the TUI didn't open (agent-spawned, web-created, or from
   // a prior run) via the metadata stream, so the tab bar isn't blind to them.
   React.useEffect(() => {
+    if (host.kind === "herdr") return;
     const unsubscribe = client.subscribeTerminalMetadata((event) => {
       setKnownTerminals((prev) => reduceKnownTerminals(prev, event));
     });
     return unsubscribe;
-  }, [client]);
+  }, [client, host.kind]);
 
   // Union discovered ids into the open thread's tabs. tabsWithDiscovered returns
   // the same reference when nothing is new, so updateThreadTabs no-ops then.
@@ -1485,6 +1747,24 @@ export function ChatView({
   // ^E shows/hides the drawer (opening focuses it); ^P flips focus between the
   // prompt and the terminal. Opening seeds a default terminal tab for the thread.
   const toggleTerminal = () => {
+    if (host.kind === "herdr") {
+      if (!detail) {
+        store.setStatus("Select a T3 thread before opening its terminal.");
+        return;
+      }
+      store.setStatus("Opening real terminal in Herdr…", "busy");
+      void host
+        .openThreadTerminal({
+          threadId: detail.id,
+          title: detail.title,
+          cwd: terminalCwd,
+        })
+        .then(
+          () => store.setStatus("Terminal focused in Herdr.", "success"),
+          (error) => store.setStatus(`terminal failed: ${String(error)}`, "error"),
+        );
+      return;
+    }
     if (terminalOpen) {
       setTerminalOpen(false);
       setTerminalFocused(false);
@@ -1696,6 +1976,10 @@ export function ChatView({
   };
 
   const pasteComposerImage = (paste: { readonly bytes: Uint8Array; readonly mimeType: string }) => {
+    if (selectedHerdrAgent) {
+      store.setStatus("Herdr agent prompts do not support image attachments.", "error");
+      return;
+    }
     if (!detail && focus !== "new") {
       store.setStatus("Select a thread before pasting an image.", "error");
       return;
@@ -1928,13 +2212,44 @@ export function ChatView({
         },
       );
     }
-    list.push({
-      id: "terminal",
-      title: activeTerminal ? "Hide terminal" : "Show terminal",
-      hint: "^E",
-      run: () => runCommand(toggleTerminal),
-    });
     if (detail) {
+      list.push({
+        id: "terminal",
+        title:
+          host.kind === "herdr"
+            ? "Open real terminal in Herdr"
+            : activeTerminal
+              ? "Hide terminal"
+              : "Show terminal",
+        hint: "^E",
+        run: () => runCommand(toggleTerminal),
+      });
+    }
+    if (selectedHerdrAgent && host.kind === "herdr") {
+      list.push({
+        id: "herdr-agent-focus",
+        title: "Focus agent terminal in Herdr",
+        keywords: "native pane",
+        run: () =>
+          runCommand(() => {
+            void host.focusAgent(selectedHerdrAgent.pane_id);
+          }),
+      });
+    }
+    if (host.kind === "herdr") {
+      list.push({
+        id: "herdr-server",
+        title: "Open T3 Code server pane",
+        keywords: "backend restart",
+        run: () =>
+          runCommand(() => {
+            void host.openServerPane().catch((error) => {
+              store.setStatus(`server pane failed: ${String(error)}`, "error");
+            });
+          }),
+      });
+    }
+    if (detail && host.kind === "standalone") {
       list.push({
         id: "terminal-new",
         title: "New terminal",
@@ -1942,7 +2257,7 @@ export function ChatView({
         run: () => runCommand(newTerminal),
       });
     }
-    if (detailTabs && detailTabs.ids.length > 1) {
+    if (host.kind === "standalone" && detailTabs && detailTabs.ids.length > 1) {
       list.push({
         id: "terminal-next",
         title: "Next terminal",
@@ -1956,7 +2271,7 @@ export function ChatView({
         run: () => runCommand(() => cycleTerminal(-1)),
       });
     }
-    if (terminalOpen && detailTabs) {
+    if (host.kind === "standalone" && terminalOpen && detailTabs) {
       list.push({
         id: "terminal-clear",
         title: "Clear terminal",
@@ -2047,6 +2362,8 @@ export function ChatView({
     newBranch,
     newContextWorktreePath,
     activeProjectIndex,
+    host.kind,
+    selectedHerdrAgent?.pane_id,
   ]);
 
   const filteredCommands = React.useMemo(
@@ -2108,6 +2425,10 @@ export function ChatView({
       setApprovalIndex((index) => (index <= 0 ? approvals.length - 1 : index - 1)),
     onApprovalNext: () => setApprovalIndex((index) => (index + 1) % approvals.length),
     onScrollUp: () => {
+      if (selectedHerdrAgent) {
+        herdrAgentScrollRef.current?.scrollBy({ x: 0, y: -SCROLL_STEP });
+        return;
+      }
       // At the very top, scrolling up further lazy-loads older history.
       const box = scrollRef.current;
       if (box && box.scrollTop <= 0 && hasMoreOlder && !loadingOlder) {
@@ -2118,6 +2439,10 @@ export function ChatView({
       box?.scrollBy({ x: 0, y: -SCROLL_STEP });
     },
     onScrollDown: () => {
+      if (selectedHerdrAgent) {
+        herdrAgentScrollRef.current?.scrollBy({ x: 0, y: SCROLL_STEP });
+        return;
+      }
       getKittyImageManager(renderer).pauseForScroll();
       scrollRef.current?.scrollBy({ x: 0, y: SCROLL_STEP });
     },
@@ -2338,14 +2663,18 @@ export function ChatView({
 
   const placeholder =
     focus === "new"
-      ? activeNewThreadProject
-        ? `What should we build in ${activeNewThreadProject.title}?`
-        : "What should we build?"
-      : detail
-        ? "Ask anything, @tag files/folders, $use skills, or / for commands"
-        : state.selection?.kind === "project"
-          ? "Enter to expand · Alt+↑/↓ to pick a thread"
-          : "Select a thread with Alt+↑/↓ or click";
+      ? selectedHerdrSpace && !selectedSpaceProject
+        ? `What should we build in ${selectedHerdrSpace.label}?`
+        : activeNewThreadProject
+          ? `What should we build in ${activeNewThreadProject.title}?`
+          : "What should we build?"
+      : selectedHerdrAgent
+        ? `Prompt ${selectedHerdrAgent.display_agent ?? selectedHerdrAgent.agent ?? "Herdr agent"}…`
+        : detail
+          ? "Ask anything, @tag files/folders, $use skills, or / for commands"
+          : state.selection?.kind === "project"
+            ? "Enter to expand · Alt+↑/↓ to pick a thread"
+            : "Select a thread with Alt+↑/↓ or click";
 
   // Contextual footer: only show keys that apply now (^Y with a plan, ^A/^R with
   // approvals). The persistent state (^B/^O/model/reasoning) lives in the controls
@@ -2369,11 +2698,13 @@ export function ChatView({
   ].join(" · ");
   const hint = expandedImage
     ? "image preview · Esc or click to close · ^C quit"
-    : focus !== "new" && pendingUserInput && userInputDeferred
-      ? "⚠ question pending — ^U to answer · ^C quit"
-      : activeTerminal
-        ? "^P prompt · ^E close term · ^↑/^↓ size term · keys → shell"
-        : composeHint;
+    : selectedHerdrAgent
+      ? "Herdr agent · Enter prompt · empty Enter focuses terminal · ^K commands · ^C quit"
+      : focus !== "new" && pendingUserInput && userInputDeferred
+        ? "⚠ question pending — ^U to answer · ^C quit"
+        : activeTerminal
+          ? "^P prompt · ^E close term · ^↑/^↓ size term · keys → shell"
+          : composeHint;
 
   const statusStyle = statusGlyphColor(state.statusKind);
   const selectRightPanelAction = (index: number) => {
@@ -2461,6 +2792,19 @@ export function ChatView({
                   height={panesHeight}
                   onClose={closeExpandedImage}
                 />
+              ) : selectedHerdrAgent && host.kind === "herdr" ? (
+                <HerdrAgentView
+                  agent={selectedHerdrAgent}
+                  readState={herdrAgentRead}
+                  width={chatWidth}
+                  height={panesHeight}
+                  scrollRef={herdrAgentScrollRef}
+                  onFocus={() => {
+                    void host.focusAgent(selectedHerdrAgent.pane_id).catch((error) => {
+                      store.setStatus(`focus failed: ${String(error)}`, "error");
+                    });
+                  }}
+                />
               ) : (
                 <MessagesTimeline
                   detail={focus === "new" ? null : detail}
@@ -2538,10 +2882,10 @@ export function ChatView({
               editorRows={promptLines}
               inputFocused={composerInputFocused}
               composerEpoch={composerEpoch}
-              controls={controls}
+              controls={selectedHerdrAgent ? null : controls}
               working={composerWorking}
-              attachments={activeComposerImages}
-              inlineImagesSupported={inlineImagesSupported}
+              attachments={selectedHerdrAgent ? [] : activeComposerImages}
+              inlineImagesSupported={!selectedHerdrAgent && inlineImagesSupported}
               width={composerSurfaceWidth}
               pendingUserInput={composerUserInputActive ? pendingUserInput : null}
               uiQuestionIndex={uiQuestionIndex}
@@ -2564,7 +2908,10 @@ export function ChatView({
             />
           </ComposerDock>
 
-          {activeTerminal && detailTabs && terminalDrawerHeight >= 6 ? (
+          {host.kind === "standalone" &&
+          activeTerminal &&
+          detailTabs &&
+          terminalDrawerHeight >= 6 ? (
             <ThreadTerminalDrawer
               client={client}
               info={activeTerminal}

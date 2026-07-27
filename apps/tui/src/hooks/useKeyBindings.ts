@@ -117,7 +117,7 @@ export interface KeyBindingActions {
   readonly onPanelNext: () => void;
   readonly onPanelActivate: () => void;
   readonly onPanelClose: () => void;
-  /** Alt+↑ / Alt+↓ — move to the prev/next thread (skipping project headers). */
+  /** Alt+↑ / Alt+↓ — move to the prev/next T3 thread or Herdr agent. */
   readonly onThreadPrev: () => void;
   readonly onThreadNext: () => void;
   /** Alt+1…9 — jump to the Nth visible thread (web's thread-jump). */
@@ -258,7 +258,7 @@ export function useKeyBindings(actions: KeyBindingActions): void {
     }
     if (key.ctrl && key.name === "e") return actions.onToggleTerminal();
     if (key.ctrl && key.name === "p") return actions.onToggleFocus();
-    // Alt+↑/↓ jump thread-to-thread; ^↑/^↓ resize the prompt. Unmodified arrows
+    // Alt+↑/↓ jump between conversations/agents; ^↑/^↓ resize the prompt. Unmodified arrows
     // belong to the focused textarea. This is also important under tmux: when a
     // client cannot forward a wheel event it may translate it to arrow keys, and
     // scrolling the conversation must never change the selected thread.

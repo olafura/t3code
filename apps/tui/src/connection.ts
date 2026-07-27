@@ -16,7 +16,7 @@ import {
   type OrchestrationThreadDetailSnapshot,
   type OrchestrationThreadActivity,
   OrchestrationProposedPlanId,
-  type ProjectId,
+  ProjectId,
   type ProviderApprovalDecision,
   PositiveInt,
   type ProviderInteractionMode,
@@ -46,6 +46,7 @@ import {
 } from "@t3tools/client-runtime/connection";
 import {
   archiveThread as archiveThreadOp,
+  createProject as createProjectOp,
   deleteThread as deleteThreadOp,
   interruptThreadTurn,
   respondToThreadApproval,
@@ -142,6 +143,12 @@ export interface TuiCreateThreadInput {
   readonly worktreePath: string | null;
   readonly createWorktree: boolean;
   readonly startFromOrigin: boolean;
+}
+
+export interface TuiCreateProjectInput {
+  readonly title: string;
+  readonly workspaceRoot: string;
+  readonly defaultModelSelection: ModelSelection | null;
 }
 
 export function buildThreadReplyTurn(input: {
@@ -441,6 +448,7 @@ export interface TuiClient {
     attachments?: ReadonlyArray<UploadChatImageAttachment>,
     modelSelection?: ModelSelection,
   ) => Promise<void>;
+  readonly createProject: (input: TuiCreateProjectInput) => Promise<ProjectId>;
   readonly createThread: (input: TuiCreateThreadInput) => Promise<ThreadId>;
   readonly implementPlan: (
     thread: Pick<OrchestrationThread, "id" | "runtimeMode">,
@@ -772,6 +780,21 @@ export function makeTuiClient(runtime: TuiRuntime, origin = ""): TuiClient {
               ...(modelSelection ? { modelSelection } : {}),
             }),
           );
+        }),
+      ),
+
+    createProject: (input) =>
+      runtime.runPromise(
+        Effect.gen(function* () {
+          const projectId = ProjectId.make(yield* newId);
+          yield* createProjectOp({
+            projectId,
+            title: TrimmedNonEmptyString.make(input.title),
+            workspaceRoot: TrimmedNonEmptyString.make(input.workspaceRoot),
+            createWorkspaceRootIfMissing: false,
+            defaultModelSelection: input.defaultModelSelection,
+          });
+          return projectId;
         }),
       ),
 
