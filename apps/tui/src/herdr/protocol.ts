@@ -3,6 +3,7 @@ import * as NodeNet from "node:net";
 export const HERDR_MIN_PROTOCOL = 17;
 
 export type HerdrAgentStatus = "idle" | "working" | "blocked" | "done" | "unknown";
+export type HerdrReportedAgentState = Exclude<HerdrAgentStatus, "done">;
 
 export interface HerdrWorktreeInfo {
   readonly repo_key: string;
@@ -139,11 +140,6 @@ export class HerdrProtocolVersionError extends Error {
   }
 }
 
-type PendingRequest = {
-  readonly resolve: (result: Readonly<Record<string, unknown>>) => void;
-  readonly reject: (error: Error) => void;
-};
-
 type SocketFactory = (path: string) => NodeNet.Socket;
 
 const DEFAULT_EVENT_SUBSCRIPTIONS = [
@@ -169,7 +165,6 @@ const DEFAULT_EVENT_SUBSCRIPTIONS = [
   "pane.moved",
   "pane.exited",
   "pane.agent_detected",
-  "pane.agent_status_changed",
   "layout.updated",
 ] as const;
 
@@ -223,11 +218,11 @@ export class HerdrProtocolClient {
   readonly socketPath: string;
 
   private readonly socketFactory: SocketFactory;
-  private socket: NodeNet.Socket | null = null;
-  private connecting: Promise<void> | null = null;
-  private buffer = "";
+  private eventSocket: NodeNet.Socket | null = null;
+  private subscribing: Promise<void> | null = null;
+  private eventBuffer = "";
   private nextRequestId = 1;
-  private readonly pending = new Map<string, PendingRequest>();
+  private readonly requestSockets = new Set<NodeNet.Socket>();
   private readonly eventListeners = new Set<(event: HerdrEventEnvelope) => void>();
   private readonly disconnectListeners = new Set<(error: Error) => void>();
 
@@ -236,37 +231,8 @@ export class HerdrProtocolClient {
     this.socketFactory = socketFactory;
   }
 
-  connect(): Promise<void> {
-    if (this.socket && !this.socket.destroyed) return Promise.resolve();
-    if (this.connecting) return this.connecting;
-
-    this.connecting = new Promise<void>((resolve, reject) => {
-      let settled = false;
-      const socket = this.socketFactory(this.socketPath);
-      this.socket = socket;
-      socket.setEncoding("utf8");
-      socket.on("data", (chunk: string) => this.handleData(chunk));
-      socket.once("connect", () => {
-        settled = true;
-        resolve();
-      });
-      socket.once("error", (cause) => {
-        const error = cause instanceof Error ? cause : new Error(String(cause));
-        if (!settled) reject(error);
-      });
-      socket.once("close", () => {
-        const error = new Error("Herdr socket disconnected.");
-        if (!settled) reject(error);
-        if (this.socket === socket) this.socket = null;
-        this.buffer = "";
-        for (const pending of this.pending.values()) pending.reject(error);
-        this.pending.clear();
-        for (const listener of this.disconnectListeners) listener(error);
-      });
-    }).finally(() => {
-      this.connecting = null;
-    });
-    return this.connecting;
+  async connect(): Promise<void> {
+    await this.ping();
   }
 
   onEvent(listener: (event: HerdrEventEnvelope) => void): () => void {
@@ -283,20 +249,59 @@ export class HerdrProtocolClient {
     method: string,
     params: Readonly<Record<string, unknown>> = {},
   ): Promise<Readonly<Record<string, unknown>>> {
-    await this.connect();
-    const socket = this.socket;
-    if (!socket || socket.destroyed) throw new Error("Herdr socket is unavailable.");
     const id = `t3_${this.nextRequestId++}`;
-    const response = new Promise<Readonly<Record<string, unknown>>>((resolve, reject) => {
-      this.pending.set(id, { resolve, reject });
+    return new Promise<Readonly<Record<string, unknown>>>((resolve, reject) => {
+      const socket = this.socketFactory(this.socketPath);
+      this.requestSockets.add(socket);
+      let buffer = "";
+      let settled = false;
+
+      const finish = (error: Error | null, result?: Readonly<Record<string, unknown>>): void => {
+        if (settled) return;
+        settled = true;
+        this.requestSockets.delete(socket);
+        socket.end();
+        socket.destroy();
+        if (error) reject(error);
+        else resolve(result ?? {});
+      };
+
+      socket.setEncoding("utf8");
+      socket.on("data", (chunk: string) => {
+        buffer += chunk;
+        while (true) {
+          const newline = buffer.indexOf("\n");
+          if (newline < 0) return;
+          const line = buffer.slice(0, newline).trim();
+          buffer = buffer.slice(newline + 1);
+          if (line.length === 0) continue;
+          const envelope = decodeEnvelope(line);
+          if (!envelope) continue;
+          if (!("id" in envelope)) {
+            for (const listener of this.eventListeners) listener(envelope);
+            continue;
+          }
+          if (envelope.id !== id) continue;
+          if ("error" in envelope) {
+            finish(new HerdrRpcError(envelope.error.code, envelope.error.message));
+          } else {
+            finish(null, envelope.result);
+          }
+          return;
+        }
+      });
+      socket.once("connect", () => {
+        socket.write(`${JSON.stringify({ id, method, params })}\n`, (error) => {
+          if (error) finish(error);
+        });
+      });
+      socket.once("error", (cause) => {
+        finish(cause instanceof Error ? cause : new Error(String(cause)));
+      });
+      socket.once("close", () => {
+        finish(new Error("Herdr socket disconnected before responding."));
+      });
     });
-    socket.write(`${JSON.stringify({ id, method, params })}\n`, (error) => {
-      if (!error) return;
-      const pending = this.pending.get(id);
-      this.pending.delete(id);
-      pending?.reject(error);
-    });
-    return response;
   }
 
   async ping(): Promise<{ readonly version: string; readonly protocol: number }> {
@@ -315,9 +320,67 @@ export class HerdrProtocolClient {
   }
 
   async subscribeToLifecycleEvents(): Promise<void> {
-    await this.request("events.subscribe", {
-      subscriptions: DEFAULT_EVENT_SUBSCRIPTIONS.map((type) => ({ type })),
+    if (this.eventSocket && !this.eventSocket.destroyed) return;
+    if (this.subscribing) return this.subscribing;
+
+    const id = `t3_${this.nextRequestId++}`;
+    this.subscribing = new Promise<void>((resolve, reject) => {
+      let acknowledged = false;
+      const socket = this.socketFactory(this.socketPath);
+      this.eventSocket = socket;
+      socket.setEncoding("utf8");
+      socket.on("data", (chunk: string) => {
+        this.eventBuffer += chunk;
+        while (true) {
+          const newline = this.eventBuffer.indexOf("\n");
+          if (newline < 0) return;
+          const line = this.eventBuffer.slice(0, newline).trim();
+          this.eventBuffer = this.eventBuffer.slice(newline + 1);
+          if (line.length === 0) continue;
+          const envelope = decodeEnvelope(line);
+          if (!envelope) continue;
+          if ("id" in envelope) {
+            if (envelope.id !== id || acknowledged) continue;
+            if ("error" in envelope) {
+              reject(new HerdrRpcError(envelope.error.code, envelope.error.message));
+            } else {
+              acknowledged = true;
+              resolve();
+            }
+            continue;
+          }
+          for (const listener of this.eventListeners) listener(envelope);
+        }
+      });
+      socket.once("connect", () => {
+        socket.write(
+          `${JSON.stringify({
+            id,
+            method: "events.subscribe",
+            params: {
+              subscriptions: DEFAULT_EVENT_SUBSCRIPTIONS.map((type) => ({ type })),
+            },
+          })}\n`,
+          (error) => {
+            if (error && !acknowledged) reject(error);
+          },
+        );
+      });
+      socket.once("error", (cause) => {
+        if (acknowledged) return;
+        reject(cause instanceof Error ? cause : new Error(String(cause)));
+      });
+      socket.once("close", () => {
+        const error = new Error("Herdr event stream disconnected.");
+        if (this.eventSocket === socket) this.eventSocket = null;
+        this.eventBuffer = "";
+        if (!acknowledged) reject(error);
+        for (const listener of this.disconnectListeners) listener(error);
+      });
+    }).finally(() => {
+      this.subscribing = null;
     });
+    return this.subscribing;
   }
 
   async readAgent(target: string, lines = 120): Promise<HerdrPaneReadResult> {
@@ -364,16 +427,49 @@ export class HerdrProtocolClient {
     return readTypedResult<HerdrPaneInfo>(result, "pane", "split pane");
   }
 
-  async reportPaneMetadata(
-    paneId: string,
-    tokens: Readonly<Record<string, string | null>>,
-    title?: string,
-  ): Promise<void> {
+  async reportPaneAgent(input: {
+    readonly paneId: string;
+    readonly source: string;
+    readonly agent: string;
+    readonly state: HerdrReportedAgentState;
+    readonly message?: string;
+    readonly sessionId?: string;
+  }): Promise<void> {
+    await this.request("pane.report_agent", {
+      pane_id: input.paneId,
+      source: input.source,
+      agent: input.agent,
+      state: input.state,
+      ...(input.message ? { message: input.message } : {}),
+      ...(input.sessionId ? { agent_session_id: input.sessionId } : {}),
+    });
+  }
+
+  async releasePaneAgent(input: {
+    readonly paneId: string;
+    readonly source: string;
+    readonly agent: string;
+  }): Promise<void> {
+    await this.request("pane.release_agent", {
+      pane_id: input.paneId,
+      source: input.source,
+      agent: input.agent,
+    });
+  }
+
+  async reportPaneMetadata(input: {
+    readonly paneId: string;
+    readonly source: string;
+    readonly tokens: Readonly<Record<string, string | null>>;
+    readonly title?: string;
+    readonly displayAgent?: string;
+  }): Promise<void> {
     await this.request("pane.report_metadata", {
-      pane_id: paneId,
-      source: "plugin:t3-code",
-      tokens,
-      ...(title ? { title } : {}),
+      pane_id: input.paneId,
+      source: input.source,
+      tokens: input.tokens,
+      ...(input.title ? { title: input.title } : {}),
+      ...(input.displayAgent ? { display_agent: input.displayAgent } : {}),
     });
   }
 
@@ -393,39 +489,16 @@ export class HerdrProtocolClient {
   }
 
   dispose(): void {
-    const socket = this.socket;
-    this.socket = null;
-    socket?.end();
-    socket?.destroy();
-    const error = new Error("Herdr client disposed.");
-    for (const pending of this.pending.values()) pending.reject(error);
-    this.pending.clear();
+    const eventSocket = this.eventSocket;
+    this.eventSocket = null;
+    for (const socket of this.requestSockets) {
+      socket.end();
+      socket.destroy();
+    }
+    this.requestSockets.clear();
+    eventSocket?.end();
+    eventSocket?.destroy();
     this.eventListeners.clear();
     this.disconnectListeners.clear();
-  }
-
-  private handleData(chunk: string): void {
-    this.buffer += chunk;
-    while (true) {
-      const newline = this.buffer.indexOf("\n");
-      if (newline < 0) return;
-      const line = this.buffer.slice(0, newline).trim();
-      this.buffer = this.buffer.slice(newline + 1);
-      if (line.length === 0) continue;
-      const envelope = decodeEnvelope(line);
-      if (!envelope) continue;
-      if ("id" in envelope) {
-        const pending = this.pending.get(envelope.id);
-        if (!pending) continue;
-        this.pending.delete(envelope.id);
-        if ("error" in envelope) {
-          pending.reject(new HerdrRpcError(envelope.error.code, envelope.error.message));
-        } else {
-          pending.resolve(envelope.result);
-        }
-        continue;
-      }
-      for (const listener of this.eventListeners) listener(envelope);
-    }
   }
 }

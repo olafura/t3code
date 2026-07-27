@@ -53,7 +53,7 @@ async function withServer(
 }
 
 describe("HerdrProtocolClient", () => {
-  test("correlates fragmented responses and emits lifecycle events", async () => {
+  test("correlates fragmented ordinary responses", async () => {
     const fixture = await withServer((request, socket) => {
       if (request.method !== "session.snapshot") return;
       const response = `${JSON.stringify({
@@ -70,22 +70,15 @@ describe("HerdrProtocolClient", () => {
             agents: [],
           },
         },
-      })}\n${JSON.stringify({
-        event: "pane.agent_status_changed",
-        data: { pane_id: "w1:p2", workspace_id: "w1", agent_status: "blocked" },
       })}\n`;
       socket.write(response.slice(0, 13));
       socket.write(response.slice(13));
     });
     const client = new HerdrProtocolClient(fixture.socketPath);
     cleanups.push(async () => client.dispose());
-    const events: string[] = [];
-    client.onEvent((event) => events.push(event.event));
-
     const snapshot = await client.snapshot();
 
     expect(snapshot.protocol).toBe(17);
-    expect(events).toEqual(["pane.agent_status_changed"]);
   });
 
   test("preserves request shapes for agent prompting and pane splitting", async () => {
@@ -159,6 +152,77 @@ describe("HerdrProtocolClient", () => {
     ]);
   });
 
+  test("uses a fresh connection for each ordinary request", async () => {
+    const fixture = await withServer((request, socket) => {
+      if (request.method === "ping") {
+        socket.end(
+          `${JSON.stringify({
+            id: request.id,
+            result: { type: "pong", version: "0.7.5", protocol: 17 },
+          })}\n`,
+        );
+        return;
+      }
+      socket.end(
+        `${JSON.stringify({
+          id: request.id,
+          result: {
+            type: "session_snapshot",
+            snapshot: {
+              version: "0.7.5",
+              protocol: 17,
+              workspaces: [],
+              tabs: [],
+              panes: [],
+              layouts: [],
+              agents: [],
+            },
+          },
+        })}\n`,
+      );
+    });
+    const client = new HerdrProtocolClient(fixture.socketPath);
+    cleanups.push(async () => client.dispose());
+
+    await expect(client.ping()).resolves.toEqual({ version: "0.7.5", protocol: 17 });
+    await expect(client.snapshot()).resolves.toMatchObject({ protocol: 17 });
+    expect(fixture.requests.map((request) => request.method)).toEqual(["ping", "session.snapshot"]);
+  });
+
+  test("subscribes only to lifecycle events that support an unscoped stream", async () => {
+    const fixture = await withServer((request, socket) => {
+      const result =
+        request.method === "events.subscribe"
+          ? { type: "subscription_started" }
+          : { type: "pong", version: "0.7.5", protocol: 17 };
+      socket.write(`${JSON.stringify({ id: request.id, result })}\n`);
+      if (request.method === "events.subscribe") {
+        socket.write(
+          `${JSON.stringify({
+            event: "pane.created",
+            data: { pane_id: "w1:p2", workspace_id: "w1" },
+          })}\n`,
+        );
+      }
+    });
+    const client = new HerdrProtocolClient(fixture.socketPath);
+    cleanups.push(async () => client.dispose());
+    const events: string[] = [];
+    client.onEvent((event) => events.push(event.event));
+
+    await client.subscribeToLifecycleEvents();
+    await expect(client.ping()).resolves.toEqual({ version: "0.7.5", protocol: 17 });
+
+    const subscriptions = fixture.requests[0]?.params.subscriptions as ReadonlyArray<{
+      readonly type: string;
+    }>;
+    expect(subscriptions.some((subscription) => subscription.type === "pane.created")).toBe(true);
+    expect(
+      subscriptions.some((subscription) => subscription.type === "pane.agent_status_changed"),
+    ).toBe(false);
+    expect(events).toEqual(["pane.created"]);
+  });
+
   test("surfaces declared Herdr errors", async () => {
     const fixture = await withServer((request, socket) => {
       socket.write(
@@ -189,6 +253,36 @@ describe("HerdrProtocolClient", () => {
       id: "t3_1",
       method: "agent.send_keys",
       params: { target: "w1:p2", keys: ["ctrl+c"] },
+    });
+  });
+
+  test("reports a T3 thread through Herdr's semantic agent state", async () => {
+    const fixture = await withServer((request, socket) => {
+      socket.write(`${JSON.stringify({ id: request.id, result: { type: "ok" } })}\n`);
+    });
+    const client = new HerdrProtocolClient(fixture.socketPath);
+    cleanups.push(async () => client.dispose());
+
+    await client.reportPaneAgent({
+      paneId: "w1:p2",
+      source: "plugin:dev.t3code",
+      agent: "t3-code",
+      state: "working",
+      message: "Fix terminal integration",
+      sessionId: "thread-1",
+    });
+
+    expect(fixture.requests[0]).toEqual({
+      id: "t3_1",
+      method: "pane.report_agent",
+      params: {
+        pane_id: "w1:p2",
+        source: "plugin:dev.t3code",
+        agent: "t3-code",
+        state: "working",
+        message: "Fix terminal integration",
+        agent_session_id: "thread-1",
+      },
     });
   });
 });
