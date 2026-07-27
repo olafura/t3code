@@ -8,6 +8,8 @@ import * as React from "react";
 import { DEFAULT_SERVER_SETTINGS, type VcsStatusResult } from "@t3tools/contracts";
 
 import type { OrchestrationShellSnapshot, OrchestrationThread, TuiClient } from "../connection.ts";
+import type { HerdrTuiHost } from "../herdr/host.ts";
+import type { HerdrSessionSnapshot } from "../herdr/protocol.ts";
 import { ChatView } from "./ChatView.tsx";
 
 const PNG_BASE64 =
@@ -103,6 +105,7 @@ function fakeClient({
   shellSnapshot = shell(),
   sendReply = () => Promise.resolve(),
   respondUserInput = () => Promise.resolve(),
+  createProject = async () => "p-new" as never,
   createThread = async () => "t-new" as never,
   terminalClear = async () => {},
   terminalRestart = async () => {},
@@ -142,6 +145,7 @@ function fakeClient({
   readonly shellSnapshot?: OrchestrationShellSnapshot;
   readonly sendReply?: TuiClient["sendReply"];
   readonly respondUserInput?: TuiClient["respondUserInput"];
+  readonly createProject?: TuiClient["createProject"];
   readonly createThread?: TuiClient["createThread"];
   readonly terminalClear?: TuiClient["terminalClear"];
   readonly terminalRestart?: TuiClient["terminalRestart"];
@@ -179,6 +183,7 @@ function fakeClient({
     subscribeTerminalMetadata: () => () => {},
     sendReply,
     respondUserInput,
+    createProject,
     createThread,
     subscribeTerminal: () => () => {},
     terminalWrite: async () => {},
@@ -300,6 +305,250 @@ describe("ChatView responsive shell", () => {
     expect(terminalTop).toBeGreaterThanOrEqual(0);
     expect(terminalBottom - terminalTop).toBeGreaterThanOrEqual(5);
     expect(terminalBottom).toBeLessThan(27);
+    setup.renderer.destroy();
+  });
+});
+
+describe("ChatView Herdr host", () => {
+  it("Given a native Herdr agent, when selected and prompted, then its real output uses the shared composer", async () => {
+    const prompts: Array<{ readonly target: string; readonly text: string }> = [];
+    const terminals: Array<Parameters<HerdrTuiHost["openThreadTerminal"]>[0]> = [];
+    const snapshot = {
+      version: "0.7.5",
+      protocol: 17,
+      focused_workspace_id: "w1",
+      focused_tab_id: "w1:t1",
+      focused_pane_id: "w1:p2",
+      workspaces: [
+        {
+          workspace_id: "w1",
+          number: 1,
+          label: "Project one",
+          focused: true,
+          pane_count: 2,
+          tab_count: 1,
+          active_tab_id: "w1:t1",
+          agent_status: "idle",
+          worktree: {
+            repo_key: "project-one",
+            repo_name: "project-one",
+            repo_root: "/workspace/project-one",
+            checkout_path: "/workspace/project-one",
+            is_linked_worktree: false,
+          },
+        },
+      ],
+      tabs: [],
+      panes: [],
+      layouts: [],
+      agents: [
+        {
+          pane_id: "w1:p2",
+          terminal_id: "terminal-2",
+          workspace_id: "w1",
+          tab_id: "w1:t1",
+          focused: true,
+          agent_status: "idle",
+          revision: 7,
+          agent: "codex",
+          display_agent: "Reviewer",
+          cwd: "/workspace/project-one",
+        },
+      ],
+    } as const satisfies HerdrSessionSnapshot;
+    const host = {
+      kind: "herdr",
+      getState: () => ({ connection: "connected", snapshot, error: null }) as const,
+      subscribe: () => () => {},
+      start: () => {},
+      dispose: () => {},
+      readAgent: async () => ({
+        pane_id: "w1:p2",
+        workspace_id: "w1",
+        tab_id: "w1:t1",
+        source: "recent_unwrapped",
+        format: "text",
+        text: "native agent output",
+        revision: 7,
+        truncated: false,
+      }),
+      promptAgent: async (target: string, text: string) => {
+        prompts.push({ target, text });
+        return snapshot.agents[0]!;
+      },
+      focusAgent: async () => {},
+      interruptAgent: async () => {},
+      openThreadTerminal: async (input) => {
+        terminals.push(input);
+      },
+      openServerPane: async () => {},
+    } satisfies HerdrTuiHost;
+    const fake = fakeClient({ detail: thread() });
+    const setup = await testRender(
+      <ChatView client={fake.client} host={host} onExit={() => {}} />,
+      { width: 110, height: 28 },
+    );
+    await React.act(async () => {
+      await setup.renderOnce();
+      fake.connect();
+      await setup.renderOnce();
+      await setup.flush();
+    });
+    const collapsed = await setup.waitForFrame((frame) => frame.includes("Project one"));
+    const spaceRow = collapsed
+      .split("\n")
+      .findIndex((line) => line.includes("Project one") && line.includes("("));
+    await React.act(async () => {
+      await setup.mockMouse.click(4, spaceRow);
+      await setup.flush();
+    });
+    const expanded = await setup.waitForFrame((frame) => frame.includes("Reviewer"));
+    const threadRow = expanded.split("\n").findIndex((line) => line.includes("Thread one"));
+    await React.act(async () => {
+      await setup.mockMouse.click(8, threadRow);
+      await setup.flush();
+    });
+    await setup.waitForFrame((frame) => frame.includes("Ask anything"));
+    await React.act(async () => {
+      setup.mockInput.pressKey("e", { ctrl: true });
+      await setup.renderOnce();
+    });
+    await setup.waitFor(() => terminals.length === 1);
+    expect(terminals[0]).toMatchObject({
+      threadId: "t1",
+      cwd: "/workspace/project-one",
+    });
+    const withTerminal = setup.captureCharFrame();
+    expect(withTerminal).not.toContain("Terminal ·");
+
+    const agentRow = withTerminal.split("\n").findIndex((line) => line.includes("Reviewer"));
+    await React.act(async () => {
+      await setup.mockMouse.click(8, agentRow);
+      await setup.flush();
+    });
+    const agentFrame = await setup.waitForFrame(
+      (frame) => frame.includes("native agent output") && frame.includes("Prompt Reviewer"),
+    );
+    expect(agentFrame).not.toContain("model gpt-5");
+
+    await React.act(async () => {
+      await setup.mockInput.typeText("review the implementation");
+      await setup.renderOnce();
+    });
+    await setup.waitForFrame((frame) => frame.includes("review the implementation"));
+    await React.act(async () => {
+      setup.mockInput.pressEnter();
+      await setup.renderOnce();
+    });
+    await setup.waitFor(() => prompts.length === 1);
+    expect(prompts).toEqual([{ target: "w1:p2", text: "review the implementation" }]);
+    setup.renderer.destroy();
+  });
+
+  it("Given an unmatched Herdr Space, when its first task is confirmed, then T3 adds the project before creating the thread", async () => {
+    const snapshot = {
+      version: "0.7.5",
+      protocol: 17,
+      focused_workspace_id: "w-new",
+      workspaces: [
+        {
+          workspace_id: "w-new",
+          number: 1,
+          label: "New service",
+          focused: true,
+          pane_count: 1,
+          tab_count: 1,
+          active_tab_id: "w-new:t1",
+          agent_status: "unknown",
+          worktree: {
+            repo_key: "new-service",
+            repo_name: "new-service",
+            repo_root: "/workspace/new-service",
+            checkout_path: "/workspace/new-service",
+            is_linked_worktree: false,
+          },
+        },
+      ],
+      tabs: [],
+      panes: [],
+      layouts: [],
+      agents: [],
+    } as const satisfies HerdrSessionSnapshot;
+    const host = {
+      kind: "herdr",
+      getState: () => ({ connection: "connected", snapshot, error: null }) as const,
+      subscribe: () => () => {},
+      start: () => {},
+      dispose: () => {},
+      readAgent: async () => {
+        throw new Error("no agent");
+      },
+      promptAgent: async () => {
+        throw new Error("no agent");
+      },
+      focusAgent: async () => {},
+      interruptAgent: async () => {},
+      openThreadTerminal: async () => {},
+      openServerPane: async () => {},
+    } satisfies HerdrTuiHost;
+    const createdProjects: Array<Parameters<TuiClient["createProject"]>[0]> = [];
+    const createdThreads: Array<Parameters<TuiClient["createThread"]>[0]> = [];
+    const fake = fakeClient({
+      detail: thread(),
+      shellSnapshot: shell([], []),
+      createProject: async (input) => {
+        createdProjects.push(input);
+        return "p-created" as never;
+      },
+      createThread: async (input) => {
+        createdThreads.push(input);
+        return "t-created" as never;
+      },
+    });
+    const setup = await testRender(
+      <ChatView client={fake.client} host={host} onExit={() => {}} />,
+      { width: 110, height: 28 },
+    );
+    await React.act(async () => {
+      await setup.renderOnce();
+      fake.connect();
+      await setup.renderOnce();
+      await setup.flush();
+    });
+    await setup.waitForFrame(
+      (frame) => frame.includes("What should we build in New service?") && frame.includes("gpt-5"),
+    );
+    await React.act(async () => {
+      await setup.mockInput.typeText("build the API");
+      await setup.renderOnce();
+    });
+    await setup.waitForFrame((frame) => frame.includes("build the API"));
+    await React.act(async () => {
+      setup.mockInput.pressEnter();
+      await setup.renderOnce();
+    });
+    await setup.waitForFrame((frame) => frame.includes("Press Enter again to add New"));
+    expect(createdProjects).toHaveLength(0);
+
+    await React.act(async () => {
+      setup.mockInput.pressEnter();
+      await setup.renderOnce();
+    });
+    await setup.waitFor(() => createdThreads.length === 1);
+    expect(createdProjects).toEqual([
+      {
+        title: "New service",
+        workspaceRoot: "/workspace/new-service",
+        defaultModelSelection: { instanceId: "codex", model: "gpt-5" } as never,
+      },
+    ]);
+    expect(createdThreads[0]).toMatchObject({
+      projectId: "p-created",
+      projectCwd: "/workspace/new-service",
+      firstMessage: "build the API",
+      worktreePath: null,
+      createWorktree: false,
+    });
     setup.renderer.destroy();
   });
 });

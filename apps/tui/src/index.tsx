@@ -6,6 +6,7 @@ import { ChatView } from "./components/ChatView.tsx";
 import { buildTuiRuntime, makeTuiClient, type TuiOptions } from "./connection.ts";
 import { detectKittyGraphicsTerminal } from "./terminalGraphics.ts";
 import { prepareTerminalViewport, TUI_RENDERER_CONFIG } from "./terminalStartup.ts";
+import { tuiHostFromEnvironment } from "./herdr/environment.ts";
 
 // This is the Bun entry point spawned by the Node `t3 tui` command. It receives
 // the server origin + a bearer token via env, and mints fresh websocket URLs by
@@ -87,6 +88,7 @@ async function main(): Promise<void> {
   const options: TuiOptions = { origin, bearerToken, mintSocketUrl, logPath };
   const runtime = buildTuiRuntime(options);
   const client = makeTuiClient(runtime, origin);
+  const host = tuiHostFromEnvironment(process.env, origin);
 
   // A tmux pane can still be showing scrollback when this child starts. Return it
   // to the live screen before entering OpenTUI's alternate screen so the complete
@@ -128,7 +130,7 @@ async function main(): Promise<void> {
     process.once("SIGINT", handleExit);
     process.once("SIGTERM", handleExit);
 
-    createRoot(renderer).render(<ChatView client={client} onExit={handleExit} />);
+    createRoot(renderer).render(<ChatView client={client} host={host} onExit={handleExit} />);
 
     await done;
   } catch (error) {

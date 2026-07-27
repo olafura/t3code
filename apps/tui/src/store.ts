@@ -6,8 +6,10 @@ import {
 
 import type { OrchestrationShellSnapshot, OrchestrationThread, TuiClient } from "./connection.ts";
 import { gitActionNeedsCommitMessage } from "./gitActions.logic.ts";
+import { standaloneTuiHost, type HerdrHostState, type TuiHost } from "./herdr/host.ts";
 import {
   buildRows,
+  herdrSpaceExpansionKey,
   type Row,
   type Selection,
   selectionEquals,
@@ -37,6 +39,7 @@ export interface StoreState {
   readonly vcsStatus: VcsStatusResult | null;
   /** True while a git stacked action is running. */
   readonly gitBusy: boolean;
+  readonly herdr: HerdrHostState | null;
 }
 
 export interface Store {
@@ -45,12 +48,13 @@ export interface Store {
   readonly start: () => void;
   readonly stop: () => void;
   readonly moveSelection: (delta: number) => void;
-  /** Move selection to the next/prev THREAD row, skipping project headers. */
+  /** Move selection to the next/prev conversation row (T3 thread or Herdr agent). */
   readonly moveThreadSelection: (delta: 1 | -1) => void;
   /** Select the Nth (1-based) visible thread, like the web's thread-jump 1–9. */
   readonly selectThreadByIndex: (index: number) => void;
   readonly select: (selection: Selection) => void;
   readonly toggleProject: (id: string) => void;
+  readonly toggleSpace: (id: string) => void;
   readonly loadMore: (id: string) => void;
   readonly setStatus: (status: string, kind?: StatusKind) => void;
   readonly setFilter: (filter: string) => void;
@@ -60,7 +64,7 @@ export interface Store {
   readonly pullGit: () => void;
 }
 
-export function createStore(client: TuiClient): Store {
+export function createStore(client: TuiClient, host: TuiHost = standaloneTuiHost): Store {
   let state: StoreState = {
     shell: null,
     expanded: new Set<string>(),
@@ -72,18 +76,27 @@ export function createStore(client: TuiClient): Store {
     filter: "",
     vcsStatus: null,
     gitBusy: false,
+    herdr: host.kind === "herdr" ? host.getState() : null,
   };
   const listeners = new Set<() => void>();
   let unsubShell: (() => void) | null = null;
   let unsubThread: (() => void) | null = null;
   let unsubVcs: (() => void) | null = null;
+  let unsubHost: (() => void) | null = null;
   // The worktree currently subscribed for git status, so we only resubscribe on change.
   let vcsCwd: string | null = null;
 
 
   const selectedThreadId = () => (state.selection?.kind === "thread" ? state.selection.id : null);
   const rowsNow = () =>
-    buildRows(state.shell, state.expanded, state.loadedInFull, selectedThreadId(), state.filter);
+    buildRows(
+      state.shell,
+      state.expanded,
+      state.loadedInFull,
+      selectedThreadId(),
+      state.filter,
+      state.herdr?.snapshot ?? null,
+    );
 
   const emit = () => {
     for (const listener of listeners) listener();
@@ -157,6 +170,14 @@ export function createStore(client: TuiClient): Store {
       return () => listeners.delete(listener);
     },
     start: () => {
+      if (host.kind === "herdr") {
+        unsubHost = host.subscribe(() => {
+          state = { ...state, herdr: host.getState() };
+          ensureValidSelection(rowsNow());
+          emit();
+        });
+        host.start();
+      }
       unsubShell = client.subscribeShell((shell) => {
         const sortedThreads = shell.threads.toSorted((a, b) =>
           b.updatedAt.localeCompare(a.updatedAt),
@@ -176,6 +197,8 @@ export function createStore(client: TuiClient): Store {
       unsubShell?.();
       unsubThread?.();
       unsubVcs?.();
+      unsubHost?.();
+      if (host.kind === "herdr") host.dispose();
     },
     moveSelection: (delta) => {
       const rows = rowsNow();
@@ -187,14 +210,20 @@ export function createStore(client: TuiClient): Store {
       if (next) applySelection(selectionFromRow(next));
     },
     moveThreadSelection: (delta) => {
-      const threads = rowsNow().filter((row) => row.kind === "thread");
-      if (threads.length === 0) return;
-      const currentId = selectedThreadId();
-      let index = threads.findIndex((row) => row.id === currentId);
-      // Not on a thread yet: step into the first (next) or last (prev) one.
-      if (index < 0) index = delta > 0 ? -1 : threads.length;
-      const nextIndex = Math.min(threads.length - 1, Math.max(0, index + delta));
-      const next = threads[nextIndex];
+      const conversations = rowsNow().filter(
+        (row) => row.kind === "thread" || row.kind === "agent",
+      );
+      if (conversations.length === 0) return;
+      let index = conversations.findIndex(
+        (row) =>
+          state.selection !== null &&
+          row.kind === state.selection.kind &&
+          row.id === state.selection.id,
+      );
+      // Not on a conversation yet: step into the first (next) or last (prev) one.
+      if (index < 0) index = delta > 0 ? -1 : conversations.length;
+      const nextIndex = Math.min(conversations.length - 1, Math.max(0, index + delta));
+      const next = conversations[nextIndex];
       if (next) applySelection(selectionFromRow(next));
     },
     selectThreadByIndex: (index) => {
@@ -208,6 +237,14 @@ export function createStore(client: TuiClient): Store {
       else expanded.add(id);
       set({ expanded });
       applySelection({ kind: "project", id });
+    },
+    toggleSpace: (id) => {
+      const key = herdrSpaceExpansionKey(id);
+      const expanded = new Set(state.expanded);
+      if (expanded.has(key)) expanded.delete(key);
+      else expanded.add(key);
+      set({ expanded });
+      applySelection({ kind: "space", id });
     },
     loadMore: (id) => {
       const loadedInFull = new Set(state.loadedInFull).add(id);

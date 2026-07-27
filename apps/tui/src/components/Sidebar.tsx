@@ -68,6 +68,66 @@ const SidebarThreadRow = React.memo(function SidebarThreadRow({
   );
 });
 
+const SidebarSpaceItem = React.memo(function SidebarSpaceItem({
+  row,
+  selected,
+  innerWidth,
+  store,
+}: {
+  readonly row: Extract<Row, { kind: "space" }>;
+  readonly selected: boolean;
+  readonly innerWidth: number;
+  readonly store: Store;
+}): React.ReactNode {
+  const palette = usePalette();
+  const caret = row.expanded ? "▾" : "▸";
+  const count = ` (${row.count})`;
+  const dotWidth = row.status ? 2 : 0;
+  const titleBudget = innerWidth - 3 - count.length - dotWidth;
+  return (
+    <box
+      onMouseDown={() => store.toggleSpace(row.id)}
+      {...(selected ? { backgroundColor: palette.selectedBg } : {})}
+    >
+      <text>
+        <span fg={selected ? palette.accent : palette.text}>
+          {`${selected ? "▌" : " "}${caret} ${padClip(row.title, titleBudget)}${count}${row.status ? " " : ""}`}
+        </span>
+        {row.status ? <StatusDot status={row.status} /> : null}
+      </text>
+    </box>
+  );
+});
+
+const SidebarAgentRow = React.memo(function SidebarAgentRow({
+  row,
+  selected,
+  innerWidth,
+  store,
+}: {
+  readonly row: Extract<Row, { kind: "agent" }>;
+  readonly selected: boolean;
+  readonly innerWidth: number;
+  readonly store: Store;
+}): React.ReactNode {
+  const palette = usePalette();
+  const suffix = ` ${row.agent.agent ?? "agent"}`;
+  const titleBudget = Math.max(1, innerWidth - 4 - suffix.length);
+  return (
+    <box
+      onMouseDown={() => store.select({ kind: "agent", id: row.id })}
+      {...(selected ? { backgroundColor: palette.selectedBg } : {})}
+    >
+      <text>
+        <span fg={palette.accent}>{selected ? "▌ " : "  "}</span>
+        <StatusDot status={row.status} />
+        <span fg={palette.text}>{` ${padClip(row.title, titleBudget)}`}</span>
+        <span fg={palette.dim}>{suffix}</span>
+      </text>
+    </box>
+  );
+});
+
 const SidebarMoreRow = React.memo(function SidebarMoreRow({
   projectId,
   hiddenCount,
@@ -119,6 +179,8 @@ export const Sidebar = React.memo(function Sidebar({
 }): React.ReactNode {
   const palette = usePalette();
   const innerWidth = Math.max(8, width - 4);
+  const hasSpaces = rows.some((row) => row.kind === "space");
+  const firstProjectIndex = rows.findIndex((row) => row.kind === "project");
   return (
     <box
       flexDirection="column"
@@ -172,18 +234,44 @@ export const Sidebar = React.memo(function Sidebar({
         )}
       </box>
       <text>
-        <span fg={palette.accent}>Projects</span>
+        <span fg={palette.accent}>{hasSpaces ? "Spaces" : "Projects"}</span>
         {moreAbove ? <span fg={palette.dim}>{"  ↑ more"}</span> : null}
       </text>
       {rows.length === 0 ? (
         <text fg={palette.dim}>No projects yet. Press ^N.</text>
       ) : (
-        rows.map((row) => {
+        rows.map((row, index) => {
           const selected = selectionEquals(selection, row);
           if (row.kind === "project") {
             return (
-              <SidebarProjectItem
-                key={`p:${row.id}`}
+              <React.Fragment key={`p:${row.id}`}>
+                {hasSpaces && index === firstProjectIndex ? (
+                  <text fg={palette.accent}>Projects</text>
+                ) : null}
+                <SidebarProjectItem
+                  row={row}
+                  selected={selected}
+                  innerWidth={innerWidth}
+                  store={store}
+                />
+              </React.Fragment>
+            );
+          }
+          if (row.kind === "space") {
+            return (
+              <SidebarSpaceItem
+                key={`s:${row.id}`}
+                row={row}
+                selected={selected}
+                innerWidth={innerWidth}
+                store={store}
+              />
+            );
+          }
+          if (row.kind === "agent") {
+            return (
+              <SidebarAgentRow
+                key={`a:${row.id}`}
                 row={row}
                 selected={selected}
                 innerWidth={innerWidth}

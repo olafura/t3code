@@ -138,7 +138,7 @@ export const ChatComposer = React.memo(function ChatComposer({
   /** Bumped by the parent to remount (clear) the reply editor after send/clear. */
   readonly composerEpoch: number;
   /** Composer controls shown inside the box (compose mode only), mirroring web. */
-  readonly controls: ComposerControls;
+  readonly controls: ComposerControls | null;
   readonly working: boolean;
   readonly attachments: ReadonlyArray<ComposerImageAttachment>;
   readonly inlineImagesSupported: boolean;
@@ -324,21 +324,34 @@ export const ChatComposer = React.memo(function ChatComposer({
           </text>
         )}
       </box>
-      <ComposerFooter
-        controls={controls}
-        compact={width < 64}
-        width={Math.max(1, width - 2)}
-        working={working}
-        answering={answering}
-        hasText={reply.length > 0 || attachments.length > 0}
-        onTogglePlan={onTogglePlan}
-        onOpenAccess={onOpenAccess}
-        onOpenModel={onOpenModel}
-        onOpenReasoning={onOpenReasoning}
-        onStop={onStop}
-        onSend={onSend}
-        onSubmitAnswer={onSubmitAnswer}
-      />
+      {controls ? (
+        <ComposerFooter
+          controls={controls}
+          compact={width < 64}
+          width={Math.max(1, width - 2)}
+          working={working}
+          answering={answering}
+          hasText={reply.length > 0 || attachments.length > 0}
+          onTogglePlan={onTogglePlan}
+          onOpenAccess={onOpenAccess}
+          onOpenModel={onOpenModel}
+          onOpenReasoning={onOpenReasoning}
+          onStop={onStop}
+          onSend={onSend}
+          onSubmitAnswer={onSubmitAnswer}
+        />
+      ) : (
+        <box flexDirection="row" justifyContent="flex-end" marginTop={1} flexShrink={0}>
+          <box onMouseDown={working ? onStop : onSend}>
+            <text>
+              <span fg={working ? palette.accent : reply.length > 0 ? palette.accent : palette.dim}>
+                {working ? "■ Stop" : "▸ Send"}
+              </span>
+              <span fg={palette.dim}>{working ? " Esc" : " ⏎"}</span>
+            </text>
+          </box>
+        </box>
+      )}
     </box>
   );
 });
