@@ -204,18 +204,18 @@ describe("createHerdrTuiHost", () => {
     host.subscribeSidebarActions((action) => actions.push(action));
     const activationInput = "\u001bP+t3-sidebar;eyJraW5kIjoidGhyZWFkIiwiaWQiOiJ0MSJ9\u001b\\";
 
-    await expect(
-      host.reportSidebar([
-        {
-          id: "thread:t1",
-          label: "Fix sidebar",
-          status: "working",
-          seen: true,
-          tokens: { project: "t3code", selected: "1", t3_order: "000002" },
-          activationInput,
-        },
-      ]),
-    ).resolves.toBe(true);
+    const sidebarItems = [
+      {
+        id: "thread:t1",
+        label: "Fix sidebar",
+        status: "working" as const,
+        seen: true,
+        tokens: { project: "t3code", selected: "1", t3_order: "000002" },
+        activationInput,
+      },
+    ];
+    await expect(host.reportSidebar(sidebarItems)).resolves.toBe(true);
+    await expect(host.reportSidebar(sidebarItems)).resolves.toBe(true);
     expect(host.handleInput(activationInput)).toBe(true);
     expect(actions).toEqual([{ kind: "thread", id: "t1" }]);
     expect(protocol.calls).toContainEqual({
@@ -245,6 +245,7 @@ describe("createHerdrTuiHost", () => {
         ],
       },
     });
+    expect(protocol.calls.filter((call) => call.method === "agent.view.set")).toHaveLength(1);
     host.dispose();
   });
 
