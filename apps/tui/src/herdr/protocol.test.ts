@@ -313,14 +313,14 @@ describe("HerdrProtocolClient", () => {
     const client = new HerdrProtocolClient(fixture.socketPath);
     cleanups.push(async () => client.dispose());
 
-    await client.sendPaneInput("w1:p3", "switch-frame");
+    await client.sendPaneText("w1:p3", "switch-frame");
     await client.closePane("w1:p3");
 
     expect(fixture.requests).toEqual([
       {
         id: "t3_1",
-        method: "pane.send_input",
-        params: { pane_id: "w1:p3", text: "switch-frame", keys: [] },
+        method: "pane.send_text",
+        params: { pane_id: "w1:p3", text: "switch-frame" },
       },
       {
         id: "t3_2",

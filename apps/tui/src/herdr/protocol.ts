@@ -458,6 +458,13 @@ export class HerdrProtocolClient {
     });
   }
 
+  async sendPaneText(paneId: string, text: string): Promise<void> {
+    await this.request("pane.send_text", {
+      pane_id: paneId,
+      text,
+    });
+  }
+
   async closePane(paneId: string): Promise<void> {
     await this.request("pane.close", { pane_id: paneId });
   }

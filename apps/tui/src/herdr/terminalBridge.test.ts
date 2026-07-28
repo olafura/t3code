@@ -6,6 +6,7 @@ import {
   parseHerdrTerminalBridgeArgs,
   routeHerdrTerminalShortcuts,
   terminalBridgeOutput,
+  type HerdrTerminalLaunchTarget,
   type HerdrTerminalTarget,
 } from "./terminalBridge.ts";
 
@@ -16,6 +17,14 @@ const target = {
   terminalId: "term-2",
   cwd: "/repo",
   worktreePath: null,
+} satisfies HerdrTerminalLaunchTarget;
+
+const switchTarget = {
+  origin: target.origin,
+  threadId: target.threadId,
+  terminalId: target.terminalId,
+  cwd: target.cwd,
+  worktreePath: target.worktreePath,
 } satisfies HerdrTerminalTarget;
 
 describe("Herdr terminal bridge", () => {
@@ -79,14 +88,14 @@ describe("Herdr terminal bridge", () => {
       onInput: (data) => input.push(data),
       onSwitch: (value) => switches.push(value),
     });
-    const frame = encodeHerdrTerminalSwitch(target);
+    const frame = encodeHerdrTerminalSwitch(switchTarget);
 
     parser.push(`git st\r${frame.slice(0, 9)}`);
     parser.push(`${frame.slice(9)}pwd\r`);
     parser.flush();
 
     expect(input.join("")).toBe("git st\rpwd\r");
-    expect(switches).toEqual([target]);
+    expect(switches).toEqual([switchTarget]);
   });
 
   test("preserves ordinary escape input that only resembles a control prefix", () => {
