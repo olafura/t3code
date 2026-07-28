@@ -603,11 +603,19 @@ describe("ChatView Herdr host", () => {
     });
     await setup.waitForFrame((frame) => frame.includes("Type a command"));
     await React.act(async () => {
-      await setup.mockInput.typeText("terminal");
+      await setup.mockInput.typeText("previous terminal");
       await setup.renderOnce();
     });
-    const switchCommands = await setup.waitForFrame((frame) => frame.includes("Next terminal"));
+    const switchCommands = await setup.waitForFrame((frame) => frame.includes("Previous terminal"));
     expect(switchCommands).not.toContain("Herdr terminal");
+    await React.act(async () => {
+      setup.mockInput.pressEnter();
+      await setup.renderOnce();
+    });
+    await setup.waitFor(() => openedTerminals.at(-1) === "term-2");
+    expect(await setup.waitForFrame((frame) => frame.includes("▸ Terminal 2"))).toContain(
+      "Terminal 3",
+    );
     setup.renderer.destroy();
   });
 
