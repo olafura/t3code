@@ -468,7 +468,7 @@ describe("ChatView Herdr host", () => {
       await setup.flush();
     });
     const hosted = await setup.waitForFrame((frame) => frame.includes("Ask anything"));
-    expect(hosted).toContain("Search threads");
+    expect(hosted).not.toContain("Search threads");
     expect(hosted).not.toContain("Reviewer");
     await setup.waitFor(() =>
       sidebarReports.some((items) =>
@@ -504,11 +504,6 @@ describe("ChatView Herdr host", () => {
     });
     expect(setup.captureCharFrame()).toContain("Ask anything");
     expect(setup.captureCharFrame()).not.toContain("What should we build");
-    await React.act(async () => {
-      setup.mockInput.pressKey("f", { ctrl: true });
-      await setup.renderOnce();
-    });
-    await setup.waitForFrame((frame) => !frame.includes("Search threads"));
     await React.act(async () => {
       setup.mockInput.pressKey("f", { ctrl: true });
       await setup.renderOnce();
@@ -551,6 +546,18 @@ describe("ChatView Herdr host", () => {
       await setup.renderOnce();
     });
     await setup.waitForFrame((frame) => !frame.includes("Search threads"));
+    await React.act(async () => {
+      activateSidebar({ kind: "project-picker" });
+      await setup.renderOnce();
+    });
+    const projectPicker = await setup.waitForFrame(
+      (frame) => frame.includes("project ▸") && frame.includes("All projects"),
+    );
+    expect(projectPicker).not.toContain("Search threads");
+    await React.act(async () => {
+      setup.mockInput.pressEnter();
+      await setup.renderOnce();
+    });
     await setup.waitFor(() => reports.some((report) => report?.threadId === "t1"));
     await React.act(async () => {
       setup.mockInput.pressKey("e", { ctrl: true });

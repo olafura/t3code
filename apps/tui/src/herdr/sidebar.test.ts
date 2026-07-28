@@ -49,45 +49,46 @@ describe("Herdr native T3 sidebar", () => {
     const items = buildHerdrSidebarItems({
       rows,
       selection: { kind: "thread", id: "thread-1" },
+      projectScopeLabel: "All projects",
     });
 
     expect(items.map((item) => item.id)).toEqual([
       "action:search",
       "action:new",
+      "action:project-picker",
       "section:sidebar-v2:snoozed",
       "thread:thread-1",
       "more:sidebar-v2:settled",
     ]);
-    expect(items[2]).toMatchObject({
+    expect(items[3]).toMatchObject({
       label: "▾ Snoozed (1)",
       tokens: { project: "Snoozed" },
     });
-    expect(items[3]).toMatchObject({
+    expect(items[4]).toMatchObject({
       label: "Fix native sidebar · t3code",
       status: "working",
       tokens: { project: "Active", selected: "1" },
     });
-    expect(decodeHerdrSidebarAction(items[4]?.activationInput ?? "")).toEqual({
+    expect(decodeHerdrSidebarAction(items[5]?.activationInput ?? "")).toEqual({
       kind: "more",
       id: "sidebar-v2:settled",
     });
   });
 
-  test("publishes the same project filter used by the standalone sidebar", () => {
+  test("publishes one project selector instead of one virtual item per project", () => {
     const items = buildHerdrSidebarItems({
       rows: [],
       selection: null,
-      projects: [
-        { id: "p1", title: "t3code" },
-        { id: "p2", title: "herdr" },
-      ],
-      projectScopeId: "p1",
+      projectScopeLabel: "t3code",
     });
 
-    expect(items.slice(2).map((item) => item.label)).toEqual(["All projects", "✓ t3code", "herdr"]);
+    expect(items.map((item) => item.label)).toEqual([
+      "Search projects and threads",
+      "New thread",
+      "Project · t3code",
+    ]);
     expect(decodeHerdrSidebarAction(items[2]?.activationInput ?? "")).toEqual({
-      kind: "project",
-      id: "__all__",
+      kind: "project-picker",
     });
   });
 });

@@ -16,6 +16,7 @@ function bounded(value: string, maximum: number): string {
 export type HerdrSidebarAction =
   | { readonly kind: "search" }
   | { readonly kind: "new" }
+  | { readonly kind: "project-picker" }
   | { readonly kind: "project"; readonly id: string }
   | { readonly kind: "thread"; readonly id: string }
   | { readonly kind: "section"; readonly id: string }
@@ -24,7 +25,9 @@ export type HerdrSidebarAction =
 function isAction(value: unknown): value is HerdrSidebarAction {
   if (!value || typeof value !== "object" || !("kind" in value)) return false;
   const action = value as { readonly kind?: unknown; readonly id?: unknown };
-  if (action.kind === "search" || action.kind === "new") return true;
+  if (action.kind === "search" || action.kind === "new" || action.kind === "project-picker") {
+    return true;
+  }
   return (
     (action.kind === "project" ||
       action.kind === "thread" ||
@@ -79,8 +82,7 @@ function selectedToken(selection: Selection | null, kind: Selection["kind"], id:
 export function buildHerdrSidebarItems(input: {
   readonly rows: ReadonlyArray<Row>;
   readonly selection: Selection | null;
-  readonly projects?: ReadonlyArray<{ readonly id: string; readonly title: string }>;
-  readonly projectScopeId?: string | null;
+  readonly projectScopeLabel: string;
 }): Array<Omit<HerdrAgentViewItem, "targetPaneId">> {
   let order = 0;
   const item = (
@@ -113,31 +115,15 @@ export function buildHerdrSidebarItems(input: {
       "0",
     ),
     item("action:new", "New thread", "idle", "T3 Code", { kind: "new" }, "0"),
+    item(
+      "action:project-picker",
+      `Project · ${input.projectScopeLabel}`,
+      "idle",
+      "T3 Code",
+      { kind: "project-picker" },
+      "0",
+    ),
   ];
-  if (input.projects) {
-    items.push(
-      item(
-        "project-scope:all",
-        `${input.projectScopeId == null ? "✓ " : ""}All projects`,
-        "idle",
-        "Project filter",
-        { kind: "project", id: "__all__" },
-        input.projectScopeId == null ? "1" : "0",
-      ),
-    );
-    for (const project of input.projects) {
-      items.push(
-        item(
-          `project-scope:${project.id}`,
-          `${input.projectScopeId === project.id ? "✓ " : ""}${project.title}`,
-          "idle",
-          "Project filter",
-          { kind: "project", id: project.id },
-          input.projectScopeId === project.id ? "1" : "0",
-        ),
-      );
-    }
-  }
   for (const row of input.rows) {
     if (row.kind === "section") {
       items.push(
