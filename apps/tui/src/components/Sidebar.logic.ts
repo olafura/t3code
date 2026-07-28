@@ -1,50 +1,51 @@
 import {
-  DEFAULT_SIDEBAR_THREAD_PREVIEW_COUNT,
+  DEFAULT_SIDEBAR_AUTO_SETTLE_AFTER_DAYS,
   type OrchestrationThreadShell,
 } from "@t3tools/contracts";
+import { effectiveSettled, effectiveSnoozed } from "@t3tools/client-runtime/state/thread-settled";
 
 import type { OrchestrationShellSnapshot } from "../connection.ts";
 import { herdrWorkspaceCwd } from "../herdr/host.ts";
-import type { HerdrAgentInfo, HerdrAgentStatus, HerdrSessionSnapshot } from "../herdr/protocol.ts";
-import { resolveProjectStatus, type ThreadStatus } from "../theme.ts";
+import type { HerdrAgentStatus, HerdrSessionSnapshot } from "../herdr/protocol.ts";
+import type { ThreadStatus } from "../theme.ts";
 
-// Pure logic backing the Sidebar (mirrors apps/web/src/components/Sidebar.logic.ts):
-// the row model, selection identity, the preview/"show more" windowing, and the
-// flat row builder. No rendering, so it's trivially testable.
+export const SIDEBAR_SNOOZED_SECTION_ID = "sidebar-v2:snoozed";
+export const SIDEBAR_SETTLED_SECTION_ID = "sidebar-v2:settled";
+export const SIDEBAR_SETTLED_INITIAL_COUNT = 10;
+
+export type SidebarSection = "active" | "snoozed" | "settled";
 
 export type Selection =
   | { readonly kind: "project"; readonly id: string }
   | { readonly kind: "thread"; readonly id: string }
   | { readonly kind: "space"; readonly id: string }
   | { readonly kind: "agent"; readonly id: string }
+  | { readonly kind: "section"; readonly id: string }
   | { readonly kind: "more"; readonly id: string };
 
 export type Row =
   | {
-      readonly kind: "project";
+      readonly kind: "thread";
       readonly id: string;
-      readonly title: string;
-      readonly count: number;
-      readonly status: ThreadStatus | null;
-      readonly expanded: boolean;
-    }
-  | { readonly kind: "thread"; readonly id: string; readonly thread: OrchestrationThreadShell }
-  | {
-      readonly kind: "space";
-      readonly id: string;
-      readonly title: string;
-      readonly count: number;
-      readonly status: ThreadStatus | null;
-      readonly expanded: boolean;
+      readonly thread: OrchestrationThreadShell;
+      readonly section: SidebarSection;
+      readonly projectTitle: string;
+      readonly timestamp: string;
     }
   | {
-      readonly kind: "agent";
+      readonly kind: "section";
       readonly id: string;
+      readonly section: Exclude<SidebarSection, "active">;
       readonly title: string;
-      readonly agent: HerdrAgentInfo;
-      readonly status: ThreadStatus;
+      readonly count: number;
+      readonly expanded: boolean;
     }
-  | { readonly kind: "more"; readonly id: string; readonly hiddenCount: number };
+  | {
+      readonly kind: "more";
+      readonly id: string;
+      readonly section: "settled";
+      readonly hiddenCount: number;
+    };
 
 export const herdrSpaceExpansionKey = (workspaceId: string): string => `herdr:${workspaceId}`;
 
@@ -111,54 +112,63 @@ export function findProjectForHerdrSpace(
   return shell.projects.find((project) => canonicalPath(project.workspaceRoot) === cwd) ?? null;
 }
 
-function agentTitle(agent: HerdrAgentInfo): string {
-  return (
-    agent.name ??
-    agent.display_agent ??
-    agent.title ??
-    agent.terminal_title_stripped ??
-    agent.agent ??
-    agent.pane_id
-  );
-}
-
 export function selectionEquals(selection: Selection | null, row: Row): boolean {
   return selection !== null && selection.kind === row.kind && selection.id === row.id;
 }
 
-/**
- * Only the top {@link DEFAULT_SIDEBAR_THREAD_PREVIEW_COUNT} threads of a project
- * render until its list is loaded in full — mirroring the web sidebar. The
- * currently selected thread is always kept visible.
- */
-export function visibleThreadsForProject(
-  threads: ReadonlyArray<OrchestrationThreadShell>,
-  loadedInFull: boolean,
+function timestampMs(value: string | null | undefined): number {
+  if (!value) return 0;
+  const parsed = Date.parse(value);
+  return Number.isNaN(parsed) ? 0 : parsed;
+}
+
+function activeOrder(left: OrchestrationThreadShell, right: OrchestrationThreadShell): number {
+  return (
+    timestampMs(right.createdAt) - timestampMs(left.createdAt) || left.id.localeCompare(right.id)
+  );
+}
+
+export function settledTimestamp(thread: OrchestrationThreadShell): string {
+  if (timestampMs(thread.settledAt) > 0) return thread.settledAt!;
+  const candidates = [
+    thread.latestUserMessageAt,
+    thread.latestTurn?.requestedAt,
+    thread.latestTurn?.startedAt,
+    thread.latestTurn?.completedAt,
+    thread.updatedAt,
+  ];
+  let latest = thread.updatedAt;
+  for (const candidate of candidates) {
+    if (timestampMs(candidate) > timestampMs(latest)) latest = candidate ?? latest;
+  }
+  return latest;
+}
+
+function selectedThread(
+  threads: readonly OrchestrationThreadShell[],
   selectedThreadId: string | null,
-): { readonly visible: OrchestrationThreadShell[]; readonly hidden: number } {
-  const limit = DEFAULT_SIDEBAR_THREAD_PREVIEW_COUNT;
-  if (loadedInFull || threads.length <= limit) {
-    return { visible: [...threads], hidden: 0 };
-  }
-  const preview = threads.slice(0, limit);
-  const selectedHidden =
-    selectedThreadId !== null &&
-    !preview.some((thread) => thread.id === selectedThreadId) &&
-    threads.some((thread) => thread.id === selectedThreadId);
-  if (!selectedHidden) {
-    return { visible: preview, hidden: threads.length - limit };
-  }
-  const selected = threads.find((thread) => thread.id === selectedThreadId);
-  return {
-    visible: selected ? [...preview, selected] : preview,
-    hidden: threads.length - limit - (selected ? 1 : 0),
-  };
+): OrchestrationThreadShell | null {
+  if (selectedThreadId === null) return null;
+  return threads.find((thread) => thread.id === selectedThreadId) ?? null;
+}
+
+function keepSelectedVisible(
+  visible: readonly OrchestrationThreadShell[],
+  all: readonly OrchestrationThreadShell[],
+  selectedThreadId: string | null,
+): OrchestrationThreadShell[] {
+  const selected = selectedThread(all, selectedThreadId);
+  if (!selected || visible.some((thread) => thread.id === selected.id)) return [...visible];
+  return [...visible, selected];
 }
 
 /**
- * Pure: build the visible rows from the snapshot + UI state. When `filter` is
- * non-empty, projects auto-expand and only matching threads (or all threads of a
- * project whose own title matches) are shown, with no "show more" row.
+ * Flat Sidebar V2 model shared by the standalone pane and Herdr's native
+ * sidebar. Projects filter the list; they no longer own nested thread rows.
+ *
+ * The two sets retain the store's existing persistence shape:
+ * - `expanded` contains the snoozed/settled section ids.
+ * - `loadedInFull` contains the settled section id after "show more".
  */
 export function buildRows(
   shell: OrchestrationShellSnapshot | null,
@@ -166,169 +176,151 @@ export function buildRows(
   loadedInFull: ReadonlySet<string>,
   selectedThreadId: string | null,
   filter = "",
-  herdr: HerdrSessionSnapshot | null = null,
-  herdrContext: { readonly workspaceId: string; readonly cwd: string } | null = null,
+  _herdr: HerdrSessionSnapshot | null = null,
+  _herdrContext: { readonly workspaceId: string; readonly cwd: string } | null = null,
+  projectScopeId: string | null = null,
+  now = new Date().toISOString(),
 ): Row[] {
   if (!shell) return [];
-  const needle = filter.trim().toLowerCase();
-  const projectTitles = new Map<string, string>(
-    shell.projects.map((project) => [project.id, project.title]),
+
+  const projectTitleById = new Map(
+    shell.projects.map((project) => [project.id as string, project.title] as const),
   );
-  const projectsById = new Map(shell.projects.map((project) => [project.id as string, project]));
-  const byProject = new Map<string, OrchestrationThreadShell[]>();
-  for (const thread of shell.threads) {
-    const list = byProject.get(thread.projectId);
-    if (list) list.push(thread);
-    else byProject.set(thread.projectId, [thread]);
-  }
-
-  // Sort key: a project's most-recently-updated thread, falling back to the
-  // project's own updatedAt/createdAt — so projects order by latest activity
-  // (most recent first), matching how the web sidebar sorts them. ISO timestamps
-  // compare chronologically as strings; "" (no activity) sorts last.
-  const sortKey = (id: string): string => {
-    const threads = byProject.get(id);
-    if (threads && threads.length > 0) {
-      let key = "";
-      for (const thread of threads) if (thread.updatedAt > key) key = thread.updatedAt;
-      return key;
-    }
-    const project = projectsById.get(id);
-    return project?.updatedAt ?? project?.createdAt ?? "";
-  };
-
-  // All catalogue projects (so the list matches the "N project(s)" count and an
-  // empty project is still visible/selectable), then any orphaned project ids,
-  // sorted by latest activity with title/id as the tie-breaker.
-  const orderedIds: string[] = [
-    ...shell.projects.map((project) => project.id as string),
-    ...[...byProject.keys()].filter((id) => !projectTitles.has(id)),
-  ].toSorted((a, b) => {
-    const byTime = sortKey(b).localeCompare(sortKey(a));
-    if (byTime !== 0) return byTime;
-    return (projectTitles.get(a) ?? a).localeCompare(projectTitles.get(b) ?? b) || a.localeCompare(b);
+  const needle = filter.trim().toLowerCase();
+  const visibleThreads = shell.threads.filter((thread) => {
+    if (thread.archivedAt != null) return false;
+    if (projectScopeId !== null && thread.projectId !== projectScopeId) return false;
+    if (needle.length === 0) return true;
+    const projectTitle = projectTitleById.get(thread.projectId as string) ?? thread.projectId;
+    return (
+      thread.title.toLowerCase().includes(needle) || projectTitle.toLowerCase().includes(needle)
+    );
   });
 
-  const rows: Row[] = [];
-  const matchedThreadIds = new Set<string>();
-  const matchedProjectIds = new Set<string>();
-
-  if (herdr) {
-    for (const workspace of herdr.workspaces) {
-      const cwd = canonicalPath(
-        workspace.workspace_id === herdrContext?.workspaceId
-          ? herdrContext.cwd
-          : herdrWorkspaceCwd(herdr, workspace.workspace_id),
-      );
-      const agents = herdr.agents.filter((agent) => agent.workspace_id === workspace.workspace_id);
-      const directProjects = shell.projects.filter(
-        (project) => canonicalPath(project.workspaceRoot) === cwd,
-      );
-      const directProjectIds = new Set(directProjects.map((project) => project.id as string));
-      const threads = shell.threads.filter((thread) => {
-        const project = projectsById.get(thread.projectId as string);
-        const threadCwd = canonicalPath(thread.worktreePath ?? project?.workspaceRoot);
-        return threadCwd === cwd || directProjectIds.has(thread.projectId as string);
-      });
-      for (const project of directProjects) matchedProjectIds.add(project.id as string);
-      for (const thread of threads) {
-        matchedThreadIds.add(thread.id as string);
-        matchedProjectIds.add(thread.projectId as string);
-      }
-
-      const spaceMatches = workspace.label.toLowerCase().includes(needle);
-      const shownThreads =
-        needle.length === 0 || spaceMatches
-          ? threads
-          : threads.filter((thread) => thread.title.toLowerCase().includes(needle));
-      const shownAgents =
-        needle.length === 0 || spaceMatches
-          ? agents
-          : agents.filter((agent) => agentTitle(agent).toLowerCase().includes(needle));
-      if (
-        needle.length > 0 &&
-        !spaceMatches &&
-        shownThreads.length === 0 &&
-        shownAgents.length === 0
-      ) {
-        continue;
-      }
-      const isExpanded =
-        needle.length > 0 || expanded.has(herdrSpaceExpansionKey(workspace.workspace_id));
-      rows.push({
-        kind: "space",
-        id: workspace.workspace_id,
-        title: workspace.label,
-        count: shownThreads.length + shownAgents.length,
-        status:
-          workspace.agent_status === "unknown"
-            ? null
-            : resolveHerdrAgentStatus(workspace.agent_status),
-        expanded: isExpanded,
-      });
-      if (!isExpanded) continue;
-      for (const thread of shownThreads) {
-        rows.push({ kind: "thread", id: thread.id, thread });
-      }
-      for (const agent of shownAgents) {
-        rows.push({
-          kind: "agent",
-          id: agent.pane_id,
-          title: agentTitle(agent),
-          agent,
-          status: resolveHerdrAgentStatus(agent.agent_status),
-        });
-      }
+  const active: OrchestrationThreadShell[] = [];
+  const snoozed: OrchestrationThreadShell[] = [];
+  const settled: OrchestrationThreadShell[] = [];
+  for (const thread of visibleThreads) {
+    // Snooze is the stronger lifecycle statement and therefore wins when a
+    // thread could otherwise also auto-settle, matching the web UI.
+    if (effectiveSnoozed(thread, { now })) {
+      snoozed.push(thread);
+    } else if (
+      effectiveSettled(thread, {
+        now,
+        autoSettleAfterDays: DEFAULT_SIDEBAR_AUTO_SETTLE_AFTER_DAYS,
+      })
+    ) {
+      settled.push(thread);
+    } else {
+      active.push(thread);
     }
   }
 
-  for (const id of orderedIds) {
-    const threads = (byProject.get(id) ?? []).filter(
-      (thread) => !matchedThreadIds.has(thread.id as string),
-    );
-    const title = projectTitles.get(id) ?? id;
-    if (matchedProjectIds.has(id) && threads.length === 0) continue;
+  active.sort(activeOrder);
+  snoozed.sort(
+    (left, right) =>
+      timestampMs(left.snoozedUntil) - timestampMs(right.snoozedUntil) ||
+      left.id.localeCompare(right.id),
+  );
+  settled.sort(
+    (left, right) =>
+      timestampMs(settledTimestamp(right)) - timestampMs(settledTimestamp(left)) ||
+      left.id.localeCompare(right.id),
+  );
 
-    if (needle.length > 0) {
-      const projectMatches = title.toLowerCase().includes(needle);
-      const shown = projectMatches
-        ? threads
-        : threads.filter((thread) => thread.title.toLowerCase().includes(needle));
-      if (shown.length === 0 && !projectMatches) continue;
-      rows.push({
-        kind: "project",
-        id,
-        title,
-        count: shown.length,
-        status: resolveProjectStatus(shown),
-        expanded: true,
-      });
-      for (const thread of shown) rows.push({ kind: "thread", id: thread.id, thread });
-      continue;
-    }
+  const rowFor = (thread: OrchestrationThreadShell, section: SidebarSection): Row => ({
+    kind: "thread",
+    id: thread.id,
+    thread,
+    section,
+    projectTitle: projectTitleById.get(thread.projectId as string) ?? thread.projectId,
+    timestamp: section === "settled" ? settledTimestamp(thread) : thread.updatedAt,
+  });
 
-    const isExpanded = expanded.has(id);
+  const rows: Row[] = active.map((thread) => rowFor(thread, "active"));
+  const searchExpanded = needle.length > 0;
+  if (snoozed.length > 0) {
+    const sectionExpanded = searchExpanded || expanded.has(SIDEBAR_SNOOZED_SECTION_ID);
     rows.push({
-      kind: "project",
-      id,
-      title,
-      count: threads.length,
-      status: resolveProjectStatus(threads),
-      expanded: isExpanded,
+      kind: "section",
+      id: SIDEBAR_SNOOZED_SECTION_ID,
+      section: "snoozed",
+      title: "Snoozed",
+      count: snoozed.length,
+      expanded: sectionExpanded,
     });
-    if (isExpanded) {
-      const { visible, hidden } = visibleThreadsForProject(
-        threads,
-        loadedInFull.has(id),
-        selectedThreadId,
-      );
-      for (const thread of visible) {
-        rows.push({ kind: "thread", id: thread.id, thread });
-      }
-      if (hidden > 0) {
-        rows.push({ kind: "more", id, hiddenCount: hidden });
-      }
+    const shown = sectionExpanded ? snoozed : keepSelectedVisible([], snoozed, selectedThreadId);
+    rows.push(...shown.map((thread) => rowFor(thread, "snoozed")));
+  }
+
+  if (settled.length > 0) {
+    const sectionExpanded = searchExpanded || expanded.has(SIDEBAR_SETTLED_SECTION_ID);
+    rows.push({
+      kind: "section",
+      id: SIDEBAR_SETTLED_SECTION_ID,
+      section: "settled",
+      title: "Settled",
+      count: settled.length,
+      expanded: sectionExpanded,
+    });
+    const preview = loadedInFull.has(SIDEBAR_SETTLED_SECTION_ID)
+      ? settled
+      : settled.slice(0, SIDEBAR_SETTLED_INITIAL_COUNT);
+    const shown = sectionExpanded
+      ? keepSelectedVisible(preview, settled, selectedThreadId)
+      : keepSelectedVisible([], settled, selectedThreadId);
+    rows.push(...shown.map((thread) => rowFor(thread, "settled")));
+    const hidden = settled.length - shown.length;
+    if (sectionExpanded && hidden > 0) {
+      rows.push({
+        kind: "more",
+        id: SIDEBAR_SETTLED_SECTION_ID,
+        section: "settled",
+        hiddenCount: hidden,
+      });
     }
   }
   return rows;
+}
+
+export function rowHeight(row: Row): number {
+  return row.kind === "thread" && row.section === "active" ? 2 : 1;
+}
+
+/** Window variable-height rows while keeping the selected row on screen. */
+export function windowRows(
+  rows: readonly Row[],
+  selection: Selection | null,
+  height: number,
+): { readonly rows: Row[]; readonly moreAbove: boolean; readonly moreBelow: boolean } {
+  if (rows.length === 0 || height <= 0) {
+    return { rows: [], moreAbove: false, moreBelow: rows.length > 0 };
+  }
+  const selectedIndex = Math.max(
+    0,
+    rows.findIndex((row) => selectionEquals(selection, row)),
+  );
+  let start = selectedIndex;
+  let end = selectedIndex + 1;
+  let used = rowHeight(rows[selectedIndex]!);
+  let takeAfter = true;
+  while (true) {
+    const canTakeAfter = end < rows.length && used + rowHeight(rows[end]!) <= height;
+    const canTakeBefore = start > 0 && used + rowHeight(rows[start - 1]!) <= height;
+    if (!canTakeAfter && !canTakeBefore) break;
+    if (canTakeAfter && (takeAfter || !canTakeBefore)) {
+      used += rowHeight(rows[end]!);
+      end += 1;
+    } else if (canTakeBefore) {
+      used += rowHeight(rows[start - 1]!);
+      start -= 1;
+    }
+    takeAfter = !takeAfter;
+  }
+  return {
+    rows: rows.slice(start, end),
+    moreAbove: start > 0,
+    moreBelow: end < rows.length,
+  };
 }

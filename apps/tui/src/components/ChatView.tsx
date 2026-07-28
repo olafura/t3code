@@ -65,7 +65,7 @@ import {
 } from "../models.ts";
 import { isWorking, revertableCheckpoints } from "../timeline.ts";
 import { buildUserInputAnswers, derivePendingUserInputs } from "../userInput.ts";
-import { buildRows, findProjectForHerdrSpace, selectionEquals } from "./Sidebar.logic.ts";
+import { buildRows, findProjectForHerdrSpace, windowRows } from "./Sidebar.logic.ts";
 import { ChatComposer } from "./ChatComposer.tsx";
 import {
   CHAT_CONTENT_MAX_WIDTH,
@@ -241,8 +241,8 @@ export function ChatView({
   const settingsScrollRef = React.useRef<ScrollBoxRenderable | null>(null);
   // Shared popover picker for composer controls and new-thread checkout context.
   const [picker, setPicker] = React.useState<{
-    readonly kind: "model" | "runtime" | "reasoning" | "workspace" | "branch";
-    readonly target: "thread" | "new";
+    readonly kind: "model" | "runtime" | "reasoning" | "workspace" | "branch" | "project-scope";
+    readonly target: "thread" | "new" | "sidebar";
     readonly title: string;
     readonly status: SelectStatus;
     readonly options: ReadonlyArray<SelectOption>;
@@ -389,7 +389,7 @@ export function ChatView({
       ? state.selection.id
       : state.selection?.kind === "space"
         ? ((selectedSpaceProject?.id as string | undefined) ?? null)
-        : null;
+        : state.projectScopeId;
   const selectedThreadId = state.selection?.kind === "thread" ? state.selection.id : null;
   const selectedHerdrAgent =
     state.selection?.kind === "agent"
@@ -407,8 +407,16 @@ export function ChatView({
         state.filter,
         null,
         null,
+        state.projectScopeId,
       ),
-    [state.shell, state.expanded, state.loadedInFull, selectedThreadId, state.filter],
+    [
+      state.shell,
+      state.expanded,
+      state.loadedInFull,
+      selectedThreadId,
+      state.filter,
+      state.projectScopeId,
+    ],
   );
   const herdrSidebarItems = React.useMemo(
     () =>
@@ -416,9 +424,11 @@ export function ChatView({
         ? buildHerdrSidebarItems({
             rows,
             selection: state.selection,
+            projects,
+            projectScopeId: state.projectScopeId,
           })
         : [],
-    [host.kind, rows, state.selection],
+    [host.kind, projects, rows, state.projectScopeId, state.selection],
   );
   React.useEffect(() => {
     if (host.kind !== "herdr") return;
@@ -973,10 +983,13 @@ export function ChatView({
       } else if (action.kind === "new") {
         openNewThread();
       } else if (action.kind === "project") {
-        store.toggleProject(action.id);
+        store.setProjectScope(action.id === "__all__" ? null : action.id);
         setFocus("compose");
       } else if (action.kind === "thread") {
         store.select({ kind: "thread", id: action.id });
+        setFocus("compose");
+      } else if (action.kind === "section") {
+        store.toggleSection(action.id.includes("snoozed") ? "snoozed" : "settled");
         setFocus("compose");
       } else {
         store.loadMore(action.id);
@@ -1061,6 +1074,34 @@ export function ChatView({
         },
       ],
       selectedIndex: newWorkspaceMode === "current" ? 0 : 1,
+    });
+  };
+
+  const openProjectScopePicker = () => {
+    const options: SelectOption[] = [
+      {
+        name: "All projects",
+        description: "Show threads from every project.",
+        value: "__all__",
+      },
+      ...projects.map((project) => ({
+        name: project.title,
+        description: project.workspaceRoot,
+        value: project.id as string,
+      })),
+    ];
+    setPicker({
+      kind: "project-scope",
+      target: "sidebar",
+      title: "project",
+      status: "ready",
+      options,
+      selectedIndex: Math.max(
+        0,
+        state.projectScopeId === null
+          ? 0
+          : options.findIndex((option) => option.value === state.projectScopeId),
+      ),
     });
   };
 
@@ -1255,7 +1296,20 @@ export function ChatView({
       return;
     }
     setPicker(null);
-    if (kind === "workspace") {
+    if (kind === "project-scope") {
+      const projectScopeId = value === "__all__" ? null : value;
+      store.setProjectScope(projectScopeId);
+      if (projectScopeId !== null) {
+        const index = projects.findIndex((project) => project.id === projectScopeId);
+        if (index >= 0) setProjectIndex(index);
+      }
+      store.setStatus(
+        projectScopeId === null
+          ? "Showing all projects."
+          : `Project → ${projects.find((project) => project.id === projectScopeId)?.title ?? projectScopeId}`,
+        "success",
+      );
+    } else if (kind === "workspace") {
       const mode = value as NewThreadWorkspaceMode;
       setNewWorkspaceMode(mode);
       if (mode === "current") {
@@ -1513,26 +1567,15 @@ export function ChatView({
   // header + tab bar + frame + border(2) = frame rows + 4.
   const termRows = Math.max(2, terminalDrawerHeight - 4);
 
-  // Window the list around the selection so the highlighted row stays on screen.
-  const selectedIndex = Math.max(
-    0,
-    rows.findIndex((row) => selectionEquals(state.selection, row)),
+  // Active cards use two terminal rows while shelf rows use one. Window by
+  // rendered height so selection never disappears or overflows the pane.
+  const listWindow = React.useMemo(
+    () => windowRows(rows, state.selection, listViewport),
+    [rows, state.selection, listViewport],
   );
-  const listStart =
-    rows.length <= listViewport
-      ? 0
-      : Math.min(
-          Math.max(0, selectedIndex - Math.floor(listViewport / 2)),
-          rows.length - listViewport,
-        );
-  // Memoized so the (memoized) Sidebar doesn't re-render while the conversation
-  // streams — listRows is stable unless the shell/selection/window actually moves.
-  const listRows = React.useMemo(
-    () => rows.slice(listStart, listStart + listViewport),
-    [rows, listStart, listViewport],
-  );
-  const moreAbove = listStart > 0;
-  const moreBelow = listStart + listViewport < rows.length;
+  const listRows = listWindow.rows;
+  const moreAbove = listWindow.moreAbove;
+  const moreBelow = listWindow.moreBelow;
 
   const clearReply = () => {
     setReply("");
@@ -1547,7 +1590,9 @@ export function ChatView({
       // Empty prompt → Enter activates the highlighted row.
       if (state.selection?.kind === "project") store.toggleProject(state.selection.id);
       else if (state.selection?.kind === "space") store.toggleSpace(state.selection.id);
-      else if (selectedHerdrAgent && host.kind === "herdr") {
+      else if (state.selection?.kind === "section") {
+        store.toggleSection(state.selection.id.includes("snoozed") ? "snoozed" : "settled");
+      } else if (selectedHerdrAgent && host.kind === "herdr") {
         void host.focusAgent(selectedHerdrAgent.pane_id).catch((error) => {
           store.setStatus(`focus failed: ${String(error)}`, "error");
         });
@@ -2940,9 +2985,16 @@ export function ChatView({
           height={height}
           store={store}
           filter={state.filter}
+          projectScopeLabel={
+            state.projectScopeId === null
+              ? "All projects"
+              : (projects.find((project) => project.id === state.projectScopeId)?.title ??
+                state.projectScopeId)
+          }
           searchFocused={focus === "filter" && !terminalFocused && !diffOpen && !picker}
           onSearchInput={store.setFilter}
           onFocusSearch={() => setFocus("filter")}
+          onChooseProjectScope={openProjectScopePicker}
         />
       ) : null}
 

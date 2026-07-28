@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
 import type { OrchestrationShellSnapshot } from "../connection.ts";
-import { buildRows, herdrSpaceExpansionKey } from "../components/Sidebar.logic.ts";
+import { buildRows } from "../components/Sidebar.logic.ts";
 import type { HerdrSessionSnapshot } from "./protocol.ts";
 
 const shell = {
@@ -95,27 +95,15 @@ const herdr = {
 } as const satisfies HerdrSessionSnapshot;
 
 describe("Herdr sidebar rows", () => {
-  test("puts spaces first and nests matching threads and agents", () => {
-    const rows = buildRows(
-      shell,
-      new Set([herdrSpaceExpansionKey("w1")]),
-      new Set(),
-      null,
-      "",
-      herdr,
-    );
+  test("uses the same flat T3 thread rows without nesting Herdr spaces or agents", () => {
+    const rows = buildRows(shell, new Set(), new Set(), null, "", herdr);
 
-    expect(rows.map((row) => `${row.kind}:${row.id}`)).toEqual([
-      "space:w1",
-      "thread:thread-repo",
-      "agent:w1:p2",
-      "project:project-other",
-    ]);
+    expect(rows.map((row) => `${row.kind}:${row.id}`)).toEqual(["thread:thread-repo"]);
   });
 
-  test("filters by native agent name without losing its space", () => {
+  test("does not mix native Herdr agent names into the T3 thread search", () => {
     const rows = buildRows(shell, new Set(), new Set(), null, "review", herdr);
 
-    expect(rows.map((row) => `${row.kind}:${row.id}`)).toEqual(["space:w1", "agent:w1:p2"]);
+    expect(rows).toEqual([]);
   });
 });

@@ -1,4 +1,4 @@
-import { Buffer } from "node:buffer";
+import * as NodeBuffer from "node:buffer";
 
 import type { Row, Selection } from "../components/Sidebar.logic.ts";
 import { resolveThreadStatus, type ThreadStatus } from "../theme.ts";
@@ -18,6 +18,7 @@ export type HerdrSidebarAction =
   | { readonly kind: "new" }
   | { readonly kind: "project"; readonly id: string }
   | { readonly kind: "thread"; readonly id: string }
+  | { readonly kind: "section"; readonly id: string }
   | { readonly kind: "more"; readonly id: string };
 
 function isAction(value: unknown): value is HerdrSidebarAction {
@@ -25,14 +26,17 @@ function isAction(value: unknown): value is HerdrSidebarAction {
   const action = value as { readonly kind?: unknown; readonly id?: unknown };
   if (action.kind === "search" || action.kind === "new") return true;
   return (
-    (action.kind === "project" || action.kind === "thread" || action.kind === "more") &&
+    (action.kind === "project" ||
+      action.kind === "thread" ||
+      action.kind === "section" ||
+      action.kind === "more") &&
     typeof action.id === "string" &&
     action.id.length > 0
   );
 }
 
 export function encodeHerdrSidebarAction(action: HerdrSidebarAction): string {
-  const payload = Buffer.from(JSON.stringify(action), "utf8").toString("base64url");
+  const payload = NodeBuffer.Buffer.from(JSON.stringify(action), "utf8").toString("base64url");
   return `${ACTION_PREFIX}${payload}${ACTION_SUFFIX}`;
 }
 
@@ -40,7 +44,9 @@ export function decodeHerdrSidebarAction(input: string): HerdrSidebarAction | nu
   if (!input.startsWith(ACTION_PREFIX) || !input.endsWith(ACTION_SUFFIX)) return null;
   try {
     const payload = input.slice(ACTION_PREFIX.length, -ACTION_SUFFIX.length);
-    const action: unknown = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
+    const action: unknown = JSON.parse(
+      NodeBuffer.Buffer.from(payload, "base64url").toString("utf8"),
+    );
     return isAction(action) ? action : null;
   } catch {
     return null;
@@ -73,6 +79,8 @@ function selectedToken(selection: Selection | null, kind: Selection["kind"], id:
 export function buildHerdrSidebarItems(input: {
   readonly rows: ReadonlyArray<Row>;
   readonly selection: Selection | null;
+  readonly projects?: ReadonlyArray<{ readonly id: string; readonly title: string }>;
+  readonly projectScopeId?: string | null;
 }): Array<Omit<HerdrAgentViewItem, "targetPaneId">> {
   let order = 0;
   const item = (
@@ -106,18 +114,40 @@ export function buildHerdrSidebarItems(input: {
     ),
     item("action:new", "New thread", "idle", "T3 Code", { kind: "new" }, "0"),
   ];
-  let currentProject = "T3 Code";
-  for (const row of input.rows) {
-    if (row.kind === "project") {
-      currentProject = bounded(row.title, 80);
+  if (input.projects) {
+    items.push(
+      item(
+        "project-scope:all",
+        `${input.projectScopeId == null ? "✓ " : ""}All projects`,
+        "idle",
+        "Project filter",
+        { kind: "project", id: "__all__" },
+        input.projectScopeId == null ? "1" : "0",
+      ),
+    );
+    for (const project of input.projects) {
       items.push(
         item(
-          `project:${row.id}`,
+          `project-scope:${project.id}`,
+          `${input.projectScopeId === project.id ? "✓ " : ""}${project.title}`,
+          "idle",
+          "Project filter",
+          { kind: "project", id: project.id },
+          input.projectScopeId === project.id ? "1" : "0",
+        ),
+      );
+    }
+  }
+  for (const row of input.rows) {
+    if (row.kind === "section") {
+      items.push(
+        item(
+          `section:${row.id}`,
           `${row.expanded ? "▾" : "▸"} ${row.title} (${row.count})`,
-          row.status ? statusForThread(row.status) : "idle",
-          "Projects",
-          { kind: "project", id: row.id },
-          selectedToken(input.selection, "project", row.id),
+          "idle",
+          row.title,
+          { kind: "section", id: row.id },
+          selectedToken(input.selection, "section", row.id),
         ),
       );
       continue;
@@ -126,9 +156,9 @@ export function buildHerdrSidebarItems(input: {
       items.push(
         item(
           `thread:${row.id}`,
-          row.thread.title,
+          `${row.thread.title} · ${row.projectTitle}`,
           statusForThread(resolveThreadStatus(row.thread)),
-          currentProject,
+          row.section === "active" ? "Active" : row.section === "snoozed" ? "Snoozed" : "Settled",
           { kind: "thread", id: row.id },
           selectedToken(input.selection, "thread", row.id),
         ),
@@ -141,7 +171,7 @@ export function buildHerdrSidebarItems(input: {
           `more:${row.id}`,
           `Show ${row.hiddenCount} more`,
           "idle",
-          currentProject,
+          "Settled",
           { kind: "more", id: row.id },
           selectedToken(input.selection, "more", row.id),
         ),
