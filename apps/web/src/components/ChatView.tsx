@@ -206,6 +206,7 @@ import { PullRequestDetailPanel } from "./pullRequest/PullRequestDetailPanel";
 import { PullRequestDetailGhost } from "./pullRequest/PullRequestGhosts";
 import { PullRequestsUnavailableState } from "./pullRequest/PullRequestsUnavailableState";
 import { RightPanelTabs } from "./RightPanelTabs";
+import { TerminalEventSync } from "./TerminalEventSync";
 import { BranchToolbar } from "./BranchToolbar";
 import { resolveShortcutCommand, shortcutLabelForCommand } from "../keybindings";
 import { makeWorkspaceFileDropHandlers } from "./chat/workspaceFileDrop";
@@ -8748,6 +8749,12 @@ export default function ChatView(props: ChatViewProps) {
       className="relative flex min-h-0 min-w-0 flex-1 overflow-hidden bg-background"
     >
       {rightPanelControlsAtRoot ? panelLayoutControls : null}
+      {environments.map((environment) => (
+        <TerminalEventSync
+          key={environment.environmentId}
+          environmentId={environment.environmentId}
+        />
+      ))}
       <div
         className={cn(
           "flex min-h-0 min-w-0 flex-col overflow-x-hidden",
