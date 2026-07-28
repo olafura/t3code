@@ -11,7 +11,6 @@ const FOCUS_DASHBOARD = "\u0010";
 const CLOSE_TERMINAL = "\u0005";
 
 export interface HerdrTerminalTarget {
-  readonly socketUrl: string;
   readonly origin: string;
   readonly threadId: string;
   readonly terminalId: string;
@@ -19,7 +18,11 @@ export interface HerdrTerminalTarget {
   readonly worktreePath: string | null;
 }
 
-export interface HerdrTerminalBridgeOptions extends HerdrTerminalTarget {
+export interface HerdrTerminalLaunchTarget extends HerdrTerminalTarget {
+  readonly socketUrl: string;
+}
+
+export interface HerdrTerminalBridgeOptions extends HerdrTerminalLaunchTarget {
   readonly herdrSocketPath: string;
   readonly dashboardPaneId: string;
   readonly terminalPaneId: string;
@@ -121,7 +124,6 @@ export function createHerdrTerminalInputParser(input: {
           Buffer.from(encoded, "base64url").toString("utf8"),
         ) as Partial<HerdrTerminalTarget>;
         if (
-          typeof parsed.socketUrl === "string" &&
           typeof parsed.origin === "string" &&
           typeof parsed.threadId === "string" &&
           typeof parsed.terminalId === "string" &&
@@ -172,7 +174,7 @@ export function terminalBridgeOutput(event: TerminalAttachStreamEvent): string {
 export async function runHerdrTerminalBridge(
   args: ReadonlyArray<string>,
   dependencies: {
-    readonly makeClient?: (target: HerdrTerminalTarget) => {
+    readonly makeClient?: (target: HerdrTerminalLaunchTarget) => {
       readonly client: TuiClient;
       readonly dispose: () => Promise<void>;
     };
@@ -201,13 +203,11 @@ export async function runHerdrTerminalBridge(
   let active:
     | {
         readonly target: HerdrTerminalTarget;
-        readonly client: TuiClient;
-        readonly dispose: () => Promise<void>;
         readonly unsubscribe: () => void;
       }
     | undefined;
 
-  const makeClient = (target: HerdrTerminalTarget) => {
+  const makeClient = (target: HerdrTerminalLaunchTarget) => {
     if (dependencies.makeClient) return dependencies.makeClient(target);
     let socketUrlAvailable = true;
     const runtime = buildTuiRuntime({
@@ -224,17 +224,17 @@ export async function runHerdrTerminalBridge(
     return { client, dispose: () => client.dispose() };
   };
 
-  const deactivate = async () => {
+  const connection = makeClient(options);
+
+  const deactivate = () => {
     const previous = active;
     active = undefined;
     if (!previous) return;
     previous.unsubscribe();
-    await previous.dispose().catch(() => {});
   };
 
-  const activate = async (target: HerdrTerminalTarget) => {
-    await deactivate();
-    const connection = makeClient(target);
+  const activate = (target: HerdrTerminalTarget) => {
+    deactivate();
     const threadId = target.threadId as ThreadId;
     const unsubscribe = connection.client.subscribeTerminal(
       {
@@ -250,7 +250,7 @@ export async function runHerdrTerminalBridge(
         if (output) stdout.write(output);
       },
     );
-    active = { target, ...connection, unsubscribe };
+    active = { target, unsubscribe };
   };
 
   let switching = Promise.resolve();
@@ -258,7 +258,7 @@ export async function runHerdrTerminalBridge(
     onInput: (data) => {
       const current = active;
       if (!current || data.length === 0) return;
-      void current.client
+      void connection.client
         .terminalWrite(
           current.target.threadId as ThreadId,
           current.target.terminalId,
@@ -269,7 +269,9 @@ export async function runHerdrTerminalBridge(
     },
     onSwitch: (target) => {
       switching = switching
-        .then(() => activate(target))
+        .then(() => {
+          activate(target);
+        })
         .catch((error) => {
           stdout.write(`\r\n[T3 terminal switch failed: ${String(error)}]\r\n`);
         });
@@ -286,7 +288,7 @@ export async function runHerdrTerminalBridge(
   const onResize = () => {
     const current = active;
     if (!current) return;
-    void current.client
+    void connection.client
       .terminalResize(
         current.target.threadId as ThreadId,
         current.target.terminalId,
@@ -299,7 +301,7 @@ export async function runHerdrTerminalBridge(
   let finish = () => {};
   const onSignal = () => finish();
   try {
-    await activate(options);
+    activate(options);
     await new Promise<void>((resolve) => {
       let settled = false;
       finish = () => {
@@ -324,7 +326,8 @@ export async function runHerdrTerminalBridge(
     process.off("SIGTERM", onSignal);
     process.off("SIGHUP", onSignal);
     stdin.setRawMode?.(false);
-    await deactivate();
+    deactivate();
+    await connection.dispose().catch(() => {});
     herdr?.dispose();
   }
 }

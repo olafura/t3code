@@ -128,6 +128,9 @@ function fakeProtocol(initial: HerdrSessionSnapshot) {
     sendPaneInput: async (paneId: string, text: string, keys: ReadonlyArray<string> = []) => {
       calls.push({ method: "pane.send_input", value: { paneId, text, keys } });
     },
+    sendPaneText: async (paneId: string, text: string) => {
+      calls.push({ method: "pane.send_text", value: { paneId, text } });
+    },
     closePane: async (paneId: string) => {
       calls.push({ method: "pane.close", value: paneId });
       current = snapshot(current.panes.filter((pane) => pane.pane_id !== paneId));
@@ -294,11 +297,14 @@ describe("createHerdrTuiHost", () => {
         },
       },
     ]);
-    const sends = protocol.calls.filter((call) => call.method === "pane.send_input");
-    expect(sends).toHaveLength(2);
-    expect(JSON.stringify(sends[0]?.value)).toContain("--herdr-terminal-bridge");
-    expect(JSON.stringify(sends[0]?.value)).toContain("--terminal-pane-id");
-    expect(JSON.stringify(sends[1]?.value)).toContain("\\u001bP+t3-terminal;");
+    const launches = protocol.calls.filter((call) => call.method === "pane.send_input");
+    const switches = protocol.calls.filter((call) => call.method === "pane.send_text");
+    expect(launches).toHaveLength(1);
+    expect(JSON.stringify(launches[0]?.value)).toContain("--herdr-terminal-bridge");
+    expect(JSON.stringify(launches[0]?.value)).toContain("--terminal-pane-id");
+    expect(switches).toHaveLength(1);
+    expect(JSON.stringify(switches[0]?.value)).toContain("\\u001bP+t3-terminal;");
+    expect(ticket).toBe(1);
     expect(protocol.calls).toContainEqual({ method: "pane.focus", value: "w1:p3" });
     host.dispose();
   });

@@ -11,7 +11,11 @@ import {
   HERDR_SIDEBAR_PROTOCOL,
 } from "./protocol.ts";
 import { decodeHerdrSidebarAction, type HerdrSidebarAction } from "./sidebar.ts";
-import { encodeHerdrTerminalSwitch, type HerdrTerminalTarget } from "./terminalBridge.ts";
+import {
+  encodeHerdrTerminalSwitch,
+  type HerdrTerminalLaunchTarget,
+  type HerdrTerminalTarget,
+} from "./terminalBridge.ts";
 
 export type HerdrConnectionState = "connecting" | "connected" | "disconnected" | "error";
 
@@ -126,7 +130,7 @@ function shellQuote(value: string): string {
 export function herdrTerminalBridgeCommand(input: {
   readonly executable: string;
   readonly entry: string;
-  readonly target: HerdrTerminalTarget;
+  readonly target: HerdrTerminalLaunchTarget;
   readonly herdrSocketPath: string;
   readonly dashboardPaneId: string;
   readonly terminalPaneId: string;
@@ -382,7 +386,6 @@ export function createHerdrTuiHost(
         }
         const cwd = await terminalCwd(input, options.isDirectory ?? isDirectory);
         const target: HerdrTerminalTarget = {
-          socketUrl: await options.mintSocketUrl(),
           origin: options.environmentKey,
           threadId: input.threadId,
           terminalId: input.terminalId,
@@ -423,10 +426,14 @@ export function createHerdrTuiHost(
           displayAgent: terminalTitle,
         });
         if (created) {
+          const launchTarget: HerdrTerminalLaunchTarget = {
+            ...target,
+            socketUrl: await options.mintSocketUrl(),
+          };
           const command = herdrTerminalBridgeCommand({
             executable: process.execPath,
             entry: options.terminalBridgeEntry,
-            target,
+            target: launchTarget,
             herdrSocketPath: options.socketPath,
             dashboardPaneId: options.paneId,
             terminalPaneId: pane.pane_id,
@@ -436,7 +443,7 @@ export function createHerdrTuiHost(
           });
           await client.sendPaneInput(pane.pane_id, command, ["enter"]);
         } else {
-          await client.sendPaneInput(pane.pane_id, encodeHerdrTerminalSwitch(target));
+          await client.sendPaneText(pane.pane_id, encodeHerdrTerminalSwitch(target));
           await client.focusPane(pane.pane_id);
         }
         await refreshSnapshot();
