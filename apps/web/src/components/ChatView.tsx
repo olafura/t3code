@@ -177,6 +177,7 @@ import { PullRequestDetailPanel } from "./pullRequest/PullRequestDetailPanel";
 import { PullRequestDetailGhost } from "./pullRequest/PullRequestGhosts";
 import { PullRequestsUnavailableState } from "./pullRequest/PullRequestsUnavailableState";
 import { RightPanelTabs, type PullRequestTabStatus } from "./RightPanelTabs";
+import { TerminalEventSync } from "./TerminalEventSync";
 import { DiffWorkerPoolProvider } from "./DiffWorkerPoolProvider";
 import { BranchToolbar } from "./BranchToolbar";
 import { resolveShortcutCommand, shortcutLabelForCommand } from "../keybindings";
@@ -7441,6 +7442,12 @@ function ChatViewContent(props: ChatViewProps) {
       ref={workspaceLayoutRef}
       className="relative flex min-h-0 min-w-0 flex-1 overflow-hidden bg-background"
     >
+      {environments.map((environment) => (
+        <TerminalEventSync
+          key={environment.environmentId}
+          environmentId={environment.environmentId}
+        />
+      ))}
       <div
         className={cn(
           "flex min-h-0 min-w-0 flex-col overflow-x-hidden",
