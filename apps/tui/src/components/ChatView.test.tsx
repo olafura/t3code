@@ -113,6 +113,7 @@ function fakeClient({
   createThread = async () => "t-new" as never,
   terminalClear = async () => {},
   terminalRestart = async () => {},
+  terminalClose = async () => {},
   setInteractionMode = async () => {},
   vcsStatus,
   runGitPull = async () => {},
@@ -155,6 +156,7 @@ function fakeClient({
   readonly createThread?: TuiClient["createThread"];
   readonly terminalClear?: TuiClient["terminalClear"];
   readonly terminalRestart?: TuiClient["terminalRestart"];
+  readonly terminalClose?: TuiClient["terminalClose"];
   readonly setInteractionMode?: TuiClient["setInteractionMode"];
   readonly vcsStatus?: VcsStatusResult;
   readonly runGitPull?: TuiClient["runGitPull"];
@@ -170,8 +172,10 @@ function fakeClient({
   readonly connect: () => void;
   readonly subscribedThreadIds: string[];
   readonly subscribedTerminalIds: string[];
+  readonly emitTerminalMetadata: (event: TerminalMetadataStreamEvent) => void;
 } {
   let shellSubscriber: ((snapshot: OrchestrationShellSnapshot) => void) | null = null;
+  let terminalMetadataSubscriber: ((event: TerminalMetadataStreamEvent) => void) | null = null;
   const subscribedThreadIds: string[] = [];
   const subscribedTerminalIds: string[] = [];
   const client = {
@@ -191,8 +195,11 @@ function fakeClient({
       return () => {};
     },
     subscribeTerminalMetadata: (onEvent: (event: TerminalMetadataStreamEvent) => void) => {
+      terminalMetadataSubscriber = onEvent;
       if (terminalMetadata) onEvent(terminalMetadata);
-      return () => {};
+      return () => {
+        terminalMetadataSubscriber = null;
+      };
     },
     sendReply,
     respondUserInput,
@@ -207,7 +214,7 @@ function fakeClient({
     terminalClear,
     terminalRestart,
     setInteractionMode,
-    terminalClose: async () => {},
+    terminalClose,
     listTerminalIds,
     listModels,
     getServerConfig: async () => ({ settings: DEFAULT_SERVER_SETTINGS }) as never,
@@ -224,6 +231,7 @@ function fakeClient({
     connect: () => shellSubscriber?.(shellSnapshot),
     subscribedThreadIds,
     subscribedTerminalIds,
+    emitTerminalMetadata: (event) => terminalMetadataSubscriber?.(event),
   };
 }
 
@@ -374,6 +382,7 @@ describe("ChatView Herdr host", () => {
     let activateSidebar: Parameters<HerdrTuiHost["subscribeSidebarActions"]>[0] = () => {};
     const openedTerminals: string[] = [];
     const openedTerminalTotals: number[] = [];
+    const closedTerminals: string[] = [];
     let herdrConnected = false;
     let notifyHost = () => {};
     const host = {
@@ -449,6 +458,9 @@ describe("ChatView Herdr host", () => {
         terminals: [terminalSummary("term-2")],
       },
       listTerminalIds: async () => ["term-1", "term-2"],
+      terminalClose: async (_threadId, terminalId) => {
+        closedTerminals.push(terminalId);
+      },
     });
     const setup = await testRender(
       <ChatView client={fake.client} host={host} onExit={() => {}} />,
@@ -615,6 +627,34 @@ describe("ChatView Herdr host", () => {
     await setup.waitFor(() => openedTerminals.at(-1) === "term-2");
     expect(await setup.waitForFrame((frame) => frame.includes("▸ Terminal 2"))).toContain(
       "Terminal 3",
+    );
+
+    await React.act(async () => {
+      fake.emitTerminalMetadata({
+        type: "remove",
+        threadId: "t1",
+        terminalId: "term-2",
+      });
+      await setup.renderOnce();
+      await setup.flush();
+    });
+    await setup.waitFor(() => openedTerminals.at(-1) === "term-3");
+    const afterWebClose = await setup.waitForFrame(
+      (frame) => frame.includes("▸ Terminal 2") && !frame.includes("Terminal 3"),
+    );
+    const closeLines = afterWebClose.split("\n");
+    const closeRow = closeLines.findIndex((line) => line.includes("×"));
+    const closeColumn = closeRow < 0 ? -1 : (closeLines[closeRow]?.indexOf("×") ?? -1);
+    expect(closeRow).toBeGreaterThanOrEqual(0);
+    expect(closeColumn).toBeGreaterThanOrEqual(0);
+    await React.act(async () => {
+      await setup.mockMouse.click(closeColumn, closeRow);
+      await setup.flush();
+    });
+    await setup.waitFor(() => closedTerminals.includes("term-3"));
+    await setup.waitFor(() => openedTerminals.at(-1) === "term-1");
+    expect(await setup.waitForFrame((frame) => frame.includes("▸ Terminal 1"))).not.toContain(
+      "Terminal 2",
     );
     setup.renderer.destroy();
   });

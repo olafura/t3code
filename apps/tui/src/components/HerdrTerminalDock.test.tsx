@@ -5,8 +5,9 @@ import * as React from "react";
 import { HerdrTerminalDock } from "./HerdrTerminalDock.tsx";
 
 describe("HerdrTerminalDock", () => {
-  it("shows explicit terminal tabs and dispatches switch and new-terminal clicks", async () => {
+  it("dispatches switch, new-terminal, and close clicks from the visible dock", async () => {
     const selected: string[] = [];
+    const closed: string[] = [];
     let newTerminals = 0;
     const setup = await testRender(
       <HerdrTerminalDock
@@ -18,7 +19,7 @@ describe("HerdrTerminalDock", () => {
         onNewTab={() => {
           newTerminals += 1;
         }}
-        onCloseTab={() => {}}
+        onCloseTab={(id) => closed.push(id)}
       />,
       { width: 120, height: 5 },
     );
@@ -43,8 +44,10 @@ describe("HerdrTerminalDock", () => {
 
     await clickLabel("Terminal 2");
     await clickLabel("+ New");
+    await clickLabel("×");
     expect(selected).toEqual(["term-2"]);
     expect(newTerminals).toBe(1);
+    expect(closed).toEqual(["term-1"]);
     setup.renderer.destroy();
   });
 });
