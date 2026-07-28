@@ -2874,6 +2874,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
   ) {
     const key = toSessionKey(threadId, terminalId);
     const session = yield* getSession(threadId, terminalId);
+    const persisted = (yield* listPersistedTerminalIds(threadId)).has(terminalId);
     const closedEventSequence = Option.isSome(session) ? session.value.eventSequence + 1 : 0;
 
     if (Option.isSome(session)) {
@@ -2893,7 +2894,11 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       return [true, { ...state, sessions }] as const;
     });
 
-    if (removed) {
+    // An evicted/inactive terminal can still exist as persisted history and be
+    // visible in clients returned by terminal.list. Its explicit close must
+    // publish the same removal event as an in-memory session so every client
+    // drops the tab immediately.
+    if (removed || persisted) {
       yield* publishEvent({
         type: "closed",
         threadId,
