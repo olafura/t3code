@@ -329,10 +329,9 @@ export function ChatView({
   const [loadingOlder, setLoadingOlder] = React.useState(false);
   const [rightPanelFocused, setRightPanelFocused] = React.useState(false);
   const [rightPanelIndex, setRightPanelIndex] = React.useState(0);
-  // Keep T3's full navigation visible until native Herdr sidebar integration is
-  // confirmed. It is also the editable search/new-thread surface reached from
-  // the corresponding native sidebar actions.
-  const [hostedSidebarOpen, setHostedSidebarOpen] = React.useState(host.kind === "herdr");
+  // Herdr owns the primary navigation. T3's full sidebar remains available as
+  // an on-demand search surface without duplicating the native sidebar.
+  const [hostedSidebarOpen, setHostedSidebarOpen] = React.useState(false);
   // User-set prompt height in editor rows; null = auto-grow with content.
   const [promptHeight, setPromptHeight] = React.useState<number | null>(null);
   // Multiple terminals per thread (the TUI form of the web's terminal groups):
@@ -363,6 +362,11 @@ export function ChatView({
   >(null);
 
   const projects = state.shell?.projects ?? [];
+  const projectScopeLabel =
+    state.projectScopeId === null
+      ? "All projects"
+      : (projects.find((project) => project.id === state.projectScopeId)?.title ??
+        state.projectScopeId);
   // projectIndex is held across shell updates; clamp it so a shrinking project
   // list can't leave it pointing past the end (projects[projectIndex] = undefined).
   const activeProjectIndex = projects.length > 0 ? Math.min(projectIndex, projects.length - 1) : 0;
@@ -424,11 +428,10 @@ export function ChatView({
         ? buildHerdrSidebarItems({
             rows,
             selection: state.selection,
-            projects,
-            projectScopeId: state.projectScopeId,
+            projectScopeLabel,
           })
         : [],
-    [host.kind, projects, rows, state.projectScopeId, state.selection],
+    [host.kind, projectScopeLabel, rows, state.selection],
   );
   React.useEffect(() => {
     if (host.kind !== "herdr") return;
@@ -973,6 +976,34 @@ export function ChatView({
     state.selection?.kind,
   ]);
 
+  const openProjectScopePicker = React.useCallback(() => {
+    const options: SelectOption[] = [
+      {
+        name: "All projects",
+        description: "Show threads from every project.",
+        value: "__all__",
+      },
+      ...projects.map((project) => ({
+        name: project.title,
+        description: project.workspaceRoot,
+        value: project.id as string,
+      })),
+    ];
+    setPicker({
+      kind: "project-scope",
+      target: "sidebar",
+      title: "project",
+      status: "ready",
+      options,
+      selectedIndex: Math.max(
+        0,
+        state.projectScopeId === null
+          ? 0
+          : options.findIndex((option) => option.value === state.projectScopeId),
+      ),
+    });
+  }, [projects, state.projectScopeId]);
+
   React.useEffect(() => {
     if (host.kind !== "herdr") return;
     return host.subscribeSidebarActions((action) => {
@@ -982,6 +1013,8 @@ export function ChatView({
         setFocus("filter");
       } else if (action.kind === "new") {
         openNewThread();
+      } else if (action.kind === "project-picker") {
+        openProjectScopePicker();
       } else if (action.kind === "project") {
         store.setProjectScope(action.id === "__all__" ? null : action.id);
         setFocus("compose");
@@ -996,7 +1029,7 @@ export function ChatView({
         setFocus("compose");
       }
     });
-  }, [host, openNewThread, store]);
+  }, [host, openNewThread, openProjectScopePicker, store]);
 
   React.useEffect(() => {
     if (
@@ -1074,34 +1107,6 @@ export function ChatView({
         },
       ],
       selectedIndex: newWorkspaceMode === "current" ? 0 : 1,
-    });
-  };
-
-  const openProjectScopePicker = () => {
-    const options: SelectOption[] = [
-      {
-        name: "All projects",
-        description: "Show threads from every project.",
-        value: "__all__",
-      },
-      ...projects.map((project) => ({
-        name: project.title,
-        description: project.workspaceRoot,
-        value: project.id as string,
-      })),
-    ];
-    setPicker({
-      kind: "project-scope",
-      target: "sidebar",
-      title: "project",
-      status: "ready",
-      options,
-      selectedIndex: Math.max(
-        0,
-        state.projectScopeId === null
-          ? 0
-          : options.findIndex((option) => option.value === state.projectScopeId),
-      ),
     });
   };
 
@@ -2985,12 +2990,7 @@ export function ChatView({
           height={height}
           store={store}
           filter={state.filter}
-          projectScopeLabel={
-            state.projectScopeId === null
-              ? "All projects"
-              : (projects.find((project) => project.id === state.projectScopeId)?.title ??
-                state.projectScopeId)
-          }
+          projectScopeLabel={projectScopeLabel}
           searchFocused={focus === "filter" && !terminalFocused && !diffOpen && !picker}
           onSearchInput={store.setFilter}
           onFocusSearch={() => setFocus("filter")}
