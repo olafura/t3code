@@ -1,9 +1,4 @@
-import {
-  CliRenderEvents,
-  type ScrollBoxRenderable,
-  type SelectOption,
-  SyntaxStyle,
-} from "@opentui/core";
+import { CliRenderEvents, type ScrollBoxRenderable, type SelectOption } from "@opentui/core";
 import {
   DEFAULT_SERVER_SETTINGS,
   type GitStackedAction,
@@ -54,7 +49,7 @@ import { latestActionableProposedPlan } from "../proposedPlan.ts";
 import { createStore } from "../store.ts";
 import { herdrWorkspaceCwd, standaloneTuiHost, type TuiHost } from "../herdr/host.ts";
 import { buildHerdrSidebarItems } from "../herdr/sidebar.ts";
-import { statusGlyphColor, usePalette } from "../theme.ts";
+import { createTuiSyntaxStyle, statusGlyphColor, usePalette } from "../theme.ts";
 import {
   currentModelIndex,
   type ModelOption,
@@ -163,9 +158,11 @@ export function ChatView({
   const inlineImagesSupported = useKittyGraphicsSupport();
   const palette = usePalette();
   const store = React.useMemo(() => createStore(client, host), [client, host]);
-  const syntaxStyle = React.useMemo(() => SyntaxStyle.create(), []);
+  const syntaxStyle = React.useMemo(() => createTuiSyntaxStyle(palette), [palette]);
   const state = React.useSyncExternalStore(store.subscribe, store.getState);
   const [modelOptions, setModelOptions] = React.useState<ReadonlyArray<ModelOption>>([]);
+
+  React.useEffect(() => () => syntaxStyle.destroy(), [syntaxStyle]);
 
   React.useEffect(() => {
     store.start();
