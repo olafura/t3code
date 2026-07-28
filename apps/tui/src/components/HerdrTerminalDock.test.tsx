@@ -50,4 +50,32 @@ describe("HerdrTerminalDock", () => {
     expect(closed).toEqual(["term-1"]);
     setup.renderer.destroy();
   });
+
+  it("keeps the close control available for the final terminal", async () => {
+    const closed: string[] = [];
+    const setup = await testRender(
+      <HerdrTerminalDock
+        title="Only terminal"
+        width={80}
+        tabIds={["term-1"]}
+        activeTabId="term-1"
+        onSelectTab={() => {}}
+        onNewTab={() => {}}
+        onCloseTab={(id) => closed.push(id)}
+      />,
+      { width: 80, height: 5 },
+    );
+
+    await setup.renderOnce();
+    await setup.flush();
+    const lines = setup.captureCharFrame().split("\n");
+    const row = lines.findIndex((line) => line.includes("×"));
+    const column = row < 0 ? -1 : (lines[row]?.indexOf("×") ?? -1);
+    expect(row).toBeGreaterThanOrEqual(0);
+    expect(column).toBeGreaterThanOrEqual(0);
+    await setup.mockMouse.click(column, row);
+    await setup.flush();
+    expect(closed).toEqual(["term-1"]);
+    setup.renderer.destroy();
+  });
 });

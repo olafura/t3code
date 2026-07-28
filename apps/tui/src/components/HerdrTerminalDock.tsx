@@ -29,7 +29,7 @@ export const HerdrTerminalDock = React.memo(function HerdrTerminalDock({
   );
   const tabsWidth =
     terminalLabels.reduce((total, label, index) => {
-      const closeWidth = tabIds[index] === activeTabId && tabIds.length > 1 ? 2 : 0;
+      const closeWidth = tabIds[index] === activeTabId ? 2 : 0;
       return total + label.length + closeWidth + 4;
     }, 0) + (compact ? 5 : 7);
   const titleWidth = Math.max(1, width - tabsWidth - 6);
@@ -43,7 +43,7 @@ export const HerdrTerminalDock = React.memo(function HerdrTerminalDock({
         const id = tabIds[index] as string;
         const active = id === activeTabId;
         const label = terminalLabels[index] as string;
-        const closeWidth = active && tabIds.length > 1 ? 2 : 0;
+        const closeWidth = active ? 2 : 0;
         const tabWidth = label.length + 2 + (active ? 2 : 0) + closeWidth;
         cursor += 1;
         if (localX >= cursor && localX < cursor + tabWidth) {
@@ -90,8 +90,7 @@ export const HerdrTerminalDock = React.memo(function HerdrTerminalDock({
         {tabIds.map((id, index) => {
           const active = id === activeTabId;
           const label = terminalLabels[index] as string;
-          const tabWidth =
-            label.length + 2 + (active ? 2 : 0) + (active && tabIds.length > 1 ? 2 : 0);
+          const tabWidth = label.length + 2 + (active ? 4 : 0);
           return (
             <box
               key={id}
@@ -115,7 +114,7 @@ export const HerdrTerminalDock = React.memo(function HerdrTerminalDock({
                   label
                 )}
               </text>
-              {active && tabIds.length > 1 ? (
+              {active ? (
                 <text fg={palette.dim} onMouseDown={() => onCloseTab(id)}>
                   {" ×"}
                 </text>

@@ -383,6 +383,7 @@ describe("ChatView Herdr host", () => {
     const openedTerminals: string[] = [];
     const openedTerminalTotals: number[] = [];
     const closedTerminals: string[] = [];
+    let closedNativeTerminalPanes = 0;
     let herdrConnected = false;
     let notifyHost = () => {};
     const host = {
@@ -435,7 +436,9 @@ describe("ChatView Herdr host", () => {
         };
       },
       focusThreadTerminalPane: async () => true,
-      closeThreadTerminalPane: async () => {},
+      closeThreadTerminalPane: async () => {
+        closedNativeTerminalPanes += 1;
+      },
       openServerPane: async () => {},
     } satisfies HerdrTuiHost;
     const terminalSummary = (terminalId: string) => ({
@@ -656,6 +659,17 @@ describe("ChatView Herdr host", () => {
     expect(await setup.waitForFrame((frame) => frame.includes("▸ Terminal 1"))).not.toContain(
       "Terminal 2",
     );
+    await React.act(async () => {
+      fake.emitTerminalMetadata({
+        type: "remove",
+        threadId: "t1",
+        terminalId: "term-1",
+      });
+      await setup.renderOnce();
+      await setup.flush();
+    });
+    await setup.waitFor(() => closedNativeTerminalPanes === 1);
+    await setup.waitForFrame((frame) => !frame.includes("▸ Terminal 1"));
     setup.renderer.destroy();
   });
 

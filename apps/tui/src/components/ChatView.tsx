@@ -339,6 +339,10 @@ export function ChatView({
   const [terminalTabs, setTerminalTabs] = React.useState<ReadonlyMap<string, ThreadTabs>>(
     () => new Map(),
   );
+  const terminalTabsRef = React.useRef(terminalTabs);
+  terminalTabsRef.current = terminalTabs;
+  const terminalOpenRef = React.useRef(terminalOpen);
+  terminalOpenRef.current = terminalOpen;
   // Terminal ids the server knows about per thread (agent-spawned, web-created,
   // or from a prior run), streamed from the terminal-metadata subscription so the
   // tab bar reflects reality rather than only the tabs this TUI opened.
@@ -1876,8 +1880,15 @@ export function ChatView({
       const next = new Map(prev);
       if (nextTabs) next.set(threadId, nextTabs);
       else next.delete(threadId);
+      terminalTabsRef.current = next;
       return next;
     });
+
+  const detailIdForTabs = detail?.id ?? null;
+  const detailIdForTabsRef = React.useRef(detailIdForTabs);
+  detailIdForTabsRef.current = detailIdForTabs;
+  const hostRef = React.useRef(host);
+  hostRef.current = host;
 
   // Discover terminals the TUI didn't open (agent-spawned, web-created, or from
   // a prior run) via the metadata stream, so the tab bar isn't blind to them.
@@ -1885,6 +1896,9 @@ export function ChatView({
     const unsubscribe = client.subscribeTerminalMetadata((event) => {
       setKnownTerminals((prev) => reduceKnownTerminals(prev, event));
       if (event.type !== "remove") return;
+      const openTabs = terminalTabsRef.current.get(event.threadId);
+      if (!openTabs?.ids.includes(event.terminalId)) return;
+      const removedFinalOpenTab = openTabs.ids.length === 1;
       setTerminalTabs((previous) => {
         const tabs = previous.get(event.threadId);
         if (!tabs?.ids.includes(event.terminalId)) return previous;
@@ -1892,13 +1906,25 @@ export function ChatView({
         const next = new Map(previous);
         if (remaining) next.set(event.threadId, remaining);
         else next.delete(event.threadId);
+        terminalTabsRef.current = next;
         return next;
       });
+      if (
+        removedFinalOpenTab &&
+        terminalOpenRef.current &&
+        detailIdForTabsRef.current === event.threadId
+      ) {
+        terminalOpenRef.current = false;
+        setTerminalOpen(false);
+        setTerminalFocused(false);
+        const currentHost = hostRef.current;
+        if (currentHost.kind === "herdr") {
+          void currentHost.closeThreadTerminalPane().catch(() => {});
+        }
+      }
     });
     return unsubscribe;
   }, [client]);
-
-  const detailIdForTabs = detail?.id ?? null;
 
   // The live metadata stream only knows sessions attached since server startup.
   // Ask the backend for persisted terminal identities as well, so a terminal
@@ -1940,16 +1966,6 @@ export function ChatView({
     if (discovered.length === 0) return;
     updateThreadTabs(detailIdForTabs, (tabs) => tabsWithDiscovered(tabs, discovered));
   }, [terminalOpen, detailIdForTabs, knownTerminals]);
-
-  // A terminal closed by the web UI (or another client) emits an authoritative
-  // remove event. When that was the drawer's final tab, close the local/native
-  // drawer too instead of leaving an empty terminal mode behind.
-  React.useEffect(() => {
-    if (!terminalOpen || detailIdForTabs === null || detailTabs !== null) return;
-    setTerminalOpen(false);
-    setTerminalFocused(false);
-    if (host.kind === "herdr") void host.closeThreadTerminalPane().catch(() => {});
-  }, [detailIdForTabs, detailTabs, host, terminalOpen]);
 
   const tabsForOpenDrawer = (threadId: string, tabs: ThreadTabs | null): ThreadTabs =>
     tabs ?? tabsWithDiscovered(null, knownTerminals.get(threadId) ?? []) ?? initialTabs();
