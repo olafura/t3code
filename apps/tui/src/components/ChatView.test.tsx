@@ -237,17 +237,9 @@ async function selectThread(
     await setup.renderOnce();
     await setup.flush();
   });
-  await setup.waitForFrame((frame) => frame.includes("Project one"));
-
-  // Selecting a project automatically opens its new-thread composer and expands
-  // the project, so Alt+Down can move directly into its first thread.
-  await React.act(async () => {
-    setup.mockInput.pressKey("\x1b\x1b[B");
-    await setup.renderOnce();
-  });
-  await setup.waitForFrame(
-    (frame) => frame.includes("Thread one") && !frame.includes("Enter to expand"),
-  );
+  // Sidebar V2 is flat, so the first thread is selected as soon as the shell
+  // arrives; no project-expansion keypress is part of thread navigation.
+  await setup.waitForFrame((frame) => frame.includes("Thread one"));
 }
 
 describe("ChatView responsive shell", () => {
@@ -291,18 +283,18 @@ describe("ChatView responsive shell", () => {
       await setup.renderOnce();
       await setup.flush();
     });
-    expect(setup.captureCharFrame()).not.toContain("Projects");
+    expect(setup.captureCharFrame()).not.toContain("Threads");
     await React.act(async () => {
       setup.mockInput.pressKey("f", { ctrl: true });
       await setup.renderOnce();
     });
-    const sidebarFrame = await setup.waitForFrame((frame) => frame.includes("Search projects"));
-    expect(sidebarFrame).toContain("Projects");
+    const sidebarFrame = await setup.waitForFrame((frame) => frame.includes("Search threads"));
+    expect(sidebarFrame).toContain("Threads");
     await React.act(async () => {
       setup.mockInput.pressEnter();
       await setup.renderOnce();
     });
-    await setup.waitForFrame((frame) => !frame.includes("Projects"));
+    await setup.waitForFrame((frame) => !frame.includes("Threads"));
     setup.renderer.destroy();
   });
 
@@ -476,7 +468,7 @@ describe("ChatView Herdr host", () => {
       await setup.flush();
     });
     const hosted = await setup.waitForFrame((frame) => frame.includes("Ask anything"));
-    expect(hosted).toContain("Search projects");
+    expect(hosted).toContain("Search threads");
     expect(hosted).not.toContain("Reviewer");
     await setup.waitFor(() =>
       sidebarReports.some((items) =>
@@ -516,18 +508,18 @@ describe("ChatView Herdr host", () => {
       setup.mockInput.pressKey("f", { ctrl: true });
       await setup.renderOnce();
     });
-    await setup.waitForFrame((frame) => !frame.includes("Search projects"));
+    await setup.waitForFrame((frame) => !frame.includes("Search threads"));
     await React.act(async () => {
       setup.mockInput.pressKey("f", { ctrl: true });
       await setup.renderOnce();
     });
-    const withT3Sidebar = await setup.waitForFrame((frame) => frame.includes("Search projects"));
+    const withT3Sidebar = await setup.waitForFrame((frame) => frame.includes("Search threads"));
     expect(withT3Sidebar).not.toContain("Reviewer");
     await React.act(async () => {
       setup.mockInput.pressKey("f", { ctrl: true });
       await setup.renderOnce();
     });
-    await setup.waitForFrame((frame) => !frame.includes("Search projects"));
+    await setup.waitForFrame((frame) => !frame.includes("Search threads"));
     await React.act(async () => {
       setup.mockInput.pressKey("k", { ctrl: true });
       await setup.renderOnce();
@@ -543,22 +535,22 @@ describe("ChatView Herdr host", () => {
       setup.mockInput.pressEnter();
       await setup.renderOnce();
     });
-    await setup.waitForFrame((frame) => frame.includes("Search projects"));
+    await setup.waitForFrame((frame) => frame.includes("Search threads"));
     await React.act(async () => {
       setup.mockInput.pressKey("f", { ctrl: true });
       await setup.renderOnce();
     });
-    await setup.waitForFrame((frame) => !frame.includes("Search projects"));
+    await setup.waitForFrame((frame) => !frame.includes("Search threads"));
     await React.act(async () => {
       activateSidebar({ kind: "search" });
       await setup.renderOnce();
     });
-    await setup.waitForFrame((frame) => frame.includes("Search projects"));
+    await setup.waitForFrame((frame) => frame.includes("Search threads"));
     await React.act(async () => {
       setup.mockInput.pressKey("f", { ctrl: true });
       await setup.renderOnce();
     });
-    await setup.waitForFrame((frame) => !frame.includes("Search projects"));
+    await setup.waitForFrame((frame) => !frame.includes("Search threads"));
     await setup.waitFor(() => reports.some((report) => report?.threadId === "t1"));
     await React.act(async () => {
       setup.mockInput.pressKey("e", { ctrl: true });

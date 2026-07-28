@@ -16,14 +16,14 @@ describe("Herdr native T3 sidebar", () => {
     expect(decodeHerdrSidebarAction("\u001bP+t3-sidebar;garbage\u001b\\")).toBeNull();
   });
 
-  test("builds the complete visible project and thread navigation model", () => {
+  test("builds the complete flat lifecycle navigation model", () => {
     const rows: Row[] = [
       {
-        kind: "project",
-        id: "project-1",
-        title: "t3code",
-        count: 2,
-        status: null,
+        kind: "section",
+        id: "sidebar-v2:snoozed",
+        section: "snoozed",
+        title: "Snoozed",
+        count: 1,
         expanded: true,
       },
       {
@@ -34,8 +34,16 @@ describe("Herdr native T3 sidebar", () => {
           title: "Fix native sidebar",
           session: { status: "running" },
         } as never,
+        section: "active",
+        projectTitle: "t3code",
+        timestamp: "2026-07-28T00:00:00.000Z",
       },
-      { kind: "more", id: "project-1", hiddenCount: 1 },
+      {
+        kind: "more",
+        id: "sidebar-v2:settled",
+        section: "settled",
+        hiddenCount: 1,
+      },
     ];
 
     const items = buildHerdrSidebarItems({
@@ -46,22 +54,40 @@ describe("Herdr native T3 sidebar", () => {
     expect(items.map((item) => item.id)).toEqual([
       "action:search",
       "action:new",
-      "project:project-1",
+      "section:sidebar-v2:snoozed",
       "thread:thread-1",
-      "more:project-1",
+      "more:sidebar-v2:settled",
     ]);
     expect(items[2]).toMatchObject({
-      label: "▾ t3code (2)",
-      tokens: { project: "Projects" },
+      label: "▾ Snoozed (1)",
+      tokens: { project: "Snoozed" },
     });
     expect(items[3]).toMatchObject({
-      label: "Fix native sidebar",
+      label: "Fix native sidebar · t3code",
       status: "working",
-      tokens: { project: "t3code", selected: "1" },
+      tokens: { project: "Active", selected: "1" },
     });
     expect(decodeHerdrSidebarAction(items[4]?.activationInput ?? "")).toEqual({
       kind: "more",
-      id: "project-1",
+      id: "sidebar-v2:settled",
+    });
+  });
+
+  test("publishes the same project filter used by the standalone sidebar", () => {
+    const items = buildHerdrSidebarItems({
+      rows: [],
+      selection: null,
+      projects: [
+        { id: "p1", title: "t3code" },
+        { id: "p2", title: "herdr" },
+      ],
+      projectScopeId: "p1",
+    });
+
+    expect(items.slice(2).map((item) => item.label)).toEqual(["All projects", "✓ t3code", "herdr"]);
+    expect(decodeHerdrSidebarAction(items[2]?.activationInput ?? "")).toEqual({
+      kind: "project",
+      id: "__all__",
     });
   });
 });

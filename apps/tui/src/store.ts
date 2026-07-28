@@ -1,17 +1,14 @@
-import {
-  DEFAULT_SIDEBAR_THREAD_PREVIEW_COUNT,
-  type GitStackedAction,
-  type VcsStatusResult,
-} from "@t3tools/contracts";
-import * as NodePath from "node:path";
+import { type GitStackedAction, type VcsStatusResult } from "@t3tools/contracts";
 
 import type { OrchestrationShellSnapshot, OrchestrationThread, TuiClient } from "./connection.ts";
 import { gitActionNeedsCommitMessage } from "./gitActions.logic.ts";
 import { standaloneTuiHost, type HerdrHostState, type TuiHost } from "./herdr/host.ts";
 import {
   buildRows,
-  herdrSpaceExpansionKey,
+  SIDEBAR_SETTLED_SECTION_ID,
+  SIDEBAR_SNOOZED_SECTION_ID,
   type Row,
+  type SidebarSection,
   type Selection,
   selectionEquals,
 } from "./components/Sidebar.logic.ts";
@@ -36,6 +33,8 @@ export interface StoreState {
   readonly statusKind: StatusKind;
   /** Sidebar filter text; empty = unfiltered. */
   readonly filter: string;
+  /** null shows all projects; otherwise the flat thread list is scoped to one project. */
+  readonly projectScopeId: string | null;
   /** Live git status for the selected thread's worktree, or null. */
   readonly vcsStatus: VcsStatusResult | null;
   /** True while a git stacked action is running. */
@@ -57,6 +56,8 @@ export interface Store {
   readonly toggleProject: (id: string) => void;
   readonly toggleSpace: (id: string) => void;
   readonly loadMore: (id: string) => void;
+  readonly toggleSection: (section: Exclude<SidebarSection, "active">) => void;
+  readonly setProjectScope: (projectId: string | null) => void;
   readonly setStatus: (status: string, kind?: StatusKind) => void;
   readonly setFilter: (filter: string) => void;
   /** Run a git stacked action on the selected thread's worktree (commitMessage for commit-bearing actions). */
@@ -68,13 +69,14 @@ export interface Store {
 export function createStore(client: TuiClient, host: TuiHost = standaloneTuiHost): Store {
   let state: StoreState = {
     shell: null,
-    expanded: new Set<string>(),
+    expanded: new Set<string>([SIDEBAR_SETTLED_SECTION_ID]),
     loadedInFull: new Set<string>(),
     selection: null,
     detail: null,
     status: "Connecting…",
     statusKind: "busy",
     filter: "",
+    projectScopeId: null,
     vcsStatus: null,
     gitBusy: false,
     herdr: host.kind === "herdr" ? host.getState() : null,
@@ -98,6 +100,7 @@ export function createStore(client: TuiClient, host: TuiHost = standaloneTuiHost
       state.filter,
       null,
       null,
+      state.projectScopeId,
     );
 
   const emit = () => {
@@ -160,7 +163,19 @@ export function createStore(client: TuiClient, host: TuiHost = standaloneTuiHost
 
   const ensureValidSelection = (rows: Row[]) => {
     if (rows.length === 0) {
-      applySelection(null);
+      const hasThreadInScope = (state.shell?.threads ?? []).some(
+        (thread) =>
+          thread.archivedAt == null &&
+          (state.projectScopeId === null || thread.projectId === state.projectScopeId),
+      );
+      const fallbackProject =
+        state.filter.length === 0 && !hasThreadInScope
+          ? (state.shell?.projects.find((project) => project.id === state.projectScopeId) ??
+            state.shell?.projects[0])
+          : null;
+      applySelection(
+        fallbackProject ? { kind: "project", id: fallbackProject.id as string } : null,
+      );
       return;
     }
     if (state.selection && rows.some((row) => selectionEquals(state.selection, row))) {
@@ -186,23 +201,17 @@ export function createStore(client: TuiClient, host: TuiHost = standaloneTuiHost
         host.start();
       }
       unsubShell = client.subscribeShell((shell) => {
-        const sortedThreads = shell.threads.toSorted((a, b) =>
-          b.updatedAt.localeCompare(a.updatedAt),
-        );
-        const nextShell = { ...shell, threads: sortedThreads };
-        const expanded = new Set(state.expanded);
-        if (host.kind === "herdr") {
-          const workspaceRoot = NodePath.resolve(host.workspaceCwd);
-          const workspaceProject = nextShell.projects.find(
-            (project) => NodePath.resolve(project.workspaceRoot) === workspaceRoot,
-          );
-          if (workspaceProject) expanded.add(workspaceProject.id);
-        }
+        const nextShell = shell;
+        const validProjectScope =
+          state.projectScopeId === null ||
+          nextShell.projects.some((project) => project.id === state.projectScopeId)
+            ? state.projectScopeId
+            : null;
         state = {
           ...state,
           shell: nextShell,
-          expanded,
-          status: `${nextShell.projects.length} project(s) · ${sortedThreads.length} thread(s)`,
+          projectScopeId: validProjectScope,
+          status: `${nextShell.projects.length} project(s) · ${nextShell.threads.length} thread(s)`,
           statusKind: "info",
         };
         ensureValidSelection(rowsNow());
@@ -226,11 +235,7 @@ export function createStore(client: TuiClient, host: TuiHost = standaloneTuiHost
       if (next) applySelection(selectionFromRow(next));
     },
     moveThreadSelection: (delta) => {
-      const conversations = rowsNow().filter((row) =>
-        host.kind === "herdr"
-          ? row.kind === "thread"
-          : row.kind === "thread" || row.kind === "agent",
-      );
+      const conversations = rowsNow().filter((row) => row.kind === "thread");
       if (conversations.length === 0) return;
       let index = conversations.findIndex(
         (row) =>
@@ -250,30 +255,29 @@ export function createStore(client: TuiClient, host: TuiHost = standaloneTuiHost
     },
     select: (selection) => applySelection(selection),
     toggleProject: (id) => {
+      state = { ...state, projectScopeId: id };
+      ensureValidSelection(rowsNow());
+      emit();
+    },
+    toggleSpace: () => {},
+    loadMore: (id) => {
+      if (id !== SIDEBAR_SETTLED_SECTION_ID) return;
+      const loadedInFull = new Set(state.loadedInFull).add(SIDEBAR_SETTLED_SECTION_ID);
+      set({ loadedInFull });
+    },
+    toggleSection: (section) => {
+      const id = section === "snoozed" ? SIDEBAR_SNOOZED_SECTION_ID : SIDEBAR_SETTLED_SECTION_ID;
       const expanded = new Set(state.expanded);
       if (expanded.has(id)) expanded.delete(id);
       else expanded.add(id);
-      set({ expanded });
-      applySelection({ kind: "project", id });
+      state = { ...state, expanded };
+      ensureValidSelection(rowsNow());
+      emit();
     },
-    toggleSpace: (id) => {
-      const key = herdrSpaceExpansionKey(id);
-      const expanded = new Set(state.expanded);
-      if (expanded.has(key)) expanded.delete(key);
-      else expanded.add(key);
-      set({ expanded });
-      applySelection({ kind: "space", id });
-    },
-    loadMore: (id) => {
-      const loadedInFull = new Set(state.loadedInFull).add(id);
-      set({ loadedInFull });
-      const projectThreads = (state.shell?.threads ?? []).filter(
-        (thread) => thread.projectId === id,
-      );
-      const firstRevealed = projectThreads[DEFAULT_SIDEBAR_THREAD_PREVIEW_COUNT];
-      applySelection(
-        firstRevealed ? { kind: "thread", id: firstRevealed.id } : { kind: "project", id },
-      );
+    setProjectScope: (projectScopeId) => {
+      state = { ...state, projectScopeId };
+      ensureValidSelection(rowsNow());
+      emit();
     },
     setStatus: (status, kind = "info") => set({ status, statusKind: kind }),
     setFilter: (filter) => {
