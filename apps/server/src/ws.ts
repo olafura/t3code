@@ -1335,17 +1335,22 @@ const makeWsRpcLayer = (
                     });
                   }
 
-                  const replacementSnapshot =
+                  const afterReplacementSnapshot =
                     input.requestCompletionMarker === true
-                      ? Stream.make(
-                          { kind: "snapshot" as const, snapshot: snapshot.value },
-                          { kind: "synchronized" as const },
+                      ? Stream.concat(
+                          Stream.fromEffect(
+                            Queue.offer(liveBuffer, { kind: "synchronized" as const }),
+                          ).pipe(Stream.drain),
+                          bufferedLiveStream,
                         )
-                      : Stream.make({
-                          kind: "snapshot" as const,
-                          snapshot: snapshot.value,
-                        });
-                  return Stream.concat(replacementSnapshot, bufferedLiveStream);
+                      : bufferedLiveStream;
+                  return Stream.concat(
+                    Stream.make({
+                      kind: "snapshot" as const,
+                      snapshot: snapshot.value,
+                    }),
+                    afterReplacementSnapshot,
+                  );
                 }
 
                 const catchUpStream = orchestrationEngine

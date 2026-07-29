@@ -6077,7 +6077,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
-  it.effect("subscribeThread replaces a stale cursor with a fresh snapshot", () =>
+  it.effect("subscribeThread buffers live events before synchronizing a stale cursor", () =>
     Effect.gen(function* () {
       const snapshotSequence = 5_000;
       const thread = makeDefaultOrchestrationReadModel().threads[0]!;
@@ -6147,11 +6147,11 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         assert.equal(result[0].snapshot.snapshotSequence, snapshotSequence);
         assert.equal(result[0].snapshot.thread.id, defaultThreadId);
       }
-      assert.deepEqual(result[1], { kind: "synchronized" });
-      assert.equal(result[2]?.kind, "event");
-      if (result[2]?.kind === "event") {
-        assert.equal(result[2].event.sequence, snapshotSequence + 1);
+      assert.equal(result[1]?.kind, "event");
+      if (result[1]?.kind === "event") {
+        assert.equal(result[1].event.sequence, snapshotSequence + 1);
       }
+      assert.deepEqual(result[2], { kind: "synchronized" });
     }).pipe(Effect.provide(NodeHttpServer.layerTest), TestClock.withLive),
   );
 
