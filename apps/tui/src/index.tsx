@@ -5,7 +5,11 @@ import { installKittyClipboardExtension, installKittyImageExtension } from "@t3t
 import { ChatView } from "./components/ChatView.tsx";
 import { buildTuiRuntime, makeTuiClient, type TuiOptions } from "./connection.ts";
 import { detectKittyGraphicsTerminal } from "./terminalGraphics.ts";
-import { prepareTerminalViewport, TUI_RENDERER_CONFIG } from "./terminalStartup.ts";
+import {
+  ensureColorCapabilityEnv,
+  prepareTerminalViewport,
+  TUI_RENDERER_CONFIG,
+} from "./terminalStartup.ts";
 import { tuiHostFromEnvironment } from "./herdr/environment.ts";
 import { HERDR_TERMINAL_BRIDGE_FLAG, runHerdrTerminalBridge } from "./herdr/terminalBridge.ts";
 
@@ -95,6 +99,7 @@ async function main(): Promise<void> {
   // to the live screen before entering OpenTUI's alternate screen so the complete
   // first frame is visible without requiring the user to scroll to the bottom.
   prepareTerminalViewport();
+  ensureColorCapabilityEnv();
 
   // Render on a transparent background so the user's terminal theme (and its own
   // background colour) shows through instead of OpenTUI's opaque default. Mouse
