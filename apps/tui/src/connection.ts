@@ -70,6 +70,7 @@ import { ShellSnapshotLoader } from "@t3tools/client-runtime/state/shell";
 import { ThreadSnapshotLoader } from "@t3tools/client-runtime/state/threads";
 import type { RpcSession } from "@t3tools/client-runtime/rpc";
 import { buildTemporaryWorktreeBranchName } from "@t3tools/shared/git";
+import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 
 import { mergeVcsStatus } from "./gitActions.logic.ts";
 
@@ -429,6 +430,7 @@ export function buildTuiRuntime(options: TuiOptions): TuiRuntime {
 // ── Imperative client surface consumed by the UI components ────────────────
 
 export interface TuiClient {
+  readonly hostPlatform: NodeJS.Platform;
   /** Live list of every project + thread. Returns an unsubscribe fn. */
   readonly subscribeShell: (
     onSnapshot: (snapshot: OrchestrationShellSnapshot) => void,
@@ -597,6 +599,7 @@ const THREAD_WARM_LIMIT = 8;
 
 export function makeTuiClient(runtime: TuiRuntime, origin = ""): TuiClient {
   const attachmentImages = createAttachmentImageCache();
+  const hostPlatform = runtime.runSync(HostProcessPlatform);
   const forkUnsub = <A>(stream: Stream.Stream<A, unknown, EnvironmentSupervisor>): (() => void) => {
     const fiber = runtime.runFork(Stream.runDrain(stream));
     return () => {
@@ -744,6 +747,7 @@ export function makeTuiClient(runtime: TuiRuntime, origin = ""): TuiClient {
   };
 
   return {
+    hostPlatform,
     subscribeShell: (onSnapshot) => {
       shellWarm ??= startWarm(makeEnvironmentShellState());
       return followWarm(shellWarm, (state) => {
