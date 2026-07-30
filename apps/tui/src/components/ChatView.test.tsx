@@ -427,7 +427,7 @@ describe("ChatView responsive shell", () => {
   });
 
   it("Given the flat sidebar, adding a project registers its path and opens its new-thread composer", async () => {
-    const projectPaths: string[] = [];
+    const createdProjects: Array<Parameters<TuiClient["createProject"]>[0]> = [];
     const createdProject = {
       ...project,
       id: "p-created",
@@ -448,8 +448,8 @@ describe("ChatView responsive shell", () => {
           parentPath: "/workspace",
           entries: [{ name: "existing", fullPath: "/workspace/existing" }],
         }) as never,
-      createProject: async (workspaceRoot) => {
-        projectPaths.push(workspaceRoot);
+      createProject: async (input) => {
+        createdProjects.push(input);
         return "p-created" as never;
       },
     });
@@ -492,8 +492,14 @@ describe("ChatView responsive shell", () => {
       await setup.renderOnce();
       await Promise.resolve();
     });
-    await setup.waitFor(() => projectPaths.length === 1);
-    expect(projectPaths).toEqual(["/workspace/new-project"]);
+    await setup.waitFor(() => createdProjects.length === 1);
+    expect(createdProjects).toEqual([
+      {
+        title: "new-project",
+        workspaceRoot: "/workspace/new-project",
+        defaultModelSelection: null,
+      },
+    ]);
 
     await React.act(async () => {
       fake.emitShell(shell(undefined, [project, createdProject] as never));
@@ -506,7 +512,7 @@ describe("ChatView responsive shell", () => {
 
   it("Given the web-style project palette, cloning a Git URL browses a destination before registering it", async () => {
     const clones: Array<{ remoteUrl: string; destinationPath: string }> = [];
-    const projectPaths: string[] = [];
+    const createdProjects: Array<Parameters<TuiClient["createProject"]>[0]> = [];
     const fake = fakeClient({
       detail: thread(),
       getServerConfig: async () =>
@@ -525,8 +531,8 @@ describe("ChatView responsive shell", () => {
         clones.push({ remoteUrl, destinationPath });
         return { cwd: destinationPath, remoteUrl, repository: null } as never;
       },
-      createProject: async (workspaceRoot) => {
-        projectPaths.push(workspaceRoot);
+      createProject: async (input) => {
+        createdProjects.push(input);
         return "p-cloned" as never;
       },
     });
@@ -582,14 +588,20 @@ describe("ChatView responsive shell", () => {
       await setup.renderOnce();
       await Promise.resolve();
     });
-    await setup.waitFor(() => projectPaths.length === 1);
+    await setup.waitFor(() => createdProjects.length === 1);
     expect(clones).toEqual([
       {
         remoteUrl: "git@example.com:team/repo.git",
         destinationPath: "/workspace/repo",
       },
     ]);
-    expect(projectPaths).toEqual(["/workspace/repo"]);
+    expect(createdProjects).toEqual([
+      {
+        title: "repo",
+        workspaceRoot: "/workspace/repo",
+        defaultModelSelection: null,
+      },
+    ]);
     setup.renderer.destroy();
   });
 
