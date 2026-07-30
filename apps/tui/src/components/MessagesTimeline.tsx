@@ -66,13 +66,13 @@ function ToolRow({
   const label = workLogLabel(entry);
   const preview = workLogPreview(entry);
   const status = workLogStatusKind(entry);
-  const iconColor = entry.tone === "error" ? ansi("red") : palette.accent;
+  const iconColor = entry.tone === "error" ? palette.error : palette.accent;
   const statusGlyph =
     status === "success" || status === "failure" || status === "progress"
       ? STATUS_ICONS[status].glyph
       : null;
   const statusColor =
-    status === "success" ? ansi("green") : status === "failure" ? ansi("red") : palette.faint;
+    status === "success" ? palette.success : status === "failure" ? palette.error : palette.faint;
   const previewRoom = Math.max(8, width - label.length - 8);
   return (
     <text>
@@ -447,9 +447,9 @@ function ChangedFilesTree({
         >
           <text>
             <span fg={palette.dim}>{`changed files (${files.length})  `}</span>
-            <span fg={ansi("green")}>{`+${additions}`}</span>
+            <span fg={palette.success}>{`+${additions}`}</span>
             <span fg={palette.dim}> </span>
-            <span fg={ansi("red")}>{`-${deletions}`}</span>
+            <span fg={palette.error}>{`-${deletions}`}</span>
             {onOpenDiff ? <span fg={palette.dim}>{"   ▸ diff"}</span> : null}
           </text>
         </box>
@@ -467,8 +467,8 @@ function ChangedFilesTree({
               <text>
                 <span fg={palette.dim}>{`${indent}${row.collapsed ? "▸" : "▾"} `}</span>
                 <span fg={palette.text}>{clip(`${row.name}/`, nameRoom)}</span>
-                <span fg={ansi("green")}>{`  +${row.additions}`}</span>
-                <span fg={ansi("red")}>{` -${row.deletions}`}</span>
+                <span fg={palette.success}>{`  +${row.additions}`}</span>
+                <span fg={palette.error}>{` -${row.deletions}`}</span>
               </text>
             </box>
           );
@@ -484,8 +484,8 @@ function ChangedFilesTree({
             <text>
               <span fg={typeColor ? ansi(typeColor) : palette.faint}>{`${indent}◦ `}</span>
               <span fg={palette.text}>{clip(row.name, nameRoom)}</span>
-              <span fg={ansi("green")}>{`  +${row.additions}`}</span>
-              <span fg={ansi("red")}>{` -${row.deletions}`}</span>
+              <span fg={palette.success}>{`  +${row.additions}`}</span>
+              <span fg={palette.error}>{` -${row.deletions}`}</span>
             </text>
           </box>
         );
@@ -510,10 +510,10 @@ function ContextMeter({
     pct === null
       ? palette.dim
       : pct >= 90
-        ? ansi("red")
+        ? palette.error
         : pct >= 70
-          ? ansi("yellow")
-          : ansi("green");
+          ? palette.warning
+          : palette.success;
   return (
     <text>
       <span fg={palette.dim}>{"context  "}</span>
@@ -726,7 +726,9 @@ export const MessagesTimeline = React.memo(function MessagesTimeline({
         <text>
           <span
             fg={
-              approvals.length > 0 ? ansi("red") : ansi(sessionStatusColor(detail.session?.status))
+              approvals.length > 0
+                ? palette.error
+                : ansi(sessionStatusColor(detail.session?.status))
             }
           >
             {approvals.length > 0 ? "pending approval" : statusLabel(detail)}
@@ -809,14 +811,14 @@ export const MessagesTimeline = React.memo(function MessagesTimeline({
           flexDirection="column"
           border
           borderStyle="rounded"
-          borderColor={ansi("red")}
+          borderColor={palette.error}
           width={timelineWidth}
           alignSelf="center"
           paddingLeft={1}
           paddingRight={1}
         >
           <text>
-            <span fg={ansi("red")}>Approval required</span>
+            <span fg={palette.error}>Approval required</span>
             {approvals.length > 1 ? (
               <span
                 fg={palette.dim}
