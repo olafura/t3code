@@ -65,6 +65,8 @@ const build = (
     input.loaded ?? new Set(),
     input.selected ?? null,
     input.filter ?? "",
+    null,
+    null,
     input.project ?? null,
     NOW,
   );

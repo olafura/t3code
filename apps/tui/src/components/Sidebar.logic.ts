@@ -203,7 +203,16 @@ export function buildRows(
   for (const thread of visibleThreads) {
     // Snooze is the stronger lifecycle statement and therefore wins when a
     // thread could otherwise also auto-settle, matching the web UI.
-    if (effectiveSnoozed(thread, { now })) {
+    if (
+      effectiveSnoozed(
+        {
+          ...thread,
+          snoozedAt: thread.snoozedAt ?? null,
+          snoozedUntil: thread.snoozedUntil ?? null,
+        },
+        { now },
+      )
+    ) {
       snoozed.push(thread);
     } else if (
       effectiveSettled(thread, {

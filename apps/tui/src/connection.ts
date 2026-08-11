@@ -4,23 +4,23 @@
 import * as NodeFS from "node:fs";
 
 import {
-  ApprovalRequestId,
   EnvironmentId,
   type MessageId,
   MessageId as MessageIdSchema,
   type ModelSelection,
   NonNegativeInt,
-  ORCHESTRATION_WS_METHODS,
+  ORCHESTRATION_V2_WS_METHODS,
   type OrchestrationShellSnapshot,
   type OrchestrationThread,
-  type OrchestrationThreadDetailSnapshot,
-  type OrchestrationThreadActivity,
-  OrchestrationProposedPlanId,
+  type OrchestrationV2ShellSnapshot,
+  type OrchestrationV2ThreadDetailSnapshot,
+  PlanId,
   ProjectId,
   type ProviderApprovalDecision,
   PositiveInt,
   type ProviderInteractionMode,
   type RuntimeMode,
+  RuntimeRequestId,
   type GitStackedAction,
   type FilesystemBrowseResult,
   type SourceControlCloneRepositoryResult,
@@ -30,7 +30,6 @@ import {
   type TerminalAttachStreamEvent,
   type TerminalMetadataStreamEvent,
   type TerminalRestartInput,
-  type ThreadTurnStartBootstrap,
   type ThreadId,
   ThreadId as ThreadIdSchema,
   TrimmedNonEmptyString,
@@ -109,6 +108,7 @@ import * as Socket from "effect/unstable/socket/Socket";
 
 import { createAttachmentImageCache } from "./attachmentImages.ts";
 import type { RgbaImage } from "@t3tools/opentui-image";
+import { presentTuiShell, presentTuiThread } from "./orchestrationV2Adapter.ts";
 
 /**
  * Connection inputs the host (the server CLI) provides. The TUI never talks to
@@ -185,7 +185,7 @@ export function buildThreadCreationBootstrap(
   input: TuiCreateThreadInput,
   createdAt: string,
   worktreeBranch: string | null,
-): ThreadTurnStartBootstrap {
+) {
   if (input.createWorktree && (!input.branch?.trim() || !worktreeBranch?.trim())) {
     throw new Error("A base branch is required to create a worktree");
   }
@@ -332,8 +332,8 @@ export type TuiRuntime = ManagedRuntime.ManagedRuntime<
 const inMemoryCacheStoreLayer = Layer.sync(EnvironmentCacheStore, () => {
   // Threads are cached as detail SNAPSHOTS ({ snapshotSequence, thread }) so a
   // cache hit can resume live sync from the right projection sequence.
-  const threads = new Map<string, OrchestrationThreadDetailSnapshot>();
-  const shells = new Map<string, OrchestrationShellSnapshot>();
+  const threads = new Map<string, OrchestrationV2ThreadDetailSnapshot>();
+  const shells = new Map<string, OrchestrationV2ShellSnapshot>();
   const serverConfigs = new Map<string, ServerConfig>();
   const vcsRefs = new Map<string, VcsListRefsResult>();
   const threadKey = (environmentId: string, threadId: string) =>
@@ -348,7 +348,7 @@ const inMemoryCacheStoreLayer = Layer.sync(EnvironmentCacheStore, () => {
       Effect.succeed(Option.fromUndefinedOr(threads.get(threadKey(environmentId, threadId)))),
     saveThread: (environmentId, snapshot) =>
       Effect.sync(() => {
-        threads.set(threadKey(environmentId, snapshot.thread.id), snapshot);
+        threads.set(threadKey(environmentId, snapshot.projection.thread.id), snapshot);
       }),
     removeThread: (environmentId, threadId) =>
       Effect.sync(() => {
@@ -524,24 +524,6 @@ export interface TuiClient {
   readonly getTurnDiff: (threadId: ThreadId, toTurnCount: number) => Promise<string>;
   /** Fetch the cumulative diff of all changes in the thread up to `toTurnCount`. */
   readonly getFullThreadDiff: (threadId: ThreadId, toTurnCount: number) => Promise<string>;
-  /**
-   * Lazy-load the page of activities immediately older than the cursor.
-   * Sequenced activity pages by `beforeSequence`; legacy/unsequenced activity
-   * (the common case — `sequence` is absent on most rows) pages by the
-   * `(beforeCreatedAt, beforeActivityId)` keyset, matching web/mobile.
-   */
-  readonly getThreadActivities: (
-    threadId: ThreadId,
-    cursor:
-      | { readonly beforeSequence: number }
-      | {
-          readonly beforeCreatedAt: OrchestrationThreadActivity["createdAt"];
-          readonly beforeActivityId: OrchestrationThreadActivity["id"];
-        },
-  ) => Promise<{
-    readonly activities: ReadonlyArray<OrchestrationThreadActivity>;
-    readonly hasMore: boolean;
-  }>;
   /** The selectable models reported by the server's configured providers. */
   readonly listModels: () => Promise<ModelOption[]>;
   /** Current server settings, including new-thread workspace defaults. */
@@ -728,7 +710,9 @@ export function makeTuiClient(runtime: TuiRuntime, origin = ""): TuiClient {
           yield* SubscriptionRef.changes(subscriptionRef).pipe(
             Stream.runForEach((state) =>
               Effect.sync(() => {
-                if (Option.isSome(state.data)) latestThreads.set(key, state.data.value);
+                if (Option.isSome(state.data)) {
+                  latestThreads.set(key, presentTuiThread(state.data.value));
+                }
                 if (state.status === "deleted") evictThread(key);
               }),
             ),
@@ -795,14 +779,14 @@ export function makeTuiClient(runtime: TuiRuntime, origin = ""): TuiClient {
     subscribeShell: (onSnapshot) => {
       shellWarm ??= startWarm(makeEnvironmentShellState());
       return followWarm(shellWarm, (state) => {
-        if (Option.isSome(state.snapshot)) onSnapshot(state.snapshot.value);
+        if (Option.isSome(state.snapshot)) onSnapshot(presentTuiShell(state.snapshot.value));
       });
     },
 
     subscribeThread: (threadId, onThread) => {
       const entry = acquireThread(threadId);
       return followWarm(entry, (state) => {
-        if (Option.isSome(state.data)) onThread(state.data.value);
+        if (Option.isSome(state.data)) onThread(presentTuiThread(state.data.value));
       });
     },
 
@@ -910,7 +894,7 @@ export function makeTuiClient(runtime: TuiRuntime, origin = ""): TuiClient {
             interactionMode: "default",
             sourceProposedPlan: {
               threadId: thread.id,
-              planId: OrchestrationProposedPlanId.make(planId),
+              planId: PlanId.make(planId),
             },
           });
         }),
@@ -923,7 +907,7 @@ export function makeTuiClient(runtime: TuiRuntime, origin = ""): TuiClient {
       runtime.runPromise(
         respondToThreadApproval({
           threadId,
-          requestId: ApprovalRequestId.make(requestId),
+          requestId: RuntimeRequestId.make(requestId),
           decision,
         }).pipe(Effect.asVoid),
       ),
@@ -932,7 +916,7 @@ export function makeTuiClient(runtime: TuiRuntime, origin = ""): TuiClient {
       runtime.runPromise(
         respondToThreadUserInput({
           threadId,
-          requestId: ApprovalRequestId.make(requestId),
+          requestId: RuntimeRequestId.make(requestId),
           answers,
         }).pipe(Effect.asVoid),
       ),
@@ -1035,7 +1019,7 @@ export function makeTuiClient(runtime: TuiRuntime, origin = ""): TuiClient {
 
     getTurnDiff: (threadId, toTurnCount) =>
       runtime.runPromise(
-        request(ORCHESTRATION_WS_METHODS.getTurnDiff, {
+        request(ORCHESTRATION_V2_WS_METHODS.getTurnDiff, {
           threadId,
           fromTurnCount: NonNegativeInt.make(Math.max(0, toTurnCount - 1)),
           toTurnCount: NonNegativeInt.make(toTurnCount),
@@ -1044,27 +1028,10 @@ export function makeTuiClient(runtime: TuiRuntime, origin = ""): TuiClient {
 
     getFullThreadDiff: (threadId, toTurnCount) =>
       runtime.runPromise(
-        request(ORCHESTRATION_WS_METHODS.getFullThreadDiff, {
+        request(ORCHESTRATION_V2_WS_METHODS.getFullThreadDiff, {
           threadId,
           toTurnCount: NonNegativeInt.make(toTurnCount),
         }).pipe(Effect.map((result) => result.diff)),
-      ),
-
-    getThreadActivities: (threadId, cursor) =>
-      runtime.runPromise(
-        request(
-          ORCHESTRATION_WS_METHODS.getThreadActivities,
-          "beforeSequence" in cursor
-            ? {
-                threadId,
-                beforeSequence: NonNegativeInt.make(Math.max(0, cursor.beforeSequence)),
-              }
-            : {
-                threadId,
-                beforeCreatedAt: cursor.beforeCreatedAt,
-                beforeActivityId: cursor.beforeActivityId,
-              },
-        ),
       ),
 
     listModels: () =>
