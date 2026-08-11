@@ -1,4 +1,8 @@
-import type { OrchestrationThreadActivity } from "@t3tools/contracts";
+import type {
+  OrchestrationThreadActivity,
+  UserInputQuestion as ContractUserInputQuestion,
+  UserInputQuestionOption,
+} from "@t3tools/contracts";
 
 import { isStalePendingRequestFailureDetail } from "./staleRequest.ts";
 
@@ -8,18 +12,8 @@ import { isStalePendingRequestFailureDetail } from "./staleRequest.ts";
 // `user-input.resolved` (or a stale-request failure) closes it. Mirrors the
 // approval derivation in approvals.ts.
 
-export interface UserInputOption {
-  readonly label: string;
-  readonly description: string;
-}
-
-export interface UserInputQuestion {
-  readonly id: string;
-  readonly header: string;
-  readonly question: string;
-  readonly options: ReadonlyArray<UserInputOption>;
-  readonly multiSelect: boolean;
-}
+export type UserInputOption = UserInputQuestionOption;
+export type UserInputQuestion = ContractUserInputQuestion;
 
 export interface PendingUserInput {
   readonly requestId: string;

@@ -17,6 +17,8 @@ import {
   OrchestrationProposedPlanId,
   type ProjectId,
   ProjectId as ProjectIdSchema,
+  type ProjectEntry,
+  type ProjectReadFileResult,
   type ProviderApprovalDecision,
   PositiveInt,
   type ProviderInteractionMode,
@@ -559,20 +561,14 @@ export interface TuiClient {
     resolvedUrl: string,
   ) => Promise<RgbaImage | null>;
   /** List the workspace's files + directories (bounded index) for the file browser. */
-  readonly listEntries: (
-    cwd: string,
-  ) => Promise<ReadonlyArray<{ readonly path: string; readonly kind: "file" | "directory" }>>;
+  readonly listEntries: (cwd: string) => Promise<ReadonlyArray<ProjectEntry>>;
   /** Read a workspace file's contents, or null on failure. */
   readonly readFile: (cwd: string, relativePath: string) => Promise<string | null>;
   /** Read a bounded workspace file as base64 for attachment preparation. */
   readonly readFileBase64: (
     cwd: string,
     relativePath: string,
-  ) => Promise<{
-    readonly contents: string;
-    readonly byteLength: number;
-    readonly truncated: boolean;
-  } | null>;
+  ) => Promise<Pick<ProjectReadFileResult, "contents" | "byteLength" | "truncated"> | null>;
   readonly dispose: () => Promise<void>;
 }
 

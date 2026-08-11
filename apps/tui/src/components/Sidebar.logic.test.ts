@@ -1,7 +1,6 @@
 import { describe, expect, it } from "bun:test";
 
-import type { OrchestrationThreadShell } from "@t3tools/contracts";
-import type { OrchestrationShellSnapshot } from "../connection.ts";
+import type { OrchestrationShellSnapshot, OrchestrationThreadShell } from "@t3tools/contracts";
 import {
   buildRows,
   nextSidebarRefreshAt,

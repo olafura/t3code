@@ -5,6 +5,7 @@ import {
   CHAT_IMAGE_MIME_BY_EXTENSION,
   PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
   chatImageMimeTypeForPath,
+  type ProjectReadFileResult,
   type UploadChatImageAttachment,
 } from "@t3tools/contracts";
 import { decodeImage, type RgbaImage } from "@t3tools/opentui-image";
@@ -23,11 +24,10 @@ const IMAGE_EXTENSION_BY_MIME: Readonly<Record<string, string>> = {
   "image/webp": "webp",
 };
 
-export interface Base64WorkspaceFile {
-  readonly contents: string;
-  readonly byteLength: number;
-  readonly truncated: boolean;
-}
+export type Base64WorkspaceFile = Pick<
+  ProjectReadFileResult,
+  "contents" | "byteLength" | "truncated"
+>;
 
 export interface ComposerImageAttachment {
   readonly relativePath: string;

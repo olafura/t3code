@@ -5,7 +5,7 @@ import * as React from "react";
 import { testRender } from "@opentui/react/test-utils";
 import { installKittyImageExtension } from "@t3tools/opentui-image";
 
-import type { OrchestrationThread } from "../connection.ts";
+import type { OrchestrationThread } from "@t3tools/contracts";
 import {
   MessagesTimeline,
   resolveTimelineWindow,

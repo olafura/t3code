@@ -3,9 +3,9 @@ import { describe, expect, it } from "bun:test";
 import type {
   OrchestrationCheckpointSummary,
   OrchestrationMessage,
+  OrchestrationThread,
   OrchestrationThreadActivity,
 } from "@t3tools/contracts";
-import type { OrchestrationThread } from "./connection.ts";
 import {
   changedFilesByMessage,
   deriveTimelineEntries,

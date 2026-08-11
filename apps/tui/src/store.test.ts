@@ -1,6 +1,8 @@
 import { describe, expect, it } from "bun:test";
 
-import type { OrchestrationShellSnapshot, OrchestrationThread, TuiClient } from "./connection.ts";
+import type { OrchestrationShellSnapshot, OrchestrationThread } from "@t3tools/contracts";
+
+import type { TuiClient } from "./connection.ts";
 import { createStore } from "./store.ts";
 
 /** A fake TuiClient that captures the shell/thread callbacks so the test can drive them. */

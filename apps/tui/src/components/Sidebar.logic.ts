@@ -1,5 +1,6 @@
 import {
   DEFAULT_SIDEBAR_AUTO_SETTLE_AFTER_DAYS,
+  type OrchestrationShellSnapshot,
   type OrchestrationThreadShell,
 } from "@t3tools/contracts";
 import {
@@ -8,8 +9,6 @@ import {
   QUEUED_TURN_START_GRACE_MS,
   threadLastActivityAt,
 } from "@t3tools/client-runtime/state/thread-settled";
-
-import type { OrchestrationShellSnapshot } from "../connection.ts";
 
 export const SIDEBAR_SNOOZED_SECTION_ID = "sidebar-v2:snoozed";
 export const SIDEBAR_SETTLED_SECTION_ID = "sidebar-v2:settled";

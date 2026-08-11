@@ -10,11 +10,13 @@ import * as React from "react";
 
 import {
   DEFAULT_SERVER_SETTINGS,
+  type OrchestrationShellSnapshot,
+  type OrchestrationThread,
   type TerminalMetadataStreamEvent,
   type VcsStatusResult,
 } from "@t3tools/contracts";
 
-import type { OrchestrationShellSnapshot, OrchestrationThread, TuiClient } from "../connection.ts";
+import type { TuiClient } from "../connection.ts";
 import { ChatView } from "./ChatView.tsx";
 
 const PNG_BASE64 =

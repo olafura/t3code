@@ -1,12 +1,11 @@
 import { type ScrollBoxRenderable, SyntaxStyle } from "@opentui/core";
 import { getKittyImageManager, Image, type RgbaImage } from "@t3tools/opentui-image/react";
-import type { OrchestrationCheckpointSummary } from "@t3tools/contracts";
+import type { OrchestrationCheckpointSummary, OrchestrationThread } from "@t3tools/contracts";
 import { shouldCollapseUserMessage } from "@t3tools/shared/chatMessages";
 import * as React from "react";
 import { useRenderer } from "@opentui/react";
 
 import type { PendingApproval } from "../approvals.ts";
-import type { OrchestrationThread } from "../connection.ts";
 import { useKittyGraphicsSupport } from "../hooks/useKittyGraphicsSupport.ts";
 import {
   type ContextWindowSnapshot,

@@ -1,6 +1,9 @@
-import type { ModelSelection, ProviderInteractionMode, RuntimeMode } from "@t3tools/contracts";
-
-import type { OrchestrationThread } from "./connection.ts";
+import type {
+  ModelSelection,
+  OrchestrationThread,
+  ProviderInteractionMode,
+  RuntimeMode,
+} from "@t3tools/contracts";
 
 // Friendly labels for the composer controls, mirroring the web composer's toolbar
 // (apps/web/src/components/chat/ChatComposer.tsx runtimeModeConfig + the plan/build

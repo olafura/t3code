@@ -1,6 +1,8 @@
-import type { OrchestrationCheckpointSummary, OrchestrationMessage } from "@t3tools/contracts";
-
-import type { OrchestrationThread } from "./connection.ts";
+import type {
+  OrchestrationCheckpointSummary,
+  OrchestrationMessage,
+  OrchestrationThread,
+} from "@t3tools/contracts";
 import { deriveWorkLogEntries, type WorkLogEntry } from "./worklog.ts";
 
 // Build the conversation timeline the way the web UI does: messages interleaved

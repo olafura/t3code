@@ -1,4 +1,4 @@
-import type { OrchestrationThread } from "./connection.ts";
+import type { OrchestrationThread } from "@t3tools/contracts";
 
 // Selecting and presenting a thread's proposed plan — a trimmed port of the web
 // client's session-logic.findLatestProposedPlan + proposedPlan.ts helpers. Pure:
