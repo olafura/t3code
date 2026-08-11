@@ -275,7 +275,7 @@ export function createStore(client: TuiClient): Store {
         return;
       }
       set({ gitBusy: true, status: `Running ${action}…`, statusKind: "busy" });
-      client
+      void client
         .runGitStackedAction({ cwd, action, ...(message ? { commitMessage: message } : {}) })
         .then(() => set({ gitBusy: false, status: "Git action complete.", statusKind: "success" }))
         .catch((error: unknown) =>
@@ -290,7 +290,7 @@ export function createStore(client: TuiClient): Store {
         return;
       }
       set({ gitBusy: true, status: "Pulling…", statusKind: "busy" });
-      client
+      void client
         .runGitPull(cwd)
         .then(() => set({ gitBusy: false, status: "Pulled.", statusKind: "success" }))
         .catch((error: unknown) =>
