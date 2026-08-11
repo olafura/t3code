@@ -228,6 +228,6 @@ export function readTerminalViewport(term: Terminal): string {
  */
 export function encodeTerminalPaste(text: string, bracketedPasteMode: boolean): string {
   if (!bracketedPasteMode) return text;
-  const guarded = text.replace(/\x1b\[201~/g, "").replace(/\x9b201~/g, "");
+  const guarded = text.replaceAll("\x1b[201~", "").replaceAll("\x9b201~", "");
   return `\x1b[200~${guarded}\x1b[201~`;
 }
