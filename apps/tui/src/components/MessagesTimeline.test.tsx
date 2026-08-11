@@ -274,6 +274,10 @@ describe("MessagesTimeline body", () => {
     const writes: string[] = [];
     const loadedUrls: string[] = [];
     const openedImages: string[] = [];
+    let resolveImageLoad: () => void = () => {};
+    const imageLoaded = new Promise<void>((resolve) => {
+      resolveImageLoad = resolve;
+    });
     const t = await testRender(
       <MessagesTimeline
         detail={full}
@@ -287,6 +291,7 @@ describe("MessagesTimeline body", () => {
         getAttachmentUrl={async () => "https://srv/assets/att1.png"}
         getAttachmentImage={async (_attachmentId, url) => {
           loadedUrls.push(url);
+          resolveImageLoad();
           return {
             data: new Uint8Array([255, 0, 0, 255]),
             imageWidth: 1,
@@ -301,11 +306,13 @@ describe("MessagesTimeline body", () => {
       writer: { write: (value) => writes.push(value) },
     });
     const capabilities = setRendererCapabilities(t.renderer, { kitty_graphics: true });
-    t.renderer.emit(CliRenderEvents.CAPABILITIES, capabilities);
-    for (let i = 0; i < 8; i += 1) {
-      await t.renderOnce();
-      await t.flush();
-    }
+    await React.act(async () => {
+      t.renderer.emit(CliRenderEvents.CAPABILITIES, capabilities);
+    });
+    await imageLoaded;
+    await React.act(async () => {});
+    await t.renderOnce();
+    await t.flush();
 
     expect(loadedUrls).toEqual(["https://srv/assets/att1.png"]);
     expect(writes.join("")).toContain("a=T");
