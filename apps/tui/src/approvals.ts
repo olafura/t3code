@@ -31,14 +31,11 @@ export function derivePendingApprovals(
       activity.payload && typeof activity.payload === "object"
         ? (activity.payload as Record<string, unknown>)
         : null;
-    const requestId =
-      payload && typeof payload.requestId === "string" ? payload.requestId : null;
+    const requestId = payload && typeof payload.requestId === "string" ? payload.requestId : null;
 
     if (activity.kind === "approval.requested" && requestId) {
       const requestKind =
-        payload && typeof payload.requestKind === "string"
-          ? payload.requestKind
-          : "approval";
+        payload && typeof payload.requestKind === "string" ? payload.requestKind : "approval";
       const detail = payload && typeof payload.detail === "string" ? payload.detail : undefined;
       open.set(requestId, {
         requestId,

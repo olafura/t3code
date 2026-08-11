@@ -24,9 +24,9 @@ describe("friendly labels", () => {
 
 describe("getReasoningEffort", () => {
   it("reads the reasoning option by any of its known ids", () => {
-    expect(getReasoningEffort({ options: [{ id: "reasoningEffort", value: "high" }] } as never)).toBe(
-      "high",
-    );
+    expect(
+      getReasoningEffort({ options: [{ id: "reasoningEffort", value: "high" }] } as never),
+    ).toBe("high");
     expect(getReasoningEffort({ options: [{ id: "effort", value: "max" }] } as never)).toBe("max");
   });
 
@@ -41,7 +41,11 @@ describe("composerControls", () => {
     const detail = {
       interactionMode: "plan",
       runtimeMode: "approval-required",
-      modelSelection: { instanceId: "codex", model: "gpt-5", options: [{ id: "effort", value: "high" }] },
+      modelSelection: {
+        instanceId: "codex",
+        model: "gpt-5",
+        options: [{ id: "effort", value: "high" }],
+      },
     } as unknown as OrchestrationThread;
     expect(composerControls(detail)).toEqual({
       interactionMode: "plan",

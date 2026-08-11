@@ -68,7 +68,6 @@ function parseQuestions(payload: Record<string, unknown> | null): UserInputQuest
   return questions.length > 0 ? questions : null;
 }
 
-
 export function derivePendingUserInputs(
   activities: ReadonlyArray<OrchestrationThreadActivity>,
 ): PendingUserInput[] {
@@ -95,7 +94,10 @@ export function derivePendingUserInputs(
       open.delete(requestId);
       continue;
     }
-    if (activity.kind === "provider.user-input.respond.failed" && isStalePendingRequestFailureDetail(detail)) {
+    if (
+      activity.kind === "provider.user-input.respond.failed" &&
+      isStalePendingRequestFailureDetail(detail)
+    ) {
       open.delete(requestId);
     }
   }

@@ -55,7 +55,9 @@ function asNumber(value: unknown): number | null {
 /** Split a trailing "<exited with exit code N>" marker off a command's captured output. */
 function stripTrailingExitCode(value: string): string | null {
   const trimmed = value.trim();
-  const match = /^(?<output>[\s\S]*?)(?:\s*<exited with exit code (?<code>\d+)>)\s*$/i.exec(trimmed);
+  const match = /^(?<output>[\s\S]*?)(?:\s*<exited with exit code (?<code>\d+)>)\s*$/i.exec(
+    trimmed,
+  );
   if (!match?.groups) return trimmed.length > 0 ? trimmed : null;
   const output = match.groups.output?.trim() ?? "";
   return output.length > 0 ? output : null;
@@ -178,7 +180,18 @@ function collectChangedFiles(value: unknown, target: string[], seen: Set<string>
   pushChangedFile(target, seen, record.filename);
   pushChangedFile(target, seen, record.newPath);
   pushChangedFile(target, seen, record.oldPath);
-  for (const key of ["item", "result", "input", "data", "changes", "files", "edits", "patch", "patches", "operations"]) {
+  for (const key of [
+    "item",
+    "result",
+    "input",
+    "data",
+    "changes",
+    "files",
+    "edits",
+    "patch",
+    "patches",
+    "operations",
+  ]) {
     if (!(key in record)) continue;
     collectChangedFiles(record[key], target, seen, depth + 1);
     if (target.length >= 12) return;
@@ -217,7 +230,9 @@ function toEntry(activity: OrchestrationThreadActivity): MutableEntry {
   const payload = asRecord(activity.payload);
   const title = asTrimmedString(payload?.title);
   const isTask = activity.kind === "task.progress" || activity.kind === "task.completed";
-  const taskLabel = isTask ? asTrimmedString(payload?.summary) ?? asTrimmedString(payload?.detail) : null;
+  const taskLabel = isTask
+    ? (asTrimmedString(payload?.summary) ?? asTrimmedString(payload?.detail))
+    : null;
   const command = isTask ? null : extractToolCommand(payload);
   const changedFiles = extractChangedFiles(payload);
   const itemType = extractWorkLogItemType(payload);
@@ -288,7 +303,9 @@ function merge(previous: MutableEntry, next: MutableEntry): MutableEntry {
   // Entries only carry a key when its value is defined, so a plain spread already
   // implements "next wins if present, else previous" for every optional field.
   const merged: MutableEntry = { ...previous, ...next };
-  const changedFiles = [...new Set([...(previous.changedFiles ?? []), ...(next.changedFiles ?? [])])];
+  const changedFiles = [
+    ...new Set([...(previous.changedFiles ?? []), ...(next.changedFiles ?? [])]),
+  ];
   if (changedFiles.length > 0) merged.changedFiles = changedFiles;
   return merged;
 }

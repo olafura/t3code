@@ -84,7 +84,6 @@ export function createStore(client: TuiClient): Store {
   // The worktree currently subscribed for git status, so we only resubscribe on change.
   let vcsCwd: string | null = null;
 
-
   const selectedThreadId = () => (state.selection?.kind === "thread" ? state.selection.id : null);
   const rowsNow = () =>
     buildRows(
@@ -239,8 +238,7 @@ export function createStore(client: TuiClient): Store {
       set({ loadedInFull });
     },
     toggleSection: (section) => {
-      const id =
-        section === "snoozed" ? SIDEBAR_SNOOZED_SECTION_ID : SIDEBAR_SETTLED_SECTION_ID;
+      const id = section === "snoozed" ? SIDEBAR_SNOOZED_SECTION_ID : SIDEBAR_SETTLED_SECTION_ID;
       const expanded = new Set(state.expanded);
       if (expanded.has(id)) expanded.delete(id);
       else expanded.add(id);
