@@ -576,13 +576,13 @@ export interface TuiClient {
   readonly dispose: () => Promise<void>;
 }
 
-const newId = Effect.gen(function* () {
+const randomUuid = Effect.gen(function* () {
   const crypto = yield* Crypto.Crypto;
   return yield* crypto.randomUUIDv4.pipe(Effect.orDie);
 });
 
 /** A long-lived SubscriptionRef kept warm in its own scope until `close()`. */
-interface WarmRef<S> {
+interface WarmSubscriptionRef<S> {
   readonly ref: Promise<SubscriptionRef.SubscriptionRef<S>>;
   readonly close: () => void;
   order: number;
@@ -594,7 +594,9 @@ const THREAD_WARM_LIMIT = 8;
 export function makeTuiClient(runtime: TuiRuntime, origin = ""): TuiClient {
   const attachmentImages = createAttachmentImageCache();
   const hostPlatform = runtime.runSync(HostProcessPlatform);
-  const forkUnsub = <A>(stream: Stream.Stream<A, unknown, EnvironmentSupervisor>): (() => void) => {
+  const drainStreamUntilUnsubscribe = <A>(
+    stream: Stream.Stream<A, unknown, EnvironmentSupervisor>,
+  ): (() => void) => {
     const fiber = runtime.runFork(Stream.runDrain(stream));
     return () => {
       runtime.runFork(Fiber.interrupt(fiber));
@@ -609,7 +611,7 @@ export function makeTuiClient(runtime: TuiRuntime, origin = ""): TuiClient {
   // keep open (Effect.never) so it stays warm; closing the scope interrupts it and
   // flushes the last value to the in-memory cache.
 
-  const startWarm = <S>(
+  const startWarmSubscriptionRef = <S>(
     build: Effect.Effect<
       SubscriptionRef.SubscriptionRef<S>,
       never,
@@ -619,7 +621,7 @@ export function makeTuiClient(runtime: TuiRuntime, origin = ""): TuiClient {
       | ShellSnapshotLoader
       | Scope.Scope
     >,
-  ): WarmRef<S> => {
+  ): WarmSubscriptionRef<S> => {
     let resolveRef: (ref: SubscriptionRef.SubscriptionRef<S>) => void = () => {};
     const ref = new Promise<SubscriptionRef.SubscriptionRef<S>>((resolve) => {
       resolveRef = resolve;
@@ -643,7 +645,10 @@ export function makeTuiClient(runtime: TuiRuntime, origin = ""): TuiClient {
   };
 
   /** Stream a warm ref's changes into a callback; returns an unsubscribe. */
-  const followWarm = <S>(entry: WarmRef<S>, onValue: (value: S) => void): (() => void) => {
+  const subscribeToWarmRef = <S>(
+    entry: WarmSubscriptionRef<S>,
+    onValue: (value: S) => void,
+  ): (() => void) => {
     let cancelled = false;
     let fiber: Fiber.Fiber<void, unknown> | null = null;
     void entry.ref.then((subscriptionRef) => {
@@ -660,12 +665,12 @@ export function makeTuiClient(runtime: TuiRuntime, origin = ""): TuiClient {
     };
   };
 
-  const warmThreads = new Map<string, WarmRef<EnvironmentThreadState>>();
+  const warmThreads = new Map<string, WarmSubscriptionRef<EnvironmentThreadState>>();
   // Last-seen detail per thread, kept in sync by the UI subscription, so a
   // re-select can paint instantly (no blank) before the fresh value streams in.
   const latestThreads = new Map<string, OrchestrationThread>();
   let warmOrder = 0;
-  let shellWarm: WarmRef<EnvironmentShellState> | null = null;
+  let shellWarm: WarmSubscriptionRef<EnvironmentShellState> | null = null;
   // Monotonic id correlating a stacked-git-action's progress stream on the server.
   let gitActionSeq = 0;
 
@@ -676,7 +681,7 @@ export function makeTuiClient(runtime: TuiRuntime, origin = ""): TuiClient {
     latestThreads.delete(key);
   };
 
-  const acquireThread = (threadId: ThreadId): WarmRef<EnvironmentThreadState> => {
+  const acquireThread = (threadId: ThreadId): WarmSubscriptionRef<EnvironmentThreadState> => {
     const key = threadId as string;
     const existing = warmThreads.get(key);
     if (existing) {
@@ -709,7 +714,7 @@ export function makeTuiClient(runtime: TuiRuntime, origin = ""): TuiClient {
         }),
       ),
     );
-    const entry: WarmRef<EnvironmentThreadState> = {
+    const entry: WarmSubscriptionRef<EnvironmentThreadState> = {
       ref,
       close: () => {
         runtime.runFork(Fiber.interrupt(fiber));
@@ -766,15 +771,15 @@ export function makeTuiClient(runtime: TuiRuntime, origin = ""): TuiClient {
         }),
       ),
     subscribeShell: (onSnapshot) => {
-      shellWarm ??= startWarm(makeEnvironmentShellState());
-      return followWarm(shellWarm, (state) => {
+      shellWarm ??= startWarmSubscriptionRef(makeEnvironmentShellState());
+      return subscribeToWarmRef(shellWarm, (state) => {
         if (Option.isSome(state.snapshot)) onSnapshot(state.snapshot.value);
       });
     },
 
     subscribeThread: (threadId, onThread) => {
       const entry = acquireThread(threadId);
-      return followWarm(entry, (state) => {
+      return subscribeToWarmRef(entry, (state) => {
         if (Option.isSome(state.data)) onThread(state.data.value);
       });
     },
@@ -791,13 +796,13 @@ export function makeTuiClient(runtime: TuiRuntime, origin = ""): TuiClient {
         rows: input.rows,
         restartIfNotRunning: true,
       }).pipe(Stream.tap((event) => Effect.sync(() => onEvent(event))));
-      return forkUnsub(stream);
+      return drainStreamUntilUnsubscribe(stream);
     },
 
     sendReply: (thread, text, attachments = [], modelSelection) =>
       runtime.runPromise(
         Effect.gen(function* () {
-          const messageId = MessageIdSchema.make(yield* newId);
+          const messageId = MessageIdSchema.make(yield* randomUuid);
           if (modelSelection) {
             // Keep thread metadata and the active provider session in sync. The
             // turn-level selection is what makes an existing session actually
@@ -819,10 +824,10 @@ export function makeTuiClient(runtime: TuiRuntime, origin = ""): TuiClient {
     createThread: (input) =>
       runtime.runPromise(
         Effect.gen(function* () {
-          const threadId = ThreadIdSchema.make(yield* newId);
-          const messageId = MessageIdSchema.make(yield* newId);
+          const threadId = ThreadIdSchema.make(yield* randomUuid);
+          const messageId = MessageIdSchema.make(yield* randomUuid);
           const createdAt = yield* DateTime.now.pipe(Effect.map(DateTime.formatIso));
-          const worktreeToken = input.createWorktree ? yield* newId : null;
+          const worktreeToken = input.createWorktree ? yield* randomUuid : null;
           const worktreeBranch = worktreeToken
             ? buildTemporaryWorktreeBranchName((byteLength) =>
                 worktreeToken.replaceAll("-", "").slice(0, byteLength * 2),
@@ -850,7 +855,7 @@ export function makeTuiClient(runtime: TuiRuntime, origin = ""): TuiClient {
     createProject: (workspaceRoot) =>
       runtime.runPromise(
         Effect.gen(function* () {
-          const projectId = ProjectIdSchema.make(yield* newId);
+          const projectId = ProjectIdSchema.make(yield* randomUuid);
           yield* createProjectOp({
             projectId,
             title: TrimmedNonEmptyString.make(inferProjectTitleFromPath(workspaceRoot)),
@@ -870,7 +875,7 @@ export function makeTuiClient(runtime: TuiRuntime, origin = ""): TuiClient {
           // persistThreadSettingsForNextTurn → setThreadInteractionMode) so the
           // composer reflects build mode and later replies don't revert to plan.
           yield* setThreadInteractionMode({ threadId: thread.id, interactionMode: "default" });
-          const messageId = MessageIdSchema.make(yield* newId);
+          const messageId = MessageIdSchema.make(yield* randomUuid);
           yield* startThreadTurn({
             threadId: thread.id,
             message: {
@@ -954,7 +959,7 @@ export function makeTuiClient(runtime: TuiRuntime, origin = ""): TuiClient {
       const stream = subscribe(WS_METHODS.subscribeTerminalMetadata, {}).pipe(
         Stream.tap((event) => Effect.sync(() => onEvent(event))),
       );
-      return forkUnsub(stream);
+      return drainStreamUntilUnsubscribe(stream);
     },
 
     subscribeVcsStatus: (cwd, onStatus) => {
@@ -982,7 +987,7 @@ export function makeTuiClient(runtime: TuiRuntime, origin = ""): TuiClient {
           }),
         ),
       );
-      return forkUnsub(stream);
+      return drainStreamUntilUnsubscribe(stream);
     },
 
     runGitStackedAction: (input) =>
