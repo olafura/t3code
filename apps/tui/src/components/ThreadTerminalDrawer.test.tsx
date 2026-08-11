@@ -1,4 +1,4 @@
-import { describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it, jest } from "bun:test";
 import * as React from "react";
 import { testRender } from "@opentui/react/test-utils";
 
@@ -198,6 +198,22 @@ describe("ThreadTerminalDrawer tab bar", () => {
 });
 
 describe("ThreadTerminalDrawer session events", () => {
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
+  const renderTerminalEvent = async (
+    t: Awaited<ReturnType<typeof testRender>>,
+    onEvent: Parameters<TuiClient["subscribeTerminal"]>[1],
+    event: Parameters<Parameters<TuiClient["subscribeTerminal"]>[1]>[0],
+  ): Promise<void> => {
+    await React.act(async () => {
+      onEvent(event);
+      jest.runAllTimers();
+    });
+    await t.renderOnce();
+  };
+
   it("Given the shell cursor is on a blank cell, then the drawer renders a visible block", async () => {
     let onEvent: Parameters<TuiClient["subscribeTerminal"]>[1] = () => {
       throw new Error("terminal subscription not ready");
@@ -242,14 +258,13 @@ describe("ThreadTerminalDrawer session events", () => {
     await t.renderOnce();
     await t.flush();
 
-    onEvent?.({
+    jest.useFakeTimers();
+    await renderTerminalEvent(t, onEvent, {
       type: "output",
       threadId: "t1",
       terminalId: "term-1",
       data: "$ ",
     } as never);
-    await Bun.sleep(25);
-    await t.renderOnce();
 
     expect(t.captureCharFrame()).toContain("$ █");
     t.renderer.destroy();
@@ -300,14 +315,13 @@ describe("ThreadTerminalDrawer session events", () => {
     await t.flush();
 
     // Write "abc", then move two cells left so xterm's cursor sits on "b".
-    onEvent?.({
+    jest.useFakeTimers();
+    await renderTerminalEvent(t, onEvent, {
       type: "output",
       threadId: "t1",
       terminalId: "term-1",
       data: "abc\x1b[2D",
     } as never);
-    await Bun.sleep(25);
-    await t.renderOnce();
 
     const terminalLine = t.captureSpans().lines.find((line) =>
       line.spans
@@ -365,19 +379,20 @@ describe("ThreadTerminalDrawer session events", () => {
     await t.renderOnce();
     await t.flush();
 
-    onEvent?.({
+    jest.useFakeTimers();
+    await renderTerminalEvent(t, onEvent, {
       type: "output",
       threadId: "t1",
       terminalId: "term-1",
       data: "visible-before-clear",
     } as never);
-    await Bun.sleep(25);
-    await t.renderOnce();
     expect(t.captureCharFrame()).toContain("visible-before-clear");
 
-    onEvent?.({ type: "cleared", threadId: "t1", terminalId: "term-1" } as never);
-    await Bun.sleep(25);
-    await t.renderOnce();
+    await renderTerminalEvent(t, onEvent, {
+      type: "cleared",
+      threadId: "t1",
+      terminalId: "term-1",
+    } as never);
     expect(t.captureCharFrame()).not.toContain("visible-before-clear");
     t.renderer.destroy();
   });
