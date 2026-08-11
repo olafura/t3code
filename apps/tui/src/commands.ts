@@ -3,6 +3,8 @@
 // handlers + current context; the palette renders the filtered result. Keeping
 // the filter pure makes the ranking unit-testable without a renderer.
 
+import { normalizeSearchQuery, scoreSubsequenceMatch } from "@t3tools/shared/searchRanking";
+
 export interface Command {
   readonly id: string;
   readonly title: string;
@@ -13,25 +15,13 @@ export interface Command {
   readonly run: () => void;
 }
 
-function subsequenceMatch(query: string, text: string): boolean {
-  let index = 0;
-  for (const char of text) {
-    if (char === query[index]) index += 1;
-    if (index === query.length) return true;
-  }
-  return query.length === 0;
-}
-
 /**
  * Rank commands against a query: title prefix > title substring > keyword
  * substring > subsequence, preserving the original order within a tier. An
  * empty query returns every command unchanged.
  */
-export function filterCommands(
-  commands: ReadonlyArray<Command>,
-  query: string,
-): Command[] {
-  const q = query.trim().toLowerCase();
+export function filterCommands(commands: ReadonlyArray<Command>, query: string): Command[] {
+  const q = normalizeSearchQuery(query);
   if (q.length === 0) return [...commands];
 
   const scored: Array<{ command: Command; score: number; order: number }> = [];
@@ -42,7 +32,7 @@ export function filterCommands(
     if (title.startsWith(q)) score = 0;
     else if (title.includes(q)) score = 1;
     else if (keywords.includes(q)) score = 2;
-    else if (subsequenceMatch(q, title)) score = 3;
+    else if (scoreSubsequenceMatch(title, q) !== null) score = 3;
     else return;
     scored.push({ command, score, order });
   });
