@@ -48,6 +48,10 @@ describe("filterCommands", () => {
     expect(filterCommands(commands, "nwthrd").map((c) => c.id)).toContain("new");
   });
 
+  it("preserves astral Unicode matching as code-point iteration", () => {
+    expect(filterCommands([cmd("emoji", "A😀xB")], "😀b")).toEqual([]);
+  });
+
   it("Given a non-matching query, then nothing is returned", () => {
     expect(filterCommands(commands, "zzzz")).toEqual([]);
   });
