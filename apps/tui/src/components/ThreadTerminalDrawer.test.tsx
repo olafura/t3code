@@ -198,14 +198,17 @@ describe("ThreadTerminalDrawer tab bar", () => {
 });
 
 describe("ThreadTerminalDrawer session events", () => {
+  type TerminalSubscriber = Parameters<TuiClient["subscribeTerminal"]>[1];
+  type TerminalStreamEvent = Parameters<TerminalSubscriber>[0];
+
   afterEach(() => {
     jest.useRealTimers();
   });
 
   const renderTerminalEvent = async (
     t: Awaited<ReturnType<typeof testRender>>,
-    onEvent: Parameters<TuiClient["subscribeTerminal"]>[1],
-    event: Parameters<Parameters<TuiClient["subscribeTerminal"]>[1]>[0],
+    onEvent: TerminalSubscriber,
+    event: TerminalStreamEvent,
   ): Promise<void> => {
     await React.act(async () => {
       onEvent(event);
@@ -214,14 +217,14 @@ describe("ThreadTerminalDrawer session events", () => {
     await t.renderOnce();
   };
 
-  it("Given the shell cursor is on a blank cell, then the drawer renders a visible block", async () => {
-    let onEvent: Parameters<TuiClient["subscribeTerminal"]>[1] = () => {
+  const renderTerminalSession = async (focused: boolean) => {
+    let onEvent: TerminalSubscriber = () => {
       throw new Error("terminal subscription not ready");
     };
     const eventClient = {
       subscribeTerminal: (
         _input: Parameters<TuiClient["subscribeTerminal"]>[0],
-        next: Parameters<TuiClient["subscribeTerminal"]>[1],
+        next: TerminalSubscriber,
       ) => {
         onEvent = next;
         return () => {};
@@ -244,7 +247,7 @@ describe("ThreadTerminalDrawer session events", () => {
         info={info}
         cols={40}
         rows={4}
-        focused
+        focused={focused}
         copyRef={copyRef}
         scrollRef={scrollRef}
         tabIds={["term-1"]}
@@ -257,9 +260,16 @@ describe("ThreadTerminalDrawer session events", () => {
     );
     await t.renderOnce();
     await t.flush();
-
     jest.useFakeTimers();
-    await renderTerminalEvent(t, onEvent, {
+    return {
+      t,
+      emit: (event: TerminalStreamEvent) => renderTerminalEvent(t, onEvent, event),
+    };
+  };
+
+  it("Given the shell cursor is on a blank cell, then the drawer renders a visible block", async () => {
+    const { t, emit } = await renderTerminalSession(true);
+    await emit({
       type: "output",
       threadId: "t1",
       terminalId: "term-1",
@@ -271,52 +281,10 @@ describe("ThreadTerminalDrawer session events", () => {
   });
 
   it("Given the cursor moves over text, then that character retains a visible block background", async () => {
-    let onEvent: Parameters<TuiClient["subscribeTerminal"]>[1] = () => {
-      throw new Error("terminal subscription not ready");
-    };
-    const eventClient = {
-      subscribeTerminal: (
-        _input: Parameters<TuiClient["subscribeTerminal"]>[0],
-        next: Parameters<TuiClient["subscribeTerminal"]>[1],
-      ) => {
-        onEvent = next;
-        return () => {};
-      },
-      terminalWrite: () => Promise.resolve(),
-      terminalResize: () => Promise.resolve(),
-      terminalClose: () => Promise.resolve(),
-    } as unknown as TuiClient;
-    const copyRef = React.createRef<(() => string) | null>() as React.MutableRefObject<
-      (() => string) | null
-    >;
-    const scrollRef = React.createRef<
-      ((action: "line-up" | "line-down" | "page-up" | "page-down" | "bottom") => void) | null
-    >() as React.MutableRefObject<
-      ((action: "line-up" | "line-down" | "page-up" | "page-down" | "bottom") => void) | null
-    >;
-    const t = await testRender(
-      <ThreadTerminalDrawer
-        client={eventClient}
-        info={info}
-        cols={40}
-        rows={4}
-        focused
-        copyRef={copyRef}
-        scrollRef={scrollRef}
-        tabIds={["term-1"]}
-        activeTabId="term-1"
-        onSelectTab={() => {}}
-        onNewTab={() => {}}
-        onCloseTab={() => {}}
-      />,
-      { width: 50, height: 12 },
-    );
-    await t.renderOnce();
-    await t.flush();
+    const { t, emit } = await renderTerminalSession(true);
 
     // Write "abc", then move two cells left so xterm's cursor sits on "b".
-    jest.useFakeTimers();
-    await renderTerminalEvent(t, onEvent, {
+    await emit({
       type: "output",
       threadId: "t1",
       terminalId: "term-1",
@@ -336,51 +304,8 @@ describe("ThreadTerminalDrawer session events", () => {
   });
 
   it("Given terminal output is visible, when the server clears the session, then the stale buffer disappears", async () => {
-    let onEvent: Parameters<TuiClient["subscribeTerminal"]>[1] = () => {
-      throw new Error("terminal subscription not ready");
-    };
-    const eventClient = {
-      subscribeTerminal: (
-        _input: Parameters<TuiClient["subscribeTerminal"]>[0],
-        next: Parameters<TuiClient["subscribeTerminal"]>[1],
-      ) => {
-        onEvent = next;
-        return () => {};
-      },
-      terminalWrite: () => Promise.resolve(),
-      terminalResize: () => Promise.resolve(),
-      terminalClose: () => Promise.resolve(),
-    } as unknown as TuiClient;
-    const copyRef = React.createRef<(() => string) | null>() as React.MutableRefObject<
-      (() => string) | null
-    >;
-    const scrollRef = React.createRef<
-      ((action: "line-up" | "line-down" | "page-up" | "page-down" | "bottom") => void) | null
-    >() as React.MutableRefObject<
-      ((action: "line-up" | "line-down" | "page-up" | "page-down" | "bottom") => void) | null
-    >;
-    const t = await testRender(
-      <ThreadTerminalDrawer
-        client={eventClient}
-        info={info}
-        cols={40}
-        rows={4}
-        focused={false}
-        copyRef={copyRef}
-        scrollRef={scrollRef}
-        tabIds={["term-1"]}
-        activeTabId="term-1"
-        onSelectTab={() => {}}
-        onNewTab={() => {}}
-        onCloseTab={() => {}}
-      />,
-      { width: 50, height: 12 },
-    );
-    await t.renderOnce();
-    await t.flush();
-
-    jest.useFakeTimers();
-    await renderTerminalEvent(t, onEvent, {
+    const { t, emit } = await renderTerminalSession(false);
+    await emit({
       type: "output",
       threadId: "t1",
       terminalId: "term-1",
@@ -388,7 +313,7 @@ describe("ThreadTerminalDrawer session events", () => {
     } as never);
     expect(t.captureCharFrame()).toContain("visible-before-clear");
 
-    await renderTerminalEvent(t, onEvent, {
+    await emit({
       type: "cleared",
       threadId: "t1",
       terminalId: "term-1",
