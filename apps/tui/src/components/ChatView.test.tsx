@@ -272,7 +272,6 @@ function fakeClient({
     getServerConfig,
     listRefs,
     switchRef,
-    getThreadActivities: async () => ({ activities: [], hasMore: false }),
     getAttachmentUrl,
     getAttachmentImage,
     readFileBase64,
