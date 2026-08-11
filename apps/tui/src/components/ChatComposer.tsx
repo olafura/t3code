@@ -315,10 +315,13 @@ export const ChatComposer = React.memo(function ChatComposer({
               const pastedText = stripAnsiSequences(decodePasteBytes(event.bytes));
               const attachment = onPasteImagePath(pastedText);
               if (!attachment) return;
+              const targetEditor = replyRef.current;
               event.preventDefault();
               event.stopPropagation();
               void attachment.then(({ textToInsert }) => {
-                if (textToInsert.length > 0) replyRef.current?.insertText(textToInsert);
+                if (textToInsert.length > 0 && replyRef.current === targetEditor) {
+                  targetEditor?.insertText(textToInsert);
+                }
               });
             }}
           />

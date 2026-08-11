@@ -339,6 +339,47 @@ describe("ChatComposer", () => {
     t.renderer.destroy();
   });
 
+  it("does not insert a late image-path result into a remounted editor", async () => {
+    let resolvePaste!: (value: { attached: boolean; textToInsert: string }) => void;
+    const paste = new Promise<{ attached: boolean; textToInsert: string }>((resolve) => {
+      resolvePaste = resolve;
+    });
+    let remount!: () => void;
+    function Harness(): React.ReactNode {
+      const [epoch, setEpoch] = React.useState(0);
+      const [reply, setReply] = React.useState("");
+      remount = () => {
+        setReply("");
+        setEpoch((value) => value + 1);
+      };
+      return (
+        <ChatComposer
+          {...base}
+          mode="compose"
+          reply={reply}
+          composerEpoch={epoch}
+          inputFocused
+          onReplyInput={setReply}
+          onPasteImagePath={() => paste}
+        />
+      );
+    }
+    const t = await testRender(<Harness />, { width: 60, height: 8 });
+    await t.renderOnce();
+    await t.mockInput.pasteBracketedText("./screenshots/missing.png");
+    await React.act(async () => {
+      remount();
+      await t.renderOnce();
+    });
+    await React.act(async () => {
+      resolvePaste({ attached: false, textToInsert: "./screenshots/missing.png" });
+      await paste;
+      await t.renderOnce();
+    });
+    expect(t.captureCharFrame()).not.toContain("./screenshots/missing.png");
+    t.renderer.destroy();
+  });
+
   it("Given a non-empty reply, when the editor mounts, then it seeds the draft (survives remount)", async () => {
     const frame = await frameOf(
       <ChatComposer {...base} mode="compose" reply="restored draft" inputFocused />,

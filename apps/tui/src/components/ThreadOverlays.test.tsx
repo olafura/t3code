@@ -53,4 +53,13 @@ describe("RevertMenu", () => {
     expect(frame).toContain("discards changes made after it");
     expect(frame).toContain("▸ turn 2");
   });
+
+  it("keeps selections beyond the first eight checkpoints visible", async () => {
+    const checkpoints = Array.from({ length: 10 }, (_, index) =>
+      checkpoint(10 - index, 1, `2026-06-19T00:00:${String(index).padStart(2, "0")}.000Z`),
+    );
+    const frame = await frameOf(<RevertMenu checkpoints={checkpoints} selected={9} />);
+    expect(frame).toContain("▸ turn 1");
+    expect(frame).not.toContain("turn 10");
+  });
 });

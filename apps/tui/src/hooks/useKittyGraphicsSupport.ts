@@ -14,6 +14,7 @@ export function useKittyGraphicsSupport(): boolean {
       setSupported(manager.isSupported);
     };
     renderer.on(CliRenderEvents.CAPABILITIES, onCapabilities);
+    setSupported(manager.isSupported);
     return () => {
       renderer.off(CliRenderEvents.CAPABILITIES, onCapabilities);
     };

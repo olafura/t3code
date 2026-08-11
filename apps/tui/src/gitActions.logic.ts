@@ -180,7 +180,7 @@ export function resolveGitQuickAction(
       return {
         kind: "run_action",
         label: "Push",
-        action: isDefaultRef ? "commit_push" : "push",
+        action: "push",
         disabled: false,
       };
     }
@@ -205,7 +205,7 @@ export function resolveGitQuickAction(
       return {
         kind: "run_action",
         label: "Push",
-        action: isDefaultRef ? "commit_push" : "push",
+        action: "push",
         disabled: false,
       };
     }

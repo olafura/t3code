@@ -87,15 +87,14 @@ export function resolveChatVerticalLayout(input: {
   const height = Math.max(1, Math.floor(input.terminalHeight));
   const chromeRows = Math.max(0, Math.floor(input.composerChromeRows));
   const terminalReserve = input.terminalOpen ? MIN_TERMINAL_DRAWER_ROWS : 0;
-  const editorBudget = Math.max(
-    1,
-    height - STATUS_ROWS - MIN_TIMELINE_ROWS - terminalReserve - chromeRows,
+  const composerBudget = Math.max(0, height - STATUS_ROWS - MIN_TIMELINE_ROWS - terminalReserve);
+  const editorBudget = Math.max(0, composerBudget - chromeRows);
+  const editorRows = Math.min(
+    Math.max(1, Math.floor(input.desiredEditorRows)),
+    COMPOSER_MAX_EDITOR_ROWS,
+    editorBudget,
   );
-  const editorRows = Math.max(
-    1,
-    Math.min(Math.floor(input.desiredEditorRows), COMPOSER_MAX_EDITOR_ROWS, editorBudget),
-  );
-  const composerRows = chromeRows + editorRows;
+  const composerRows = Math.min(chromeRows + editorRows, composerBudget);
   const terminalBudget = Math.max(0, height - STATUS_ROWS - composerRows - MIN_TIMELINE_ROWS);
   const preferredTerminalRows = Math.max(
     MIN_TERMINAL_DRAWER_ROWS,

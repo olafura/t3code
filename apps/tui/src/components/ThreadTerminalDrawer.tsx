@@ -205,7 +205,7 @@ const TerminalPane = React.memo(function TerminalPane({
   // Expose the viewport text for ^O copy while this is the visible terminal.
   React.useEffect(() => {
     if (!visible) return;
-    const getter = () => readTerminalViewport(term);
+    const getter = () => readTerminalViewport(term, scrollOffsetRef.current);
     copyRef.current = getter;
     return () => {
       if (copyRef.current === getter) copyRef.current = null;
@@ -246,6 +246,19 @@ const TerminalPane = React.memo(function TerminalPane({
         bump();
       }, 16);
     };
+    const writeLiveOutput = (data: string) => {
+      const previousBaseY = term.buffer.active.baseY;
+      term.write(data, () => {
+        const nextBaseY = term.buffer.active.baseY;
+        if (scrollOffsetRef.current > 0 && nextBaseY > previousBaseY) {
+          scrollOffsetRef.current = Math.min(
+            nextBaseY,
+            scrollOffsetRef.current + nextBaseY - previousBaseY,
+          );
+        }
+        scheduleRender();
+      });
+    };
     const unsub = client.subscribeTerminal(
       {
         threadId: info.threadId,
@@ -271,11 +284,11 @@ const TerminalPane = React.memo(function TerminalPane({
           scrollOffsetRef.current = 0;
           scheduleRender();
         } else if (event.type === "output") {
-          term.write(event.data, scheduleRender);
+          writeLiveOutput(event.data);
         } else if (event.type === "exited") {
-          term.write("\r\n[process exited]\r\n", scheduleRender);
+          writeLiveOutput("\r\n[process exited]\r\n");
         } else if (event.type === "error") {
-          term.write(`\r\n[terminal error: ${event.message}]\r\n`, scheduleRender);
+          writeLiveOutput(`\r\n[terminal error: ${event.message}]\r\n`);
         }
       },
     );

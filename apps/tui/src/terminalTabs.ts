@@ -82,6 +82,21 @@ export function tabsWithDiscovered(
   return { ids: merged, activeId };
 }
 
+/** Apply one per-thread tab transition to an immutable map and return its result. */
+export function updateTabsForThread(
+  previous: ReadonlyMap<string, ThreadTabs>,
+  threadId: string,
+  update: (tabs: ThreadTabs | null) => ThreadTabs | null,
+): { readonly map: ReadonlyMap<string, ThreadTabs>; readonly tabs: ThreadTabs | null } {
+  const current = previous.get(threadId) ?? null;
+  const tabs = update(current);
+  if (tabs === current) return { map: previous, tabs };
+  const map = new Map(previous);
+  if (tabs) map.set(threadId, tabs);
+  else map.delete(threadId);
+  return { map, tabs };
+}
+
 /** A terminal-metadata stream event (snapshot | upsert | remove) from the server. */
 export type TerminalMetadataEvent =
   | {
@@ -96,8 +111,8 @@ export type TerminalMetadataEvent =
 
 /**
  * Fold a terminal-metadata event into the per-thread map of known terminal ids.
- * A snapshot replaces the whole map; upsert/remove adjust one thread's set. The
- * result feeds {@link tabsWithDiscovered}. Removals are tracked so a closed
+ * A snapshot merges currently live sessions into the known map; upsert/remove
+ * adjust one thread's set. The result feeds {@link tabsWithDiscovered}. Removals are tracked so a closed
  * terminal stops being re-added; ChatView also applies explicit remove events
  * to its open tabs so other clients stay synchronized.
  */
@@ -106,7 +121,11 @@ export function reduceKnownTerminals(
   event: TerminalMetadataEvent,
 ): ReadonlyMap<string, ReadonlyArray<string>> {
   if (event.type === "snapshot") {
-    const next = new Map<string, string[]>();
+    // Persisted-only ids learned from terminal.list are absent from the live
+    // subscription snapshot, so keep them until an explicit remove arrives.
+    const next = new Map<string, string[]>(
+      [...previous].map(([threadId, ids]) => [threadId, [...ids]]),
+    );
     for (const { threadId, terminalId } of event.terminals) {
       const ids = next.get(threadId) ?? [];
       if (!ids.includes(terminalId)) ids.push(terminalId);

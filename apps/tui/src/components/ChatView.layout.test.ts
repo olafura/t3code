@@ -91,4 +91,24 @@ describe("composer and terminal row allocation", () => {
     expect(layout.terminalRows).toBe(11);
     expect(layout.popoverRows).toBeGreaterThan(0);
   });
+
+  it("clamps oversized composer chrome to the available terminal rows", () => {
+    const height = 12;
+    const layout = resolveChatVerticalLayout({
+      terminalHeight: height,
+      desiredEditorRows: 4,
+      composerChromeRows: 40,
+      terminalOpen: false,
+      preferredTerminalRows: 0,
+      wantedPopoverRows: 0,
+    });
+    expect(layout.composerRows).toBeLessThanOrEqual(height - STATUS_ROWS);
+    expect(
+      layout.panesRows +
+        layout.composerRows +
+        layout.terminalRows +
+        layout.popoverRows +
+        STATUS_ROWS,
+    ).toBe(height);
+  });
 });

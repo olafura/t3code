@@ -46,7 +46,12 @@ export const RevertMenu = React.memo(function RevertMenu({
 }): React.ReactNode {
   const palette = usePalette();
   const danger = palette.error;
-  const visible = checkpoints.slice(0, 8);
+  const windowSize = 8;
+  const windowStart = Math.min(
+    Math.max(0, selected - windowSize + 1),
+    Math.max(0, checkpoints.length - windowSize),
+  );
+  const visible = checkpoints.slice(windowStart, windowStart + windowSize);
   return (
     <box
       flexDirection="column"
@@ -62,7 +67,7 @@ export const RevertMenu = React.memo(function RevertMenu({
         <span fg={palette.dim}>pick a checkpoint — discards changes made after it</span>
       </text>
       {visible.map((checkpoint, index) => {
-        const active = index === selected;
+        const active = windowStart + index === selected;
         const fileCount = checkpoint.files.length;
         return (
           <text key={`${checkpoint.turnId}:${checkpoint.checkpointTurnCount}`}>

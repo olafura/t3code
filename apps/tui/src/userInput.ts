@@ -67,8 +67,8 @@ export function derivePendingUserInputs(
 ): PendingUserInput[] {
   const open = new Map<string, PendingUserInput>();
   const ordered = [...activities].sort((a, b) => {
-    const sa = a.sequence ?? Number.MAX_SAFE_INTEGER;
-    const sb = b.sequence ?? Number.MAX_SAFE_INTEGER;
+    const sa = a.sequence ?? -1;
+    const sb = b.sequence ?? -1;
     if (sa !== sb) return sa - sb;
     return a.createdAt.localeCompare(b.createdAt);
   });

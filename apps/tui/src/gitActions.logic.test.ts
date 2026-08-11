@@ -70,6 +70,21 @@ describe("resolveGitQuickAction", () => {
     const action = resolveGitQuickAction(status({ hasUpstream: false, aheadCount: 0 }), false);
     expect(action).toMatchObject({ kind: "show_hint", label: "Push", disabled: true });
   });
+
+  it("uses a push-only action for a clean default branch that is ahead", () => {
+    expect(
+      resolveGitQuickAction(
+        status({ isDefaultRef: true, hasUpstream: true, aheadCount: 1 }),
+        false,
+      ),
+    ).toMatchObject({ kind: "run_action", label: "Push", action: "push" });
+    expect(
+      resolveGitQuickAction(
+        status({ isDefaultRef: true, hasUpstream: false, aheadCount: 1 }),
+        false,
+      ),
+    ).toMatchObject({ kind: "run_action", label: "Push", action: "push" });
+  });
 });
 
 describe("mergeVcsStatus", () => {

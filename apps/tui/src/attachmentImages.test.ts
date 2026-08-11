@@ -69,6 +69,34 @@ describe("attachment image cache", () => {
     expect(decoded).toBe(false);
   });
 
+  it("stops reading a chunked response as soon as it crosses the byte cap", async () => {
+    let pulls = 0;
+    let cancelled = false;
+    let decoded = false;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pulls += 1;
+        controller.enqueue(new Uint8Array([pulls, pulls, pulls]));
+        if (pulls === 3) controller.close();
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+    const cache = createAttachmentImageCache({
+      maxEncodedBytes: 4,
+      fetcher: async () => new Response(body),
+      decoder: async () => {
+        decoded = true;
+        return IMAGE;
+      },
+    });
+
+    expect(await cache.load("attachment-1", "https://example.test/chunked")).toBeNull();
+    expect(cancelled).toBe(true);
+    expect(decoded).toBe(false);
+  });
+
   it("passes a bounded abort signal to attachment downloads", async () => {
     const cache = createAttachmentImageCache({
       fetchTimeoutMs: 1,

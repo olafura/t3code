@@ -218,7 +218,7 @@ export const make = Effect.gen(function* () {
           // Base64 reads exist for the image-attach flow only. Gate them to
           // image extensions so the raised 10MB cap and the skipped binary
           // guard below cannot become an arbitrary-binary read primitive.
-          if (encoding === "base64" && chatImageMimeTypeForPath(input.relativePath) === null) {
+          if (encoding === "base64" && chatImageMimeTypeForPath(realTargetPath) === null) {
             return yield* new WorkspaceBinaryFileError({
               workspaceRoot: input.cwd,
               relativePath: input.relativePath,

@@ -94,4 +94,22 @@ describe("splitUnifiedDiff", () => {
     ].join("\n");
     expect(splitUnifiedDiff(deleted)[0]?.path).toBe("legacy.sql");
   });
+
+  it("decodes quoted Git paths with spaces and UTF-8 octal escapes", () => {
+    const diff = [
+      'diff --git "a/src/my file.ts" "b/src/my file.ts"',
+      '--- "a/src/my file.ts"',
+      '+++ "b/src/my file.ts"',
+      "@@ -1 +1 @@",
+      "-old",
+      "+new",
+      'diff --git "a/src/\\360\\237\\230\\200.ts" "b/src/\\360\\237\\230\\200.ts"',
+      '--- "a/src/\\360\\237\\230\\200.ts"',
+      '+++ "b/src/\\360\\237\\230\\200.ts"',
+    ].join("\n");
+    expect(splitUnifiedDiff(diff).map((file) => file.path)).toEqual([
+      "src/my file.ts",
+      "src/😀.ts",
+    ]);
+  });
 });

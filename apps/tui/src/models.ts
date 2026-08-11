@@ -5,6 +5,7 @@ import type {
   ProviderOptionSelection,
   ServerProvider,
 } from "@t3tools/contracts";
+import { isProviderAvailable } from "@t3tools/contracts";
 import {
   buildProviderOptionSelectionsFromDescriptors,
   createModelSelection,
@@ -28,6 +29,7 @@ export interface ModelOption {
 export function flattenModelOptions(providers: ReadonlyArray<ServerProvider>): ModelOption[] {
   const options: ModelOption[] = [];
   for (const provider of providers) {
+    if (provider.enabled === false || !isProviderAvailable(provider)) continue;
     const providerLabel = provider.displayName ?? provider.driver ?? provider.instanceId;
     for (const model of provider.models) {
       options.push({

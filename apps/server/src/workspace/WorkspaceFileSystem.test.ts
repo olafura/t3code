@@ -216,6 +216,30 @@ it.layer(TestLayer, { excludeTestServices: true })("WorkspaceFileSystemLive", (i
       }),
     );
 
+    it.effect("rejects an image-named symlink to a non-image target", () =>
+      Effect.gen(function* () {
+        const workspaceFileSystem = yield* WorkspaceFileSystem.WorkspaceFileSystem;
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const cwd = yield* makeTempDir;
+        const targetPath = path.join(cwd, "database.sqlite");
+        yield* fileSystem.writeFile(targetPath, Uint8Array.from([0x53, 0x51, 0x4c, 0]));
+        yield* fileSystem.symlink(targetPath, path.join(cwd, "preview.png"));
+
+        const error = yield* workspaceFileSystem
+          .readFile({ cwd, relativePath: "preview.png", encoding: "base64" })
+          .pipe(Effect.flip);
+        const resolvedPath = yield* fileSystem.realPath(targetPath);
+
+        expect(error).toBeInstanceOf(WorkspaceFileSystem.WorkspaceBinaryFileError);
+        expect(error).toMatchObject({
+          workspaceRoot: cwd,
+          relativePath: "preview.png",
+          resolvedPath,
+        });
+      }),
+    );
+
     it.effect("rejects oversized base64 reads without returning a partial payload", () =>
       Effect.gen(function* () {
         const workspaceFileSystem = yield* WorkspaceFileSystem.WorkspaceFileSystem;

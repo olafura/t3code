@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "@effect/vitest";
 
 import { findUnresolvedTuiBundleImport } from "./tuiBundle.ts";
 
@@ -15,6 +15,23 @@ describe("findUnresolvedTuiBundleImport", () => {
         'NodeModule.createRequire(import.meta.url)("@xterm/headless");',
       ),
     ).toBe("@xterm/headless");
+  });
+
+  it("rejects createRequire lookups separated by whitespace", () => {
+    expect(
+      findUnresolvedTuiBundleImport(
+        'NodeModule.createRequire(import.meta.url) \n ("@xterm/headless");',
+      ),
+    ).toBe("@xterm/headless");
+  });
+
+  it("rejects bare imports and re-exports of private workspace packages", () => {
+    expect(findUnresolvedTuiBundleImport('import "@t3tools/contracts";')).toBe(
+      "@t3tools/contracts",
+    );
+    expect(findUnresolvedTuiBundleImport('export { value } from "@t3tools/shared/model";')).toBe(
+      "@t3tools/shared/model",
+    );
   });
 
   it("allows explicit public and native runtime imports", () => {

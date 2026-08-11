@@ -8,6 +8,7 @@ import {
   nextTerminalId,
   reduceKnownTerminals,
   tabsWithDiscovered,
+  updateTabsForThread,
 } from "./terminalTabs.ts";
 
 describe("terminal tabs", () => {
@@ -74,6 +75,21 @@ describe("tabsWithDiscovered", () => {
   });
 });
 
+describe("updateTabsForThread", () => {
+  it("serializes rapid closes against the latest immutable map", () => {
+    const initial = new Map([["t1", { ids: ["term-1", "term-2"], activeId: "term-2" }]]);
+    const first = updateTabsForThread(initial, "t1", (tabs) =>
+      tabs ? closeTab(tabs, "term-1") : tabs,
+    );
+    const second = updateTabsForThread(first.map, "t1", (tabs) =>
+      tabs ? closeTab(tabs, "term-2") : tabs,
+    );
+    expect(first.tabs).toEqual({ ids: ["term-2"], activeId: "term-2" });
+    expect(second.tabs).toBeNull();
+    expect(second.map.has("t1")).toBe(false);
+  });
+});
+
 describe("reduceKnownTerminals", () => {
   const snapshot = {
     type: "snapshot" as const,
@@ -88,6 +104,12 @@ describe("reduceKnownTerminals", () => {
     const map = reduceKnownTerminals(new Map(), snapshot);
     expect(map.get("t1")).toEqual(["term-1", "term-2"]);
     expect(map.get("t2")).toEqual(["term-1"]);
+  });
+
+  it("keeps persisted-only terminal ids when a live snapshot arrives", () => {
+    const previous = new Map<string, ReadonlyArray<string>>([["t1", ["persisted-term"]]]);
+    const map = reduceKnownTerminals(previous, snapshot);
+    expect(map.get("t1")).toEqual(["persisted-term", "term-1", "term-2"]);
   });
 
   it("Given an upsert of a new terminal, then it appends it to that thread", () => {

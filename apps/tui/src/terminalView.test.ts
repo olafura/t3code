@@ -70,6 +70,14 @@ describe("readTerminalFrame links", () => {
 
     expect(linked.map((segment) => segment.text).join("")).toBe(href);
   });
+
+  it("maps URL links to terminal cells after a wide character", async () => {
+    const href = "https://example.com";
+    const segments = await firstRow(`界 ${href}`);
+    const linked = segments.filter((segment) => segment.href === href);
+    expect(linked.map((segment) => segment.text).join("")).toBe(href);
+    expect(segments.find((segment) => segment.text.includes("界"))?.href).toBeUndefined();
+  });
 });
 
 describe("readTerminalFrame cursor", () => {
@@ -98,6 +106,15 @@ describe("readTerminalViewport", () => {
       term.write("first line\r\nsecond line\r\n", () => resolve(readTerminalViewport(term)));
     });
     expect(text).toBe("first line\nsecond line");
+  });
+
+  it("copies the custom scrollback viewport instead of the live tail", async () => {
+    const term = new Terminal({ cols: 20, rows: 3, allowProposedApi: true, scrollback: 100 });
+    await new Promise<void>((resolve) => {
+      term.write("L1\r\nL2\r\nL3\r\nL4\r\nL5\r\n", () => resolve());
+    });
+    expect(readTerminalViewport(term, 2)).toBe("L2\nL3\nL4");
+    expect(readTerminalViewport(term)).toBe("L4\nL5");
   });
 });
 

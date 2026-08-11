@@ -51,8 +51,8 @@ export function createAttachmentImageCache(
         if (!response.ok) return null;
         const contentLength = Number(response.headers.get("content-length"));
         if (Number.isFinite(contentLength) && contentLength > maxEncodedBytes) return null;
-        const encoded = new Uint8Array(await response.arrayBuffer());
-        if (encoded.byteLength === 0 || encoded.byteLength > maxEncodedBytes) return null;
+        const encoded = await readResponseBytes(response, maxEncodedBytes);
+        if (!encoded) return null;
         return await decoder(encoded);
       } catch {
         return null;
@@ -74,6 +74,34 @@ export function createAttachmentImageCache(
     load,
     clear: () => cache.clear(),
   };
+}
+
+async function readResponseBytes(
+  response: Response,
+  maxEncodedBytes: number,
+): Promise<Uint8Array | null> {
+  const reader = response.body?.getReader();
+  if (!reader) return null;
+  const chunks: Uint8Array[] = [];
+  let byteLength = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    byteLength += value.byteLength;
+    if (byteLength > maxEncodedBytes) {
+      await reader.cancel();
+      return null;
+    }
+    chunks.push(value);
+  }
+  if (byteLength === 0) return null;
+  const encoded = new Uint8Array(byteLength);
+  let offset = 0;
+  for (const chunk of chunks) {
+    encoded.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return encoded;
 }
 
 function assertPositiveInteger(value: number, name: string): void {

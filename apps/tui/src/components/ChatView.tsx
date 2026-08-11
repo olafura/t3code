@@ -106,6 +106,7 @@ import { RightPanel } from "./RightPanel.tsx";
 import { SelectOverlay, type SelectStatus } from "./SelectOverlay.tsx";
 import { Sidebar } from "./Sidebar.tsx";
 import { ConfirmDeleteMenu, RevertMenu } from "./ThreadOverlays.tsx";
+import { MAX_VISIBLE_USER_INPUT_OPTIONS } from "./ComposerPendingUserInputPanel.tsx";
 import { type TerminalInfo, ThreadTerminalDrawer } from "./ThreadTerminalDrawer.tsx";
 import {
   composerControls,
@@ -125,6 +126,7 @@ import {
   initialTabs,
   reduceKnownTerminals,
   tabsWithDiscovered,
+  updateTabsForThread,
   type ThreadTabs,
 } from "../terminalTabs.ts";
 import { clip } from "../format.ts";
@@ -1624,7 +1626,9 @@ export function ChatView({
   // A pending question renders a panel inside the composer (header + question +
   // options + hint + spacer), so the composer grows to fit it.
   const pendingPanelHeight =
-    composerUserInputActive && uiQuestion ? uiQuestion.options.length + 4 : 0;
+    composerUserInputActive && uiQuestion
+      ? Math.min(uiQuestion.options.length, MAX_VISIBLE_USER_INPUT_OPTIONS) + 4
+      : 0;
   const attachmentPreviewHeight =
     activeComposerImages.length === 0 ? 0 : inlineImagesSupported ? 4 : 1;
   const compactComposerFooter =
@@ -1918,16 +1922,14 @@ export function ChatView({
   const updateThreadTabs = (
     threadId: string,
     update: (tabs: ThreadTabs | null) => ThreadTabs | null,
-  ) =>
-    setTerminalTabs((prev) => {
-      const nextTabs = update(prev.get(threadId) ?? null);
-      if (nextTabs === (prev.get(threadId) ?? null)) return prev;
-      const next = new Map(prev);
-      if (nextTabs) next.set(threadId, nextTabs);
-      else next.delete(threadId);
-      terminalTabsRef.current = next;
-      return next;
-    });
+  ): ThreadTabs | null => {
+    const result = updateTabsForThread(terminalTabsRef.current, threadId, update);
+    if (result.map !== terminalTabsRef.current) {
+      terminalTabsRef.current = result.map;
+      setTerminalTabs(result.map);
+    }
+    return result.tabs;
+  };
 
   const detailIdForTabs = detail?.id ?? null;
   const detailIdForTabsRef = React.useRef(detailIdForTabs);
@@ -1941,19 +1943,11 @@ export function ChatView({
       if (event.type !== "remove") return;
       const openTabs = terminalTabsRef.current.get(event.threadId);
       if (!openTabs?.ids.includes(event.terminalId)) return;
-      const removedFinalOpenTab = openTabs.ids.length === 1;
-      setTerminalTabs((previous) => {
-        const tabs = previous.get(event.threadId);
-        if (!tabs?.ids.includes(event.terminalId)) return previous;
-        const remaining = closeTab(tabs, event.terminalId);
-        const next = new Map(previous);
-        if (remaining) next.set(event.threadId, remaining);
-        else next.delete(event.threadId);
-        terminalTabsRef.current = next;
-        return next;
-      });
+      const remaining = updateThreadTabs(event.threadId, (tabs) =>
+        tabs?.ids.includes(event.terminalId) ? closeTab(tabs, event.terminalId) : tabs,
+      );
       if (
-        removedFinalOpenTab &&
+        remaining === null &&
         terminalOpenRef.current &&
         detailIdForTabsRef.current === event.threadId
       ) {
@@ -2055,11 +2049,11 @@ export function ChatView({
   const closeTerminal = (id: string) => {
     if (!detail) return;
     void client.terminalClose(detail.id, id).catch(() => {});
-    const willBeEmpty = (detailTabs?.ids.length ?? 0) <= 1;
-    updateThreadTabs(detail.id, (tabs) =>
+    const remaining = updateThreadTabs(detail.id, (tabs) =>
       tabs && tabs.ids.includes(id) ? closeTab(tabs, id) : tabs,
     );
-    if (willBeEmpty) {
+    if (remaining === null) {
+      terminalOpenRef.current = false;
       setTerminalOpen(false);
       setTerminalFocused(false);
     }
@@ -3020,14 +3014,20 @@ export function ChatView({
     onApprove: () => {
       const approval = approvals[activeApprovalIndex];
       if (!detail || !approval) return;
-      void client.approve(detail.id, approval.requestId, "accept").catch(() => {});
-      store.setStatus("Approved.", "success");
+      store.setStatus("Approving…", "busy");
+      void client.approve(detail.id, approval.requestId, "accept").then(
+        () => store.setStatus("Approved.", "success"),
+        (error) => store.setStatus(`Approval failed: ${String(error)}`, "error"),
+      );
     },
     onDecline: () => {
       const approval = approvals[activeApprovalIndex];
       if (!detail || !approval) return;
-      void client.approve(detail.id, approval.requestId, "decline").catch(() => {});
-      store.setStatus("Declined.", "success");
+      store.setStatus("Declining…", "busy");
+      void client.approve(detail.id, approval.requestId, "decline").then(
+        () => store.setStatus("Declined.", "success"),
+        (error) => store.setStatus(`Decline failed: ${String(error)}`, "error"),
+      );
     },
     onSend: focus === "new" ? submitNewThread : sendReply,
     onEscape: () => {

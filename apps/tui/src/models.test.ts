@@ -50,6 +50,21 @@ describe("flattenModelOptions", () => {
   it("Given a provider with no models, then it contributes nothing", () => {
     expect(flattenModelOptions([provider("empty", "Empty", [])])).toEqual([]);
   });
+
+  it("excludes disabled and unavailable providers from the picker", () => {
+    const enabled = provider("codex", "Codex", [{ slug: "gpt-5", name: "GPT-5" }]);
+    const disabled = {
+      ...provider("claude", "Claude", [{ slug: "opus", name: "Opus" }]),
+      enabled: false,
+    };
+    const unavailable = {
+      ...provider("cursor", "Cursor", [{ slug: "auto", name: "Auto" }]),
+      availability: "unavailable",
+    };
+    expect(
+      flattenModelOptions([enabled, disabled, unavailable] as never).map((item) => item.model),
+    ).toEqual(["gpt-5"]);
+  });
 });
 
 describe("currentModelIndex", () => {

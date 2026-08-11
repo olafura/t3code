@@ -183,7 +183,7 @@ const CLIENT_UI_GAPS = [
     area: "Plan workspace",
     serverCapabilities: ["thread.proposed-plan.upsert", "projects.writeFile"],
     serverSources: ["apps/server/src/orchestration/decider.ts", "apps/server/src/ws.ts"],
-    clientSources: [{ client: "web", path: "apps/web/src/components/PlanSidebar.tsx" }],
+    clientSources: [{ client: "web", path: "apps/web/src/components/ChatView.tsx" }],
     scenarios: [
       "Given a thread has an active plan, when plan progress changes, then the TUI shows the explanation and live status of every plan step.",
       "Given a proposed plan is visible, when the user opens plan actions, then the TUI can copy it or save it to the workspace as Markdown.",

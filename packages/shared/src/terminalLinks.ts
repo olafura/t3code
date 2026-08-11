@@ -19,7 +19,14 @@ export interface TerminalLinkBufferRange {
 
 export interface TerminalBufferLineLike {
   readonly isWrapped?: boolean;
+  readonly length?: number;
   translateToString(trimRight?: boolean): string;
+  getCell?(column: number):
+    | {
+        getChars(): string;
+        getWidth(): number;
+      }
+    | undefined;
 }
 
 export interface WrappedTerminalLinkLineSegment {
@@ -27,6 +34,8 @@ export interface WrappedTerminalLinkLineSegment {
   text: string;
   startIndex: number;
   endIndex: number;
+  /** One-based terminal cell column for each UTF-16 code unit in `text`. */
+  cellColumns?: ReadonlyArray<number>;
 }
 
 export interface WrappedTerminalLinkLine {
@@ -198,12 +207,14 @@ export function collectWrappedTerminalLinkLine(
     const nextLine = getLine(currentBufferLineNumber);
     const hasWrappedContinuation = nextLine?.isWrapped === true;
     const text = currentLine.translateToString(!hasWrappedContinuation);
+    const cellColumns = collectCellColumns(currentLine, text);
 
     segments.push({
       bufferLineNumber: currentBufferLineNumber,
       text,
       startIndex: nextStartIndex,
       endIndex: nextStartIndex + text.length,
+      ...(cellColumns ? { cellColumns } : {}),
     });
     nextStartIndex += text.length;
 
@@ -217,14 +228,34 @@ export function collectWrappedTerminalLinkLine(
   };
 }
 
+function collectCellColumns(
+  line: TerminalBufferLineLike,
+  text: string,
+): ReadonlyArray<number> | undefined {
+  if (!line.getCell || line.length === undefined) return undefined;
+  const columns: number[] = [];
+  let characterIndex = 0;
+  for (let column = 0; column < line.length && characterIndex < text.length; column += 1) {
+    const cell = line.getCell(column);
+    if (!cell || cell.getWidth() === 0) continue;
+    const chars = cell.getChars() || " ";
+    for (let index = 0; index < chars.length && characterIndex < text.length; index += 1) {
+      columns[characterIndex] = column + 1;
+      characterIndex += 1;
+    }
+  }
+  return columns.length === text.length ? columns : undefined;
+}
+
 function resolveCharacterPosition(
   segments: ReadonlyArray<WrappedTerminalLinkLineSegment>,
   characterIndex: number,
 ): TerminalLinkBufferPosition {
   for (const segment of segments) {
     if (characterIndex < segment.endIndex) {
+      const localIndex = characterIndex - segment.startIndex;
       return {
-        x: characterIndex - segment.startIndex + 1,
+        x: segment.cellColumns?.[localIndex] ?? localIndex + 1,
         y: segment.bufferLineNumber,
       };
     }
@@ -232,7 +263,7 @@ function resolveCharacterPosition(
 
   const lastSegment = segments[segments.length - 1];
   return {
-    x: Math.max(lastSegment?.text.length ?? 0, 1),
+    x: Math.max(lastSegment?.cellColumns?.at(-1) ?? lastSegment?.text.length ?? 0, 1),
     y: lastSegment?.bufferLineNumber ?? 1,
   };
 }

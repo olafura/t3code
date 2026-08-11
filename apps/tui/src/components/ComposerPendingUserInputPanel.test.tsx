@@ -82,4 +82,27 @@ describe("ComposerPendingUserInputPanel", () => {
     expect(frame).toContain("[ ] SQLite");
     expect(frame).toContain("Space toggle");
   });
+
+  it("windows long option lists around the highlighted option", async () => {
+    const options = Array.from({ length: 12 }, (_, index) => ({
+      label: `Option ${index + 1}`,
+      description: "",
+    }));
+    const longPending: PendingUserInput = {
+      ...pending,
+      questions: [{ ...pending.questions[0]!, options }],
+    };
+    const frame = await frameOf(
+      <ComposerPendingUserInputPanel
+        pending={longPending}
+        questionIndex={0}
+        optionIndex={11}
+        selectedLabels={[]}
+        width={60}
+      />,
+    );
+    expect(frame).toContain("▸ ( ) Option 12");
+    expect(frame).toContain("Option 5");
+    expect(frame).not.toContain("Option 4");
+  });
 });

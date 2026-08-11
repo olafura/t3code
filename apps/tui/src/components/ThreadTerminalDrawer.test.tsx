@@ -263,6 +263,8 @@ describe("ThreadTerminalDrawer session events", () => {
     jest.useFakeTimers();
     return {
       t,
+      copyRef,
+      scrollRef,
       emit: (event: TerminalStreamEvent) => renderTerminalEvent(t, onEvent, event),
     };
   };
@@ -319,6 +321,31 @@ describe("ThreadTerminalDrawer session events", () => {
       terminalId: "term-1",
     } as never);
     expect(t.captureCharFrame()).not.toContain("visible-before-clear");
+    t.renderer.destroy();
+  });
+
+  it("keeps copied scrollback anchored while new output arrives", async () => {
+    const { t, emit, copyRef, scrollRef } = await renderTerminalSession(false);
+    await emit({
+      type: "output",
+      threadId: "t1",
+      terminalId: "term-1",
+      data: "L1\r\nL2\r\nL3\r\nL4\r\nL5\r\n",
+    } as never);
+    await React.act(async () => {
+      scrollRef.current?.("line-up");
+      await t.renderOnce();
+    });
+    const before = copyRef.current?.();
+    expect(before).toContain("L3");
+
+    await emit({
+      type: "output",
+      threadId: "t1",
+      terminalId: "term-1",
+      data: "L6\r\n",
+    } as never);
+    expect(copyRef.current?.()).toBe(before);
     t.renderer.destroy();
   });
 });

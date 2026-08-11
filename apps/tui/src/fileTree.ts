@@ -43,8 +43,12 @@ function emptyDir(name: string, path: string): MutableDir {
 export function buildFileTree(files: ReadonlyArray<TreeFileInput>): ReadonlyArray<TreeNode> {
   const root = emptyDir("", "");
   for (const file of files) {
-    const segments = file.path.split("/").filter((s) => s.length > 0);
+    const segments = file.path
+      .replaceAll("\\", "/")
+      .split("/")
+      .filter((s) => s.length > 0);
     if (segments.length === 0) continue;
+    const normalizedPath = segments.join("/");
     const fileName = segments.at(-1) as string;
     let cursor = root;
     for (let i = 0; i < segments.length - 1; i += 1) {
@@ -60,7 +64,7 @@ export function buildFileTree(files: ReadonlyArray<TreeFileInput>): ReadonlyArra
     cursor.files.push({
       kind: "file",
       name: fileName,
-      path: file.path,
+      path: normalizedPath,
       additions: file.additions,
       deletions: file.deletions,
     });

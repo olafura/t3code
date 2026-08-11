@@ -10,6 +10,8 @@ import type { PendingUserInput } from "../userInput.ts";
 // Purely presentational — key handling lives in useKeyBindings, answer state in
 // ChatView.
 
+export const MAX_VISIBLE_USER_INPUT_OPTIONS = 8;
+
 export const ComposerPendingUserInputPanel = React.memo(function ComposerPendingUserInputPanel({
   pending,
   questionIndex,
@@ -28,6 +30,14 @@ export const ComposerPendingUserInputPanel = React.memo(function ComposerPending
   if (!question) return null;
   const multi = question.multiSelect;
   const labelRoom = Math.max(8, width - 8);
+  const windowStart = Math.min(
+    Math.max(0, optionIndex - MAX_VISIBLE_USER_INPUT_OPTIONS + 1),
+    Math.max(0, question.options.length - MAX_VISIBLE_USER_INPUT_OPTIONS),
+  );
+  const visibleOptions = question.options.slice(
+    windowStart,
+    windowStart + MAX_VISIBLE_USER_INPUT_OPTIONS,
+  );
   return (
     <box flexDirection="column" marginBottom={1} flexShrink={0}>
       <text>
@@ -37,8 +47,8 @@ export const ComposerPendingUserInputPanel = React.memo(function ComposerPending
         ) : null}
       </text>
       <text fg={palette.text}>{clip(question.question, labelRoom)}</text>
-      {question.options.map((option, index) => {
-        const active = index === optionIndex;
+      {visibleOptions.map((option, index) => {
+        const active = windowStart + index === optionIndex;
         const selected = selectedLabels.includes(option.label);
         const marker = multi ? (selected ? "[x]" : "[ ]") : selected ? "(•)" : "( )";
         return (

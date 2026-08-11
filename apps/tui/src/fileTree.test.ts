@@ -28,6 +28,15 @@ describe("buildFileTree", () => {
     expect(top.name).toBe("a/b/c");
     expect(top.children.map((n) => n.name)).toEqual(["deep.ts"]);
   });
+
+  it("normalizes Windows separators before grouping paths", () => {
+    const tree = buildFileTree([file("apps\\web\\src\\index.ts")]);
+    const rows = flattenFileTree(tree, new Set());
+    expect(rows.map((row) => `${row.kind}:${row.path}`)).toEqual([
+      "dir:apps/web/src",
+      "file:apps/web/src/index.ts",
+    ]);
+  });
 });
 
 describe("flattenFileTree", () => {

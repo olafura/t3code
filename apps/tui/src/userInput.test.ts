@@ -63,6 +63,16 @@ describe("derivePendingUserInputs", () => {
       derivePendingUserInputs([activity("user-input.requested", { requestId: "r1" })]),
     ).toHaveLength(0);
   });
+
+  it("orders legacy unsequenced requests before their sequenced resolution", () => {
+    const requested = activity(
+      "user-input.requested",
+      requestPayload("r1", [question()]),
+    ) as OrchestrationThreadActivity & { sequence?: number };
+    delete requested.sequence;
+    const resolved = activity("user-input.resolved", { requestId: "r1" });
+    expect(derivePendingUserInputs([resolved, requested])).toEqual([]);
+  });
 });
 
 describe("buildUserInputAnswers / isUserInputComplete", () => {

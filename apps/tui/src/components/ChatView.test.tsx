@@ -146,6 +146,7 @@ function fakeClient({
   terminalClear = async () => {},
   terminalRestart = async () => {},
   terminalClose = async () => {},
+  approve = async () => {},
   setInteractionMode = async () => {},
   settleThread = async () => {},
   unsettleThread = async () => {},
@@ -196,6 +197,7 @@ function fakeClient({
   readonly terminalClear?: TuiClient["terminalClear"];
   readonly terminalRestart?: TuiClient["terminalRestart"];
   readonly terminalClose?: TuiClient["terminalClose"];
+  readonly approve?: TuiClient["approve"];
   readonly setInteractionMode?: TuiClient["setInteractionMode"];
   readonly settleThread?: TuiClient["settleThread"];
   readonly unsettleThread?: TuiClient["unsettleThread"];
@@ -259,6 +261,7 @@ function fakeClient({
     settleThread,
     unsettleThread,
     terminalClose,
+    approve,
     listTerminalIds,
     listModels,
     getServerConfig,
@@ -2109,6 +2112,38 @@ describe("ChatView thread settlement", () => {
     await setup.waitForFrame(
       (frame) => frame.includes("settle") && !frame.includes("Settle thread"),
     );
+    setup.renderer.destroy();
+  });
+
+  it("reports an approval RPC failure instead of claiming success", async () => {
+    const approvalActivity = {
+      id: "approval-1",
+      tone: "warning",
+      kind: "approval.requested",
+      summary: "Approval requested",
+      payload: { requestId: "request-1", requestKind: "command", detail: "git status" },
+      turnId: null,
+      sequence: 1,
+      createdAt: "2026-07-13T00:00:00.000Z",
+    } as never;
+    const fake = fakeClient({
+      detail: thread([approvalActivity]),
+      approve: async () => {
+        throw new Error("connection lost");
+      },
+    });
+    const setup = await testRender(<ChatView client={fake.client} onExit={() => {}} />, {
+      width: 110,
+      height: 28,
+    });
+    await selectThread(setup, fake.connect);
+    await React.act(async () => {
+      setup.mockInput.pressKey("a", { ctrl: true });
+      await setup.renderOnce();
+      await setup.flush();
+    });
+    await setup.waitForFrame((frame) => frame.includes("Approval failed"));
+    expect(setup.captureCharFrame()).not.toContain("Approved.");
     setup.renderer.destroy();
   });
 });

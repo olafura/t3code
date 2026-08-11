@@ -66,4 +66,22 @@ describe("derivePendingApprovals", () => {
     ]);
     expect(open.map((a) => a.requestId)).toEqual(["r1", "r2"]);
   });
+
+  it("orders legacy unsequenced requests before their sequenced resolution", () => {
+    const requested = activity(
+      "approval.requested",
+      { requestId: "r1", requestKind: "command" },
+      1,
+    ) as OrchestrationThreadActivity & { sequence?: number };
+    delete requested.sequence;
+    expect(
+      derivePendingApprovals([
+        {
+          ...activity("approval.resolved", { requestId: "r1" }, 2),
+          createdAt: "2026-01-02T00:00:00.000Z",
+        },
+        { ...requested, createdAt: "2026-01-01T00:00:00.000Z" },
+      ]),
+    ).toEqual([]);
+  });
 });
