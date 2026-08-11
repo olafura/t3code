@@ -4,15 +4,13 @@ import * as NodePath from "node:path";
 import {
   CHAT_IMAGE_MIME_BY_EXTENSION,
   PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
+  chatImageMimeTypeForPath,
   type UploadChatImageAttachment,
 } from "@t3tools/contracts";
 import { decodeImage, type RgbaImage } from "@t3tools/opentui-image";
 
 const PREVIEW_MAX_WIDTH = 240;
 const PREVIEW_MAX_HEIGHT = 160;
-
-// Shared with the server, which gates base64 workspace reads to this list.
-const IMAGE_MIME_BY_EXTENSION = CHAT_IMAGE_MIME_BY_EXTENSION;
 
 const IMAGE_EXTENSION_BY_MIME: Readonly<Record<string, string>> = {
   "image/avif": "avif",
@@ -38,8 +36,7 @@ export interface ComposerImageAttachment {
 }
 
 export function imageMimeTypeForPath(relativePath: string): string | null {
-  const extension = relativePath.split(".").at(-1)?.toLowerCase();
-  return extension ? (IMAGE_MIME_BY_EXTENSION[extension] ?? null) : null;
+  return chatImageMimeTypeForPath(relativePath);
 }
 
 export function isSupportedImagePath(relativePath: string): boolean {
@@ -284,7 +281,7 @@ export async function prepareComposerImageBytes(
   if (name.length === 0 || name.length > 255) throw new Error("Image filename is invalid.");
 
   const preview = await decoder(encoded);
-  const canonicalMimeType = IMAGE_MIME_BY_EXTENSION[extension] ?? mimeType;
+  const canonicalMimeType = CHAT_IMAGE_MIME_BY_EXTENSION[extension] ?? mimeType;
   const base64 = NodeBuffer.Buffer.from(
     encoded.buffer,
     encoded.byteOffset,
