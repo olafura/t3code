@@ -1453,3 +1453,366 @@ it.layer(TestLayer)("ProjectionStoreV2", (it) => {
     }),
   );
 });
+
+it.layer(TestLayer)("ProjectionStoreV2 windowed thread detail", (it) => {
+  const seedThread = (input: {
+    readonly key: string;
+    readonly pairs: number;
+    readonly forkedFromRunOfThread?: {
+      readonly threadId: ThreadId;
+      readonly runId: RunId;
+    };
+  }) =>
+    Effect.gen(function* () {
+      const projectionStore = yield* ProjectionStoreV2;
+      const now = yield* DateTime.now;
+      const threadId = ThreadId.make(`thread:${input.key}`);
+      const projectId = ProjectId.make(`project:${input.key}`);
+      yield* projectionStore.apply({
+        id: EventId.make(`event:${input.key}:thread`),
+        type: "thread.created",
+        threadId,
+        occurredAt: now,
+        payload: {
+          createdBy: "user",
+          creationSource: "web",
+          id: threadId,
+          projectId,
+          title: `Windowed detail ${input.key}`,
+          providerInstanceId,
+          modelSelection,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: null,
+          activeProviderThreadId: null,
+          lineage: {
+            parentThreadId: input.forkedFromRunOfThread?.threadId ?? null,
+            relationshipToParent: input.forkedFromRunOfThread === undefined ? null : "fork",
+            rootThreadId: input.forkedFromRunOfThread?.threadId ?? threadId,
+          },
+          forkedFrom:
+            input.forkedFromRunOfThread === undefined
+              ? null
+              : {
+                  type: "run",
+                  threadId: input.forkedFromRunOfThread.threadId,
+                  runId: input.forkedFromRunOfThread.runId,
+                },
+          createdAt: now,
+          updatedAt: now,
+          archivedAt: null,
+          settledOverride: null,
+          settledAt: null,
+          lastVisitedAt: null,
+          deletedAt: null,
+        },
+      });
+
+      for (let ordinal = 1; ordinal <= input.pairs; ordinal += 1) {
+        const runId = RunId.make(`run:${input.key}:${ordinal}`);
+        const nodeId = NodeId.make(`node:${input.key}:${ordinal}`);
+        const userMessageId = MessageId.make(`message:${input.key}:user:${ordinal}`);
+        const assistantMessageId = MessageId.make(`message:${input.key}:assistant:${ordinal}`);
+        yield* projectionStore.apply({
+          id: EventId.make(`event:${input.key}:run-${ordinal}`),
+          type: "run.created",
+          threadId,
+          runId,
+          nodeId,
+          driver,
+          occurredAt: now,
+          payload: {
+            id: runId,
+            threadId,
+            ordinal,
+            providerInstanceId,
+            modelSelection,
+            providerThreadId: null,
+            userMessageId,
+            rootNodeId: nodeId,
+            activeAttemptId: null,
+            status: "completed",
+            requestedAt: now,
+            startedAt: now,
+            completedAt: now,
+            checkpointId: null,
+            contextHandoffId: null,
+          },
+        });
+        yield* projectionStore.apply({
+          id: EventId.make(`event:${input.key}:user-item-${ordinal}`),
+          type: "turn-item.updated",
+          threadId,
+          runId,
+          nodeId,
+          driver,
+          occurredAt: now,
+          payload: {
+            createdBy: "user",
+            creationSource: "web",
+            id: TurnItemId.make(`turn-item:${input.key}:user:${ordinal}`),
+            threadId,
+            runId,
+            nodeId,
+            providerThreadId: null,
+            providerTurnId: null,
+            nativeItemRef: null,
+            parentItemId: null,
+            ordinal: ordinal * 100,
+            status: "completed",
+            title: null,
+            startedAt: now,
+            completedAt: now,
+            updatedAt: now,
+            type: "user_message",
+            messageId: userMessageId,
+            inputIntent: "turn_start",
+            text: `u${ordinal}`,
+            attachments: [],
+          },
+        });
+        yield* projectionStore.apply({
+          id: EventId.make(`event:${input.key}:user-message-${ordinal}`),
+          type: "message.updated",
+          threadId,
+          runId,
+          nodeId,
+          driver,
+          occurredAt: now,
+          payload: {
+            createdBy: "user",
+            creationSource: "web",
+            id: userMessageId,
+            threadId,
+            runId,
+            nodeId,
+            role: "user",
+            text: `u${ordinal}`,
+            attachments: [],
+            streaming: false,
+            createdAt: now,
+            updatedAt: now,
+          },
+        });
+        yield* projectionStore.apply({
+          id: EventId.make(`event:${input.key}:assistant-item-${ordinal}`),
+          type: "turn-item.updated",
+          threadId,
+          runId,
+          nodeId,
+          driver,
+          occurredAt: now,
+          payload: {
+            id: TurnItemId.make(`turn-item:${input.key}:assistant:${ordinal}`),
+            threadId,
+            runId,
+            nodeId,
+            providerThreadId: null,
+            providerTurnId: null,
+            nativeItemRef: null,
+            parentItemId: null,
+            ordinal: ordinal * 100 + 1,
+            status: "completed",
+            title: null,
+            startedAt: now,
+            completedAt: now,
+            updatedAt: now,
+            type: "assistant_message",
+            messageId: assistantMessageId,
+            text: `a${ordinal}`,
+            streaming: false,
+          },
+        });
+        yield* projectionStore.apply({
+          id: EventId.make(`event:${input.key}:assistant-message-${ordinal}`),
+          type: "message.updated",
+          threadId,
+          runId,
+          nodeId,
+          driver,
+          occurredAt: now,
+          payload: {
+            createdBy: "agent",
+            creationSource: "provider",
+            id: assistantMessageId,
+            threadId,
+            runId,
+            nodeId,
+            role: "assistant",
+            text: `a${ordinal}`,
+            attachments: [],
+            streaming: false,
+            createdAt: now,
+            updatedAt: now,
+          },
+        });
+      }
+      return threadId;
+    });
+
+  const itemTexts = (items: ReadonlyArray<{ readonly type: string }>) =>
+    items.map((item) => ("text" in item && typeof item.text === "string" ? item.text : item.type));
+
+  it.effect("windows the newest user turns and pages older history by cursor", () =>
+    Effect.gen(function* () {
+      const projectionStore = yield* ProjectionStoreV2;
+      const threadId = yield* seedThread({ key: "projection-window-pages", pairs: 5 });
+
+      const first = yield* projectionStore.getThreadSnapshot(threadId, { turnLimit: 2 });
+      assert.deepEqual(itemTexts(first.projection.turnItems), ["u4", "a4", "u5", "a5"]);
+      assert.deepEqual(
+        first.projection.messages.map((message) => message.text),
+        ["u4", "a4", "u5", "a5"],
+      );
+      assert.deepEqual(
+        first.projection.visibleTurnItems.map((row) => row.visibility),
+        ["local", "local", "local", "local"],
+      );
+      assert.isDefined(first.page);
+      assert.isTrue(first.page?.hasMore);
+      assert.isString(first.page?.beforeCursor);
+      assert.strictEqual(first.page?.threadSequence, first.snapshotSequence);
+
+      const firstCursor = first.page?.beforeCursor;
+      assert.isNotNull(firstCursor);
+      const second = yield* projectionStore.getThreadSnapshot(threadId, {
+        turnLimit: 2,
+        ...(typeof firstCursor === "string" ? { beforeCursor: firstCursor } : {}),
+      });
+      assert.deepEqual(itemTexts(second.projection.turnItems), ["u2", "a2", "u3", "a3"]);
+      assert.deepEqual(
+        second.projection.messages.map((message) => message.text),
+        ["u2", "a2", "u3", "a3"],
+      );
+      assert.isTrue(second.page?.hasMore);
+
+      const secondCursor = second.page?.beforeCursor;
+      const third = yield* projectionStore.getThreadSnapshot(threadId, {
+        turnLimit: 2,
+        ...(typeof secondCursor === "string" ? { beforeCursor: secondCursor } : {}),
+      });
+      assert.deepEqual(itemTexts(third.projection.turnItems), ["u1", "a1"]);
+      assert.isFalse(third.page?.hasMore);
+      assert.isNull(third.page?.beforeCursor);
+
+      const unwindowed = yield* projectionStore.getThreadSnapshot(threadId);
+      assert.lengthOf(unwindowed.projection.turnItems, 10);
+      assert.lengthOf(unwindowed.projection.messages, 10);
+      assert.isUndefined(unwindowed.page);
+    }),
+  );
+
+  it.effect("keeps unreferenced messages on the first page only", () =>
+    Effect.gen(function* () {
+      const projectionStore = yield* ProjectionStoreV2;
+      const threadId = yield* seedThread({ key: "projection-window-straggler", pairs: 3 });
+      const now = yield* DateTime.now;
+      yield* projectionStore.apply({
+        id: EventId.make("event:projection-window-straggler:pending"),
+        type: "message.updated",
+        threadId,
+        driver,
+        occurredAt: now,
+        payload: {
+          createdBy: "user",
+          creationSource: "web",
+          id: MessageId.make("message:projection-window-straggler:pending"),
+          threadId,
+          runId: null,
+          nodeId: null,
+          role: "user",
+          text: "pending",
+          attachments: [],
+          streaming: false,
+          createdAt: now,
+          updatedAt: now,
+        },
+      });
+
+      const first = yield* projectionStore.getThreadSnapshot(threadId, { turnLimit: 1 });
+      assert.include(
+        first.projection.messages.map((message) => message.text),
+        "pending",
+      );
+
+      const cursor = first.page?.beforeCursor;
+      const older = yield* projectionStore.getThreadSnapshot(threadId, {
+        turnLimit: 1,
+        ...(typeof cursor === "string" ? { beforeCursor: cursor } : {}),
+      });
+      assert.notInclude(
+        older.projection.messages.map((message) => message.text),
+        "pending",
+      );
+    }),
+  );
+
+  it.effect("degrades a malformed cursor to the first page", () =>
+    Effect.gen(function* () {
+      const projectionStore = yield* ProjectionStoreV2;
+      const threadId = yield* seedThread({ key: "projection-window-malformed", pairs: 3 });
+
+      const snapshot = yield* projectionStore.getThreadSnapshot(threadId, {
+        turnLimit: 1,
+        beforeCursor: "not-a-cursor",
+      });
+      assert.deepEqual(itemTexts(snapshot.projection.turnItems), ["u3", "a3"]);
+      assert.isTrue(snapshot.page?.hasMore);
+    }),
+  );
+
+  it.effect("serves the inherited fork prefix as the final page", () =>
+    Effect.gen(function* () {
+      const projectionStore = yield* ProjectionStoreV2;
+      const sourceThreadId = yield* seedThread({ key: "projection-window-fork-source", pairs: 2 });
+      const targetThreadId = yield* seedThread({
+        key: "projection-window-fork-target",
+        pairs: 1,
+        forkedFromRunOfThread: {
+          threadId: sourceThreadId,
+          runId: RunId.make("run:projection-window-fork-source:2"),
+        },
+      });
+
+      // Local history fits in one window, but the fork still has an inherited
+      // prefix: hasMore stays true and the cursor requests the final page.
+      const first = yield* projectionStore.getThreadSnapshot(targetThreadId, { turnLimit: 5 });
+      assert.deepEqual(itemTexts(first.projection.turnItems), ["u1", "a1"]);
+      assert.deepEqual(
+        first.projection.visibleTurnItems.map((row) => row.visibility),
+        ["local", "local"],
+      );
+      assert.isTrue(first.page?.hasMore);
+      assert.isString(first.page?.beforeCursor);
+
+      const cursor = first.page?.beforeCursor;
+      const inherited = yield* projectionStore.getThreadSnapshot(targetThreadId, {
+        turnLimit: 5,
+        ...(typeof cursor === "string" ? { beforeCursor: cursor } : {}),
+      });
+      assert.lengthOf(inherited.projection.turnItems, 0);
+      assert.lengthOf(inherited.projection.messages, 0);
+      assert.deepEqual(
+        inherited.projection.visibleTurnItems.map((row) => [row.visibility, row.item.type]),
+        [
+          ["inherited", "user_message"],
+          ["inherited", "assistant_message"],
+          ["inherited", "user_message"],
+          ["inherited", "assistant_message"],
+          ["synthetic", "fork"],
+        ],
+      );
+      assert.isFalse(inherited.page?.hasMore);
+      assert.isNull(inherited.page?.beforeCursor);
+
+      // The unwindowed read still returns the stitched full history.
+      const unwindowed = yield* projectionStore.getThreadSnapshot(targetThreadId);
+      assert.deepEqual(
+        unwindowed.projection.visibleTurnItems.map((row) => row.visibility),
+        ["inherited", "inherited", "inherited", "inherited", "synthetic", "local", "local"],
+      );
+      assert.isUndefined(unwindowed.page);
+    }),
+  );
+});

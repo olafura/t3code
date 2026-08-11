@@ -44,6 +44,7 @@ import {
 } from "./providerPolicy.ts";
 import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance.ts";
 import { OrchestrationProjectShell } from "./orchestrationProject.ts";
+import { OrchestrationThreadDetailPage } from "./orchestration.ts";
 
 export const OrchestrationV2Actor = Schema.Literals(["user", "agent", "system"]);
 export type OrchestrationV2Actor = typeof OrchestrationV2Actor.Type;
@@ -2376,6 +2377,14 @@ export const OrchestrationV2SubscribeThreadInput = Schema.Struct({
    * sequence on the client).
    */
   afterSequence: Schema.optionalKey(NonNegativeInt),
+  /**
+   * Windows the fallback snapshot frame to the most recent `turnLimit` user
+   * turns (see `OrchestrationThreadDetailWindow`). Only consulted when the
+   * server falls back to sending a snapshot (no `afterSequence`, or the
+   * resume gap is too large to replay); live events are never windowed.
+   * Omitting it keeps the full-thread snapshot, so pagination stays opt-in.
+   */
+  turnLimit: Schema.optionalKey(PositiveInt),
   /** Requests a marker between initial catch-up and live delivery. */
   requestCompletionMarker: Schema.optionalKey(Schema.Boolean),
 });
@@ -2384,6 +2393,12 @@ export type OrchestrationV2SubscribeThreadInput = typeof OrchestrationV2Subscrib
 export const OrchestrationV2ThreadDetailSnapshot = Schema.Struct({
   snapshotSequence: NonNegativeInt,
   projection: OrchestrationV2ThreadProjection,
+  /**
+   * Present only when the read was windowed (a `turnLimit` was requested).
+   * For v2 the `snapshotSequence` is already thread-scoped, so
+   * `page.threadSequence` always equals `snapshotSequence`.
+   */
+  page: Schema.optionalKey(OrchestrationThreadDetailPage),
 });
 export type OrchestrationV2ThreadDetailSnapshot = typeof OrchestrationV2ThreadDetailSnapshot.Type;
 
@@ -2395,6 +2410,8 @@ export const OrchestrationV2ThreadStreamItem = Schema.Union([
     kind: Schema.Literal("snapshot"),
     snapshotSequence: NonNegativeInt,
     projection: OrchestrationV2ThreadProjection,
+    /** Present only when the snapshot frame was windowed by `turnLimit`. */
+    page: Schema.optionalKey(OrchestrationThreadDetailPage),
   }),
   Schema.Struct({
     kind: Schema.Literal("event"),

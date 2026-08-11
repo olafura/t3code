@@ -334,6 +334,11 @@ const ServerWsRpcGroup = WsRpcGroup;
 // past this gap a single O(active-threads) snapshot is cheaper and bounded.
 // Matches the event store's default page size (DEFAULT_READ_FROM_SEQUENCE_LIMIT).
 const SHELL_RESUME_MAX_GAP = 1_000;
+// Same bound for per-thread resumes. Past this gap the catch-up replay would
+// silently truncate at the event store's read page size, leaving the client
+// with a hole between the replayed prefix and live events; a fresh (windowed
+// when the client requests it) snapshot is both correct and cheaper.
+const THREAD_RESUME_MAX_GAP = 1_000;
 
 function toAuthAccessStreamEvent(
   change: PairingGrantStore.BootstrapCredentialChange | SessionStore.SessionCredentialChange,
@@ -589,6 +594,7 @@ const makeWsRpcLayer = (
         function* (input: {
           readonly threadId: ThreadId;
           readonly afterSequence?: number;
+          readonly turnLimit?: number;
           readonly requestCompletionMarker?: boolean;
         }) {
           yield* Effect.annotateCurrentSpan({
@@ -673,22 +679,34 @@ const makeWsRpcLayer = (
                   }),
               ),
             );
-            return Stream.concat(
-              Stream.concat(replayThrough(input.afterSequence, highWater), completionMarker),
-              eventStreamFrom(highWater),
-            );
+            // Per-event replay only within a bounded gap: past it the read
+            // would silently truncate at the event store's page size and the
+            // client would apply live events on top of a hole. Fall through to
+            // the snapshot path instead (windowed when the client asked).
+            const replayGap = highWater - input.afterSequence;
+            if (replayGap >= 0 && replayGap <= THREAD_RESUME_MAX_GAP) {
+              return Stream.concat(
+                Stream.concat(replayThrough(input.afterSequence, highWater), completionMarker),
+                eventStreamFrom(highWater),
+              );
+            }
           }
 
-          const snapshot = yield* threadManagement.getThreadSnapshot(input.threadId).pipe(
-            Effect.mapError(
-              (cause) =>
-                new OrchestrationV2GetThreadProjectionError({
-                  threadId: input.threadId,
-                  message: `Failed to load orchestration V2 thread ${input.threadId}`,
-                  cause,
-                }),
-            ),
-          );
+          const snapshot = yield* threadManagement
+            .getThreadSnapshot(
+              input.threadId,
+              input.turnLimit === undefined ? undefined : { turnLimit: input.turnLimit },
+            )
+            .pipe(
+              Effect.mapError(
+                (cause) =>
+                  new OrchestrationV2GetThreadProjectionError({
+                    threadId: input.threadId,
+                    message: `Failed to load orchestration V2 thread ${input.threadId}`,
+                    cause,
+                  }),
+              ),
+            );
           const { projection, snapshotSequence } = snapshot;
 
           return Stream.concat(
@@ -697,6 +715,7 @@ const makeWsRpcLayer = (
                 kind: "snapshot" as const,
                 snapshotSequence,
                 projection,
+                ...(snapshot.page !== undefined ? { page: snapshot.page } : {}),
               }),
               completionMarker,
             ),

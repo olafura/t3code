@@ -98,22 +98,35 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
         Effect.fn("environment.orchestration.threadSnapshot")(function* (args) {
           yield* annotateEnvironmentRequest(args.endpoint.name);
           yield* requireEnvironmentScope(AuthOrchestrationReadScope);
-          const snapshot = yield* threadManagement.getThreadSnapshot(args.params.threadId).pipe(
-            Effect.catch(
-              Effect.fnUntraced(function* (error) {
-                if (isThreadNotFound(error)) {
-                  return yield* failEnvironmentNotFound("thread_not_found");
-                }
-                return yield* failEnvironmentInternal(
-                  "orchestration_thread_snapshot_failed",
-                  error,
-                );
-              }),
-            ),
-          );
+          const snapshot = yield* threadManagement
+            .getThreadSnapshot(
+              args.params.threadId,
+              args.payload.turnLimit === undefined
+                ? undefined
+                : {
+                    turnLimit: args.payload.turnLimit,
+                    ...(args.payload.beforeCursor !== undefined
+                      ? { beforeCursor: args.payload.beforeCursor }
+                      : {}),
+                  },
+            )
+            .pipe(
+              Effect.catch(
+                Effect.fnUntraced(function* (error) {
+                  if (isThreadNotFound(error)) {
+                    return yield* failEnvironmentNotFound("thread_not_found");
+                  }
+                  return yield* failEnvironmentInternal(
+                    "orchestration_thread_snapshot_failed",
+                    error,
+                  );
+                }),
+              ),
+            );
           return {
             snapshotSequence: snapshot.snapshotSequence,
             projection: snapshot.projection,
+            ...(snapshot.page !== undefined ? { page: snapshot.page } : {}),
           };
         }),
       );

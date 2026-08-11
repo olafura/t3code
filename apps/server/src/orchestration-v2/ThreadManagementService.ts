@@ -410,9 +410,9 @@ const make = Effect.gen(function* () {
       Effect.andThen(orchestrator.getThreadProjection(threadId)),
     );
 
-  const getThreadSnapshot: ThreadManagementServiceShape["getThreadSnapshot"] = (threadId) =>
+  const getThreadSnapshot: ThreadManagementServiceShape["getThreadSnapshot"] = (threadId, window) =>
     ensureProjectionTranscript(threadId).pipe(
-      Effect.andThen(orchestrator.getThreadSnapshot(threadId)),
+      Effect.andThen(orchestrator.getThreadSnapshot(threadId, window)),
     );
 
   const dispatch: ThreadManagementServiceShape["dispatch"] = (command) =>

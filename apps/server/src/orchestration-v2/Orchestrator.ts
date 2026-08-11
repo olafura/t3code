@@ -3,6 +3,8 @@ import {
   CommandId,
   type MessageId,
   type ModelSelection,
+  type OrchestrationThreadDetailPage,
+  type OrchestrationThreadDetailWindow,
   OrchestrationV2Command,
   type OrchestrationV2AppThread,
   type OrchestrationV2ContextHandoff,
@@ -151,11 +153,16 @@ export interface OrchestratorV2Shape {
   readonly getThreadProjection: (
     threadId: ThreadId,
   ) => Effect.Effect<OrchestrationV2ThreadProjection, OrchestratorV2Error>;
-  readonly getThreadSnapshot: (threadId: ThreadId) => Effect.Effect<
+  readonly getThreadSnapshot: (
+    threadId: ThreadId,
+    window?: OrchestrationThreadDetailWindow,
+  ) => Effect.Effect<
     {
       readonly schemaVersion: number;
       readonly snapshotSequence: number;
       readonly projection: OrchestrationV2ThreadProjection;
+      /** Present only when the read was windowed (`window.turnLimit` set). */
+      readonly page?: OrchestrationThreadDetailPage;
     },
     OrchestratorV2Error
   >;
@@ -7104,9 +7111,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       projectionStore
         .getThreadProjection(threadId)
         .pipe(Effect.mapError((cause) => new OrchestratorProjectionError({ threadId, cause }))),
-    getThreadSnapshot: (threadId) =>
+    getThreadSnapshot: (threadId, window) =>
       projectionStore
-        .getThreadSnapshot(threadId)
+        .getThreadSnapshot(threadId, window)
         .pipe(Effect.mapError((cause) => new OrchestratorProjectionError({ threadId, cause }))),
     getShellSnapshot: () =>
       projectionStore.getShellSnapshot().pipe(

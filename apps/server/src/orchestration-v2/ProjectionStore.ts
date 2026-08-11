@@ -1,4 +1,6 @@
 import type {
+  OrchestrationThreadDetailPage,
+  OrchestrationThreadDetailWindow,
   OrchestrationV2ConversationMessage,
   OrchestrationV2DomainEvent,
   OrchestrationV2ProjectedTurnItem,
@@ -44,6 +46,11 @@ import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
+
+import {
+  decodeThreadDetailPageCursor,
+  encodeThreadDetailPageCursor,
+} from "./threadDetailCursor.ts";
 
 export class ProjectionStoreApplyEventError extends Schema.TaggedErrorClass<ProjectionStoreApplyEventError>()(
   "ProjectionStoreApplyEventError",
@@ -113,11 +120,16 @@ export interface ProjectionStoreV2Shape {
   readonly getThreadProjection: (
     threadId: ThreadId,
   ) => Effect.Effect<OrchestrationV2ThreadProjection, ProjectionStoreV2Error>;
-  readonly getThreadSnapshot: (threadId: ThreadId) => Effect.Effect<
+  readonly getThreadSnapshot: (
+    threadId: ThreadId,
+    window?: OrchestrationThreadDetailWindow,
+  ) => Effect.Effect<
     {
       readonly schemaVersion: number;
       readonly snapshotSequence: number;
       readonly projection: OrchestrationV2ThreadProjection;
+      /** Present only when the read was windowed (`window.turnLimit` set). */
+      readonly page?: OrchestrationThreadDetailPage;
     },
     ProjectionStoreV2Error
   >;
@@ -638,6 +650,70 @@ function sortMessagesByTurnItemOrder(
 
     return left.id.localeCompare(right.id);
   });
+}
+
+/**
+ * Caps the raw item count of a single windowed page so pathological fan-out
+ * (hundreds of tool items between two user prompts) cannot blow past the
+ * user-anchored `turnLimit`. When the cap truncates mid-turn, `hasMore` stays
+ * true and the next page continues from the boundary item.
+ */
+export const THREAD_DETAIL_MAX_RAW_TURN_ITEMS_PER_PAGE = 400;
+
+/**
+ * Pure reference implementation of the user-anchored turn-item window used by
+ * the SQL read path: walk items newest-first below the exclusive
+ * `(beforeOrdinal, beforeTurnItemId)` keyset boundary, keeping rows until
+ * `turnLimit` user messages have been seen (the boundary user message itself is
+ * included, so a window always starts at a user prompt when one is in range),
+ * bounded by `maxRawItems`. The in-memory testkit store uses this directly.
+ */
+export function windowThreadTurnItems(input: {
+  readonly items: ReadonlyArray<OrchestrationV2TurnItem>;
+  readonly turnLimit: number;
+  readonly beforeOrdinal: number | null;
+  readonly beforeTurnItemId: string | null;
+  readonly maxRawItems?: number;
+}): {
+  readonly items: Array<OrchestrationV2TurnItem>;
+  readonly hasMoreLocal: boolean;
+} {
+  const maxRawItems = input.maxRawItems ?? THREAD_DETAIL_MAX_RAW_TURN_ITEMS_PER_PAGE;
+  const beforeOrdinal = input.beforeOrdinal;
+  const beforeTurnItemId = input.beforeTurnItemId ?? "";
+  const ordered = input.items.toSorted((left, right) =>
+    left.ordinal !== right.ordinal ? left.ordinal - right.ordinal : left.id.localeCompare(right.id),
+  );
+  const belowBoundary =
+    beforeOrdinal === null
+      ? ordered
+      : ordered.filter(
+          (item) =>
+            item.ordinal < beforeOrdinal ||
+            (item.ordinal === beforeOrdinal && item.id < beforeTurnItemId),
+        );
+
+  const window: Array<OrchestrationV2TurnItem> = [];
+  let userMessagesSeen = 0;
+  for (let index = belowBoundary.length - 1; index >= 0; index -= 1) {
+    const item = belowBoundary[index];
+    if (item === undefined || window.length >= maxRawItems) {
+      break;
+    }
+    const isUserMessage = item.type === "user_message";
+    if (isUserMessage) {
+      userMessagesSeen += 1;
+    }
+    if (userMessagesSeen > input.turnLimit) {
+      break;
+    }
+    window.unshift(item);
+    if (userMessagesSeen === input.turnLimit && isUserMessage) {
+      break;
+    }
+  }
+
+  return { items: window, hasMoreLocal: window.length < belowBoundary.length };
 }
 
 function activeLocalTurnItems(
@@ -1966,7 +2042,132 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         ),
       );
 
-    const readCanonicalProjection: ProjectionStoreV2Shape["getThreadProjection"] = (threadId) =>
+    // Resolved windowing directive for a single canonical read. "items" bounds
+    // the two heavy per-thread collections (turn items, and the messages they
+    // reference) to a user-anchored keyset window; "inherited" reads thread
+    // metadata with EMPTY turn items/messages so the caller can attach the
+    // fork's inherited prefix as the final history page. `undefined` keeps the
+    // full unbounded read.
+    type ResolvedItemWindow =
+      | {
+          readonly kind: "items";
+          readonly turnLimit: number;
+          readonly beforeOrdinal: number | null;
+          readonly beforeTurnItemId: string | null;
+        }
+      | { readonly kind: "inherited" };
+
+    interface TurnItemWindowRow {
+      readonly payload_json: string;
+      readonly ordinal: number;
+      readonly turn_item_id: string;
+      readonly message_id: string | null;
+    }
+
+    // Keyset sentinel for an unbounded (first-page) window: every real ordinal
+    // is strictly below it, so the boundary predicate stays a single shape.
+    const WINDOW_UNBOUNDED_ORDINAL = Number.MAX_SAFE_INTEGER;
+
+    // Walks turn items newest-first below the exclusive keyset boundary until
+    // `turnLimit` user messages have been seen. The `candidates` CTE applies
+    // the keyset bound and LIMIT before the window function runs; its ORDER BY
+    // uses the (thread_id, ordinal, turn_item_id) index columns so the scan is
+    // genuinely bounded by the LIMIT, not by thread size. Rows return oldest
+    // first, matching the unbounded read's ordering.
+    const readTurnItemWindowRows = (
+      threadId: ThreadId,
+      window: Extract<ResolvedItemWindow, { kind: "items" }>,
+    ) => sql<TurnItemWindowRow>`
+      WITH candidates AS (
+        SELECT
+          payload_json,
+          ordinal,
+          turn_item_id,
+          type,
+          json_extract(payload_json, '$.messageId') AS message_id
+        FROM orchestration_v2_projection_turn_items
+        WHERE thread_id = ${threadId}
+          AND (
+            ordinal < ${window.beforeOrdinal ?? WINDOW_UNBOUNDED_ORDINAL}
+            OR (
+              ordinal = ${window.beforeOrdinal ?? WINDOW_UNBOUNDED_ORDINAL}
+              AND turn_item_id < ${window.beforeTurnItemId ?? ""}
+            )
+          )
+        ORDER BY ordinal DESC, turn_item_id DESC
+        LIMIT ${THREAD_DETAIL_MAX_RAW_TURN_ITEMS_PER_PAGE}
+      ),
+      walked AS (
+        SELECT
+          payload_json,
+          ordinal,
+          turn_item_id,
+          message_id,
+          CASE WHEN type = 'user_message' THEN 1 ELSE 0 END AS is_user_message,
+          SUM(CASE WHEN type = 'user_message' THEN 1 ELSE 0 END) OVER (
+            ORDER BY ordinal DESC, turn_item_id DESC
+          ) AS user_messages_seen
+        FROM candidates
+      )
+      SELECT payload_json, ordinal, turn_item_id, message_id
+      FROM walked
+      WHERE user_messages_seen < ${window.turnLimit}
+        OR (user_messages_seen = ${window.turnLimit} AND is_user_message = 1)
+      ORDER BY ordinal ASC, turn_item_id ASC
+    `;
+
+    // Bounds messages to the ones referenced by the windowed turn items. The
+    // first page additionally carries messages no turn item references (e.g. a
+    // just-dispatched user message whose turn item has not landed yet) — they
+    // sort to the newest edge, which is exactly the first page.
+    const readWindowedMessageRows = (input: {
+      readonly threadId: ThreadId;
+      readonly messageIds: ReadonlyArray<string>;
+      readonly includeUnreferenced: boolean;
+    }) =>
+      Effect.gen(function* () {
+        const referenced =
+          input.messageIds.length === 0
+            ? []
+            : yield* sql<PayloadRow>`
+                SELECT payload_json
+                FROM orchestration_v2_projection_messages
+                WHERE thread_id = ${input.threadId}
+                  AND message_id IN ${sql.in(input.messageIds)}
+                ORDER BY created_at ASC, message_id ASC
+              `;
+        const unreferenced = input.includeUnreferenced
+          ? yield* sql<PayloadRow>`
+              SELECT payload_json
+              FROM orchestration_v2_projection_messages
+              WHERE thread_id = ${input.threadId}
+                AND message_id NOT IN (
+                  SELECT json_extract(payload_json, '$.messageId')
+                  FROM orchestration_v2_projection_turn_items
+                  WHERE thread_id = ${input.threadId}
+                    AND type IN ('user_message', 'assistant_message')
+                    AND json_extract(payload_json, '$.messageId') IS NOT NULL
+                )
+              ORDER BY created_at ASC, message_id ASC
+            `
+          : [];
+        return [...referenced, ...unreferenced];
+      });
+
+    const readCanonicalProjectionWindowed = (
+      threadId: ThreadId,
+      itemWindow: ResolvedItemWindow | undefined,
+    ): Effect.Effect<
+      {
+        readonly projection: OrchestrationV2ThreadProjection;
+        readonly windowResult: {
+          readonly hasMoreLocal: boolean;
+          readonly oldestOrdinal: number | null;
+          readonly oldestTurnItemId: string | null;
+        } | null;
+      },
+      ProjectionStoreV2Error
+    > =>
       Effect.gen(function* () {
         const threadRows = yield* sql<PayloadRow>`
           SELECT payload_json
@@ -1978,6 +2179,36 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         if (!threadRow) {
           return yield* new ProjectionStoreThreadNotFoundError({ threadId });
         }
+
+        const windowRows =
+          itemWindow?.kind === "items" ? yield* readTurnItemWindowRows(threadId, itemWindow) : null;
+
+        const turnItemRowsEffect =
+          itemWindow === undefined
+            ? sql<PayloadRow>`
+                SELECT payload_json
+                FROM orchestration_v2_projection_turn_items
+                WHERE thread_id = ${threadId}
+                ORDER BY ordinal ASC, turn_item_id ASC
+              `
+            : Effect.succeed<ReadonlyArray<PayloadRow>>(windowRows ?? []);
+        const messageRowsEffect =
+          itemWindow === undefined
+            ? sql<PayloadRow>`
+                SELECT payload_json
+                FROM orchestration_v2_projection_messages
+                WHERE thread_id = ${threadId}
+                ORDER BY created_at ASC, message_id ASC
+              `
+            : itemWindow.kind === "inherited"
+              ? Effect.succeed<ReadonlyArray<PayloadRow>>([])
+              : readWindowedMessageRows({
+                  threadId,
+                  messageIds: (windowRows ?? []).flatMap((row) =>
+                    row.message_id === null ? [] : [row.message_id],
+                  ),
+                  includeUnreferenced: itemWindow.beforeOrdinal === null,
+                });
 
         const [
           thread,
@@ -2059,24 +2290,14 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             WHERE thread_id = ${threadId}
             ORDER BY created_at ASC, runtime_request_id ASC
           `,
-          sql<PayloadRow>`
-            SELECT payload_json
-            FROM orchestration_v2_projection_messages
-            WHERE thread_id = ${threadId}
-            ORDER BY created_at ASC, message_id ASC
-          `,
+          messageRowsEffect,
           sql<PayloadRow>`
             SELECT payload_json
             FROM orchestration_v2_projection_plans
             WHERE thread_id = ${threadId}
             ORDER BY plan_id ASC
           `,
-          sql<PayloadRow>`
-            SELECT payload_json
-            FROM orchestration_v2_projection_turn_items
-            WHERE thread_id = ${threadId}
-            ORDER BY ordinal ASC, turn_item_id ASC
-          `,
+          turnItemRowsEffect,
           sql<PayloadRow>`
             SELECT payload_json
             FROM orchestration_v2_projection_checkpoint_scopes
@@ -2157,7 +2378,45 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           visibleTurnItems: [],
           updatedAt: thread.updatedAt,
         } satisfies OrchestrationV2ThreadProjection;
-        return withLocalVisibleTurnItems(projection);
+
+        if (itemWindow?.kind !== "items") {
+          return { projection: withLocalVisibleTurnItems(projection), windowResult: null };
+        }
+
+        // The continuation boundary is the oldest included item (rows are
+        // ordered oldest-first); an empty window behind a cursor keeps the
+        // cursor itself as the probe boundary so hasMore stays truthful.
+        const oldest = windowRows?.[0];
+        const boundary =
+          oldest !== undefined
+            ? { ordinal: oldest.ordinal, turnItemId: oldest.turn_item_id }
+            : itemWindow.beforeOrdinal !== null
+              ? {
+                  ordinal: itemWindow.beforeOrdinal,
+                  turnItemId: itemWindow.beforeTurnItemId ?? "",
+                }
+              : null;
+        const hasMoreLocal =
+          boundary !== null &&
+          (yield* sql<{ readonly turn_item_id: string }>`
+            SELECT turn_item_id
+            FROM orchestration_v2_projection_turn_items
+            WHERE thread_id = ${threadId}
+              AND (
+                ordinal < ${boundary.ordinal}
+                OR (ordinal = ${boundary.ordinal} AND turn_item_id < ${boundary.turnItemId})
+              )
+            LIMIT 1
+          `).length > 0;
+
+        return {
+          projection: withLocalVisibleTurnItems(projection),
+          windowResult: {
+            hasMoreLocal,
+            oldestOrdinal: oldest?.ordinal ?? null,
+            oldestTurnItemId: oldest?.turn_item_id ?? null,
+          },
+        };
       }).pipe(
         Effect.mapError((cause) =>
           isProjectionStoreThreadNotFoundError(cause)
@@ -2167,6 +2426,11 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                 cause,
               }),
         ),
+      );
+
+    const readCanonicalProjection: ProjectionStoreV2Shape["getThreadProjection"] = (threadId) =>
+      readCanonicalProjectionWindowed(threadId, undefined).pipe(
+        Effect.map((result) => result.projection),
       );
 
     const readProjection = (
@@ -2196,22 +2460,115 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
     const getThreadProjection: ProjectionStoreV2Shape["getThreadProjection"] = (threadId) =>
       readProjection(threadId, new Set());
 
-    const getThreadSnapshot: ProjectionStoreV2Shape["getThreadSnapshot"] = (threadId) =>
+    // Highest v2 event sequence applied to THIS thread. It doubles as the
+    // page's `threadSequence` watermark: the per-thread subscription streams
+    // exactly these events, so a client merging an older page can wait until
+    // its live stream reaches it.
+    const readThreadSnapshotSequence = (threadId: ThreadId) =>
+      sql<{ readonly snapshot_sequence: number | null }>`
+        SELECT MAX(sequence) AS snapshot_sequence
+        FROM orchestration_events
+        WHERE application_event_version = 2
+          AND aggregate_kind = 'thread'
+          AND stream_id = ${threadId}
+      `.pipe(Effect.map((rows) => rows[0]?.snapshot_sequence ?? 0));
+
+    // Reads the thread detail and the snapshot sequence within one transaction
+    // so the sequence is consistent with the returned state. Windowing is
+    // strictly opt-in: without `window.turnLimit` this is the historical full
+    // read (recursive fork prefix included) and no `page` is returned.
+    const getThreadSnapshot: ProjectionStoreV2Shape["getThreadSnapshot"] = (threadId, window) =>
       sql
         .withTransaction(
           Effect.gen(function* () {
-            const projection = yield* getThreadProjection(threadId);
-            const rows = yield* sql<{ readonly snapshot_sequence: number | null }>`
-            SELECT MAX(sequence) AS snapshot_sequence
-            FROM orchestration_events
-            WHERE application_event_version = 2
-              AND aggregate_kind = 'thread'
-              AND stream_id = ${threadId}
-          `;
+            if (window?.turnLimit === undefined) {
+              const projection = yield* getThreadProjection(threadId);
+              return {
+                schemaVersion: ORCHESTRATION_V2_PROJECTION_SCHEMA_VERSION,
+                snapshotSequence: yield* readThreadSnapshotSequence(threadId),
+                projection,
+              };
+            }
+
+            // A malformed or foreign-thread cursor degrades to a first-page
+            // request rather than failing: a stale cursor after a projection
+            // rebuild or reconnect should mean "reload recent history".
+            const decodedCursor =
+              window.beforeCursor === undefined
+                ? null
+                : decodeThreadDetailPageCursor(window.beforeCursor);
+            const cursor = decodedCursor?.threadId === threadId ? decodedCursor : null;
+
+            if (cursor?.kind === "inherited") {
+              // Final history page of a fork: the full inherited prefix plus
+              // the synthetic fork marker, with no local items or messages
+              // (earlier pages already delivered them). This is the only
+              // windowed read that touches the source thread.
+              const { projection: base } = yield* readCanonicalProjectionWindowed(threadId, {
+                kind: "inherited",
+              });
+              const forkedFrom = base.thread.forkedFrom;
+              const projection =
+                forkedFrom?.type !== "run"
+                  ? base
+                  : {
+                      ...base,
+                      visibleTurnItems: buildVisibleTurnItems({
+                        projection: base,
+                        sourceProjection: yield* readProjection(
+                          forkedFrom.threadId,
+                          new Set([threadId]),
+                        ),
+                      }),
+                    };
+              const snapshotSequence = yield* readThreadSnapshotSequence(threadId);
+              return {
+                schemaVersion: ORCHESTRATION_V2_PROJECTION_SCHEMA_VERSION,
+                snapshotSequence,
+                projection,
+                page: {
+                  beforeCursor: null,
+                  hasMore: false,
+                  snapshotSequence,
+                  threadSequence: snapshotSequence,
+                },
+              };
+            }
+
+            const { projection, windowResult } = yield* readCanonicalProjectionWindowed(threadId, {
+              kind: "items",
+              turnLimit: window.turnLimit,
+              beforeOrdinal: cursor?.beforeOrdinal ?? null,
+              beforeTurnItemId: cursor?.beforeTurnItemId ?? null,
+            });
+            const snapshotSequence = yield* readThreadSnapshotSequence(threadId);
+            const isFork = projection.thread.forkedFrom?.type === "run";
+            const beforeCursor =
+              windowResult !== null &&
+              windowResult.hasMoreLocal &&
+              windowResult.oldestOrdinal !== null &&
+              windowResult.oldestTurnItemId !== null
+                ? encodeThreadDetailPageCursor({
+                    kind: "items",
+                    threadId,
+                    beforeOrdinal: windowResult.oldestOrdinal,
+                    beforeTurnItemId: windowResult.oldestTurnItemId,
+                  })
+                : isFork
+                  ? // Local history exhausted; one more page carries the
+                    // inherited fork prefix.
+                    encodeThreadDetailPageCursor({ kind: "inherited", threadId })
+                  : null;
             return {
               schemaVersion: ORCHESTRATION_V2_PROJECTION_SCHEMA_VERSION,
-              snapshotSequence: rows[0]?.snapshot_sequence ?? 0,
+              snapshotSequence,
               projection,
+              page: {
+                beforeCursor,
+                hasMore: beforeCursor !== null,
+                snapshotSequence,
+                threadSequence: snapshotSequence,
+              },
             };
           }),
         )
@@ -2789,18 +3146,109 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
           }
           return projection;
         }),
-      getThreadSnapshot: (threadId) =>
-        service.getThreadProjection(threadId).pipe(
-          Effect.flatMap((projection) =>
-            Ref.get(sequence).pipe(
-              Effect.map((snapshotSequence) => ({
-                schemaVersion: ORCHESTRATION_V2_PROJECTION_SCHEMA_VERSION,
-                snapshotSequence,
-                projection,
-              })),
-            ),
-          ),
-        ),
+      getThreadSnapshot: (threadId, window) =>
+        Effect.gen(function* () {
+          const snapshotSequence = yield* Ref.get(sequence);
+          if (window?.turnLimit === undefined) {
+            const projection = yield* service.getThreadProjection(threadId);
+            return {
+              schemaVersion: ORCHESTRATION_V2_PROJECTION_SCHEMA_VERSION,
+              snapshotSequence,
+              projection,
+            };
+          }
+
+          const existing = (yield* Ref.get(replayState)).projections;
+          const raw = existing.get(threadId);
+          if (!raw) {
+            return yield* new ProjectionStoreThreadNotFoundError({ threadId });
+          }
+          const page = (beforeCursor: string | null) => ({
+            beforeCursor,
+            hasMore: beforeCursor !== null,
+            snapshotSequence,
+            threadSequence: snapshotSequence,
+          });
+          const decodedCursor =
+            window.beforeCursor === undefined
+              ? null
+              : decodeThreadDetailPageCursor(window.beforeCursor);
+          const cursor = decodedCursor?.threadId === threadId ? decodedCursor : null;
+
+          if (cursor?.kind === "inherited") {
+            const base: OrchestrationV2ThreadProjection = {
+              ...raw,
+              turnItems: [],
+              messages: [],
+              visibleTurnItems: [],
+            };
+            const forkedFrom = base.thread.forkedFrom;
+            const projection =
+              forkedFrom?.type !== "run"
+                ? base
+                : {
+                    ...base,
+                    visibleTurnItems: buildVisibleTurnItems({
+                      projection: base,
+                      sourceProjection: yield* service.getThreadProjection(forkedFrom.threadId),
+                    }),
+                  };
+            return {
+              schemaVersion: ORCHESTRATION_V2_PROJECTION_SCHEMA_VERSION,
+              snapshotSequence,
+              projection,
+              page: page(null),
+            };
+          }
+
+          const windowed = windowThreadTurnItems({
+            items: raw.turnItems,
+            turnLimit: window.turnLimit,
+            beforeOrdinal: cursor?.beforeOrdinal ?? null,
+            beforeTurnItemId: cursor?.beforeTurnItemId ?? null,
+          });
+          const referencedIds = new Set(
+            windowed.items.flatMap((item) => {
+              const messageId = messageIdForTurnItem(item);
+              return messageId === null ? [] : [messageId];
+            }),
+          );
+          const allReferencedIds = new Set(
+            raw.turnItems.flatMap((item) => {
+              const messageId = messageIdForTurnItem(item);
+              return messageId === null ? [] : [messageId];
+            }),
+          );
+          const messages = raw.messages.filter(
+            (message) =>
+              referencedIds.has(message.id) ||
+              (cursor === null && !allReferencedIds.has(message.id)),
+          );
+          const projection = withLocalVisibleTurnItems({
+            ...raw,
+            turnItems: windowed.items,
+            messages: sortMessagesByTurnItemOrder(messages, windowed.items),
+          });
+          const oldest = windowed.items[0];
+          const isFork = raw.thread.forkedFrom?.type === "run";
+          const beforeCursor =
+            windowed.hasMoreLocal && oldest !== undefined
+              ? encodeThreadDetailPageCursor({
+                  kind: "items",
+                  threadId,
+                  beforeOrdinal: oldest.ordinal,
+                  beforeTurnItemId: oldest.id,
+                })
+              : isFork
+                ? encodeThreadDetailPageCursor({ kind: "inherited", threadId })
+                : null;
+          return {
+            schemaVersion: ORCHESTRATION_V2_PROJECTION_SCHEMA_VERSION,
+            snapshotSequence,
+            projection,
+            page: page(beforeCursor),
+          };
+        }),
     };
 
     return service;
