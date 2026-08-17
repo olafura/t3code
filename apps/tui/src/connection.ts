@@ -412,12 +412,13 @@ export function buildTuiRuntime(options: TuiOptions): TuiRuntime {
   );
 
   // HTTP snapshot preloading (web's fast-path before live sync) is an
-  // optimization the TUI doesn't need: Option.none() makes the state machines
-  // fall back to the socket-embedded snapshots, the TUI's existing sole path.
+  // optimization the TUI doesn't need. Report the thread loader as unavailable
+  // and the shell loader as absent so both state machines fall back to the
+  // socket-embedded snapshots, the TUI's existing sole path.
   const noopSnapshotLoaders = Layer.mergeAll(
     Layer.succeed(
       ThreadSnapshotLoader,
-      ThreadSnapshotLoader.of({ load: () => Effect.succeed(Option.none()) }),
+      ThreadSnapshotLoader.of({ load: () => Effect.succeed({ _tag: "unavailable" }) }),
     ),
     Layer.succeed(
       ShellSnapshotLoader,
