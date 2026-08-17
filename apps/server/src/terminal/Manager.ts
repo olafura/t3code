@@ -3526,7 +3526,11 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       !session.shellForeground &&
       mayContainTerminalResponse(session.pendingInputControlSequence, input.data)
     ) {
-      const refreshed = yield* Effect.exit(subprocessInspector(process.pid));
+      const refreshed = yield* Effect.exit(
+        acquireSubprocessInspector.pipe(
+          Effect.flatMap((currentSubprocessInspector) => currentSubprocessInspector(process.pid)),
+        ),
+      );
       if (refreshed._tag === "Success") {
         session.shellForeground = resolveShellForeground(platform, refreshed.value);
         session.hasTerminalReplyUnawareSubprocess =
