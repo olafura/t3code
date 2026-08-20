@@ -240,7 +240,7 @@ export function buildRows(
   return rows;
 }
 
-/** Rendered height of a row: active thread cards take two terminal lines. */
+/** Active thread cards use three content lines plus one line of separation. */
 export function rowHeight(row: Row): number {
-  return row.kind === "thread" && row.section === "active" ? 2 : 1;
+  return row.kind === "thread" && row.section === "active" ? 4 : 1;
 }

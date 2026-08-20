@@ -199,8 +199,8 @@ describe("selection and row heights", () => {
     expect(selectionEquals({ kind: "thread", id: "t1" }, activeRow("t1"))).toBe(true);
   });
 
-  it("Given an active card, then it is two lines tall while shelf rows are one", () => {
-    expect(rowHeight(activeRow("t1"))).toBe(2);
+  it("Given an active card, then it has room for metadata while shelf rows stay compact", () => {
+    expect(rowHeight(activeRow("t1"))).toBe(4);
     expect(rowHeight({ ...activeRow("t2"), section: "settled" })).toBe(1);
     expect(
       rowHeight({

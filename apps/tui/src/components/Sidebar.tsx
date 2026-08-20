@@ -3,7 +3,7 @@ import * as React from "react";
 
 import { padClip } from "../format.ts";
 import type { Store } from "../store.ts";
-import { relativeTime, resolveThreadStatus, usePalette } from "../theme.ts";
+import { ansi, relativeTime, resolveThreadStatus, usePalette } from "../theme.ts";
 import { type Row, rowHeight, type Selection, selectionEquals } from "./Sidebar.logic.ts";
 import { StatusDot } from "./ThreadStatusIndicators.tsx";
 
@@ -29,7 +29,6 @@ const SidebarThreadRow = React.memo(function SidebarThreadRow({
   const status = resolveThreadStatus(row.thread);
   const time = relativeTime(row.timestamp);
   const active = row.section === "active";
-  const titleBudget = Math.max(1, innerWidth - (active ? 5 : 4) - (active ? 0 : time.length + 1));
   const longPressTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const pressOriginRef = React.useRef<{ readonly x: number; readonly y: number } | null>(null);
   const longPressOpenedRef = React.useRef(false);
@@ -73,26 +72,63 @@ const SidebarThreadRow = React.memo(function SidebarThreadRow({
     if (!origin || Math.abs(event.x - origin.x) + Math.abs(event.y - origin.y) <= 1) return;
     cancelLongPress();
   };
+
+  if (!active) {
+    const titleBudget = Math.max(1, innerWidth - 4 - time.length - 1);
+    return (
+      <box
+        height={1}
+        onMouseDown={handleMouseDown}
+        onMouseUp={handleMouseUp}
+        onMouseDrag={handleMouseDrag}
+        onMouseOut={cancelLongPress}
+      >
+        <text selectable={false}>
+          <span fg={palette.accent}>{selected ? "▌ " : "  "}</span>
+          <StatusDot status={status} />
+          <span fg={palette.text}>{` ${padClip(row.thread.title, titleBudget)}`}</span>
+          <span fg={palette.dim}>{` ${time}`}</span>
+        </text>
+      </box>
+    );
+  }
+
+  const contentWidth = Math.max(6, innerWidth - 2);
+  const topTrailing = status.key === "idle" ? time : status.label;
+  const projectBudget = Math.max(1, contentWidth - 5 - Bun.stringWidth(topTrailing));
   return (
     <box
       flexDirection="column"
-      height={active ? 2 : 1}
+      height={4}
       onMouseDown={handleMouseDown}
       onMouseUp={handleMouseUp}
       onMouseDrag={handleMouseDrag}
       onMouseOut={cancelLongPress}
     >
-      <text selectable={false}>
-        <span fg={palette.accent}>{selected ? "▌ " : "  "}</span>
-        <StatusDot status={status} />
-        <span fg={palette.text}>{` ${padClip(row.thread.title, titleBudget)}`}</span>
-        {!active ? <span fg={palette.dim}>{` ${time}`}</span> : null}
-        {active ? (
-          <span fg={palette.dim}>
-            {`\n    ${padClip(row.projectTitle, Math.max(1, innerWidth - time.length - 7))} · ${time}`}
-          </span>
-        ) : null}
-      </text>
+      <box
+        flexDirection="column"
+        height={3}
+        paddingLeft={1}
+        paddingRight={1}
+        backgroundColor={selected ? palette.selectedBg : palette.bg}
+      >
+        <text selectable={false}>
+          <span fg={palette.accent}>{selected ? "▌ " : "  "}</span>
+          <StatusDot status={status} />
+          <span fg={palette.dim}>{` ${padClip(row.projectTitle, projectBudget)} `}</span>
+          <span fg={status.key === "idle" ? palette.dim : ansi(status.color)}>{topTrailing}</span>
+        </text>
+        <text selectable={false} fg={palette.text}>
+          <span>{"  "}</span>
+          <strong>{padClip(row.thread.title, Math.max(1, contentWidth - 2))}</strong>
+        </text>
+        <text selectable={false} fg={palette.dim}>
+          {row.thread.branch
+            ? `  ${padClip(row.thread.branch, Math.max(1, contentWidth - 2))}`
+            : ""}
+        </text>
+      </box>
+      <box height={1} />
     </box>
   );
 });

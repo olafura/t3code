@@ -87,6 +87,7 @@ describe("Sidebar V2 thread cards", () => {
     thread: {
       id,
       title,
+      branch: "feature/tui",
       session: null,
       hasPendingApprovals: false,
       hasPendingUserInput: false,
@@ -118,7 +119,7 @@ describe("Sidebar V2 thread cards", () => {
     t.renderer.destroy();
   });
 
-  it("renders an active thread title with its project on a second line", async () => {
+  it("renders an active thread with project, title, and branch hierarchy", async () => {
     const rows: Row[] = [
       {
         kind: "thread",
@@ -129,6 +130,7 @@ describe("Sidebar V2 thread cards", () => {
         thread: {
           id: "t1",
           title: "Thread one",
+          branch: "feature/tui",
           session: null,
           hasPendingApprovals: false,
           hasPendingUserInput: false,
@@ -149,6 +151,9 @@ describe("Sidebar V2 thread cards", () => {
     const frame = t.captureCharFrame();
     expect(frame).toContain("Thread one");
     expect(frame).toContain("Project one");
+    expect(frame).toContain("feature/tui");
+    expect(frame.indexOf("Project one")).toBeLessThan(frame.indexOf("Thread one"));
+    expect(frame.indexOf("Thread one")).toBeLessThan(frame.indexOf("feature/tui"));
     t.renderer.destroy();
   });
 
