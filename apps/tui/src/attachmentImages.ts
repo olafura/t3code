@@ -1,5 +1,5 @@
 // @effect-diagnostics globalFetch:off
-import { decodeImage, type RgbaImage } from "@t3tools/opentui-image";
+import { decodeImage, type ImagePreview } from "@t3tools/opentui-image";
 import { PROVIDER_SEND_TURN_MAX_IMAGE_BYTES } from "@t3tools/contracts";
 
 const DEFAULT_CACHE_ENTRIES = 24;
@@ -8,13 +8,13 @@ const PREVIEW_MAX_WIDTH = 720;
 const PREVIEW_MAX_HEIGHT = 480;
 
 export interface AttachmentImageCache {
-  readonly load: (attachmentId: string, url: string) => Promise<RgbaImage | null>;
+  readonly load: (attachmentId: string, url: string) => Promise<ImagePreview | null>;
   readonly clear: () => void;
 }
 
 export interface AttachmentImageCacheOptions {
   readonly fetcher?: (url: string, signal: AbortSignal) => Promise<Response>;
-  readonly decoder?: (encoded: Uint8Array) => Promise<RgbaImage>;
+  readonly decoder?: (encoded: Uint8Array) => Promise<ImagePreview>;
   readonly maxEntries?: number;
   readonly maxEncodedBytes?: number;
   readonly fetchTimeoutMs?: number;
@@ -35,9 +35,9 @@ export function createAttachmentImageCache(
   assertPositiveInteger(maxEntries, "maxEntries");
   assertPositiveInteger(maxEncodedBytes, "maxEncodedBytes");
   assertPositiveInteger(fetchTimeoutMs, "fetchTimeoutMs");
-  const cache = new Map<string, Promise<RgbaImage | null>>();
+  const cache = new Map<string, Promise<ImagePreview | null>>();
 
-  const load = (attachmentId: string, url: string): Promise<RgbaImage | null> => {
+  const load = (attachmentId: string, url: string): Promise<ImagePreview | null> => {
     const existing = cache.get(attachmentId);
     if (existing) {
       cache.delete(attachmentId);

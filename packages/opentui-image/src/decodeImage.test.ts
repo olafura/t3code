@@ -10,14 +10,16 @@ const ONE_PIXEL_PNG = NodeBuffer.Buffer.from(
 );
 
 describe("decodeImage", () => {
-  it("decodes encoded image bytes to exact RGBA pixels", async () => {
+  it("decodes encoded image bytes to a standalone PNG preview", async () => {
     const image = await decodeImage(ONE_PIXEL_PNG);
 
     expect(image.imageWidth).toBe(1);
     expect(image.imageHeight).toBe(1);
-    expect(image.data).toHaveLength(4);
-    expect(image.data.byteOffset).toBe(0);
-    expect(image.data.buffer.byteLength).toBe(image.data.byteLength);
+    expect(image.source.subarray(0, 8)).toEqual(
+      Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    );
+    expect(image.source.byteOffset).toBe(0);
+    expect(image.source.buffer.byteLength).toBe(image.source.byteLength);
   });
 
   it("rejects invalid encoded data", async () => {

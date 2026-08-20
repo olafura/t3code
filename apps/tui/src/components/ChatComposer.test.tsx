@@ -9,6 +9,12 @@ import { ChatComposer } from "./ChatComposer.tsx";
 // terminal holds focus) and the auxiliary rename/filter/commit surfaces.
 
 const noop = () => {};
+const PNG_SOURCE = Uint8Array.from(
+  Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+    "base64",
+  ),
+);
 
 const base = {
   reply: "",
@@ -129,7 +135,7 @@ describe("ChatComposer", () => {
         dataUrl: "data:image/png;base64,/wAA/w==",
       },
       preview: {
-        data: new Uint8Array([255, 0, 0, 255]),
+        source: PNG_SOURCE,
         imageWidth: 1,
         imageHeight: 1,
       },

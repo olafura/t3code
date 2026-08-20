@@ -8,7 +8,7 @@ import {
   type ProjectReadFileResult,
   type UploadChatImageAttachment,
 } from "@t3tools/contracts";
-import { decodeImage, type RgbaImage } from "@t3tools/opentui-image";
+import { decodeImage, type ImagePreview } from "@t3tools/opentui-image";
 
 const PREVIEW_MAX_WIDTH = 240;
 const PREVIEW_MAX_HEIGHT = 160;
@@ -32,7 +32,7 @@ export type Base64WorkspaceFile = Pick<
 export interface ComposerImageAttachment {
   readonly relativePath: string;
   readonly upload: UploadChatImageAttachment;
-  readonly preview: RgbaImage;
+  readonly preview: ImagePreview;
 }
 
 export function imageMimeTypeForPath(relativePath: string): string | null {
@@ -243,7 +243,7 @@ export function removeComposerImage(
 export async function prepareComposerImage(
   relativePath: string,
   file: Base64WorkspaceFile,
-  decoder: (encoded: Uint8Array) => Promise<RgbaImage> = (encoded) =>
+  decoder: (encoded: Uint8Array) => Promise<ImagePreview> = (encoded) =>
     decodeImage(encoded, { maxWidth: PREVIEW_MAX_WIDTH, maxHeight: PREVIEW_MAX_HEIGHT }),
 ): Promise<ComposerImageAttachment> {
   const mimeType = imageMimeTypeForPath(relativePath);
@@ -267,7 +267,7 @@ export async function prepareComposerImageBytes(
   relativePath: string,
   mimeType: string,
   encoded: Uint8Array,
-  decoder: (encoded: Uint8Array) => Promise<RgbaImage> = (value) =>
+  decoder: (encoded: Uint8Array) => Promise<ImagePreview> = (value) =>
     decodeImage(value, { maxWidth: PREVIEW_MAX_WIDTH, maxHeight: PREVIEW_MAX_HEIGHT }),
 ): Promise<ComposerImageAttachment> {
   const extension = imageExtensionForMimeType(mimeType);

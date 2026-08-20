@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { type Renderable, ScrollBoxRenderable } from "@opentui/core";
 import { testRender } from "@opentui/react/test-utils";
-import type { RgbaImage } from "@t3tools/opentui-image";
+import type { ImagePreview } from "@t3tools/opentui-image";
 import * as NodeFSP from "node:fs/promises";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
@@ -866,10 +866,10 @@ describe("ChatView tmux scrolling", () => {
 describe("ChatView image lightbox", () => {
   it("Given a scrolled conversation, when an image is expanded and closed, then the conversation keeps its scroll position", async () => {
     const image = {
-      data: new Uint8Array([255, 0, 0, 255]),
+      source: Uint8Array.from(Buffer.from(PNG_BASE64, "base64")),
       imageWidth: 1,
       imageHeight: 1,
-    } satisfies RgbaImage;
+    } satisfies ImagePreview;
     const history = Array.from({ length: 24 }, (_, index) => ({
       id: `history-${index}`,
       role: "assistant",

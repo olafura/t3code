@@ -1,4 +1,4 @@
-import { Image, type RgbaImage } from "@t3tools/opentui-image/react";
+import type { ImagePreview } from "@t3tools/opentui-image";
 import { useRenderer } from "@opentui/react";
 import * as React from "react";
 
@@ -12,7 +12,7 @@ const FALLBACK_CELL_HEIGHT = 35;
 export interface ExpandedImagePreview {
   readonly name: string;
   readonly sizeBytes: number;
-  readonly image: RgbaImage;
+  readonly image: ImagePreview;
 }
 
 export function fitImageToCells(input: {
@@ -90,12 +90,11 @@ export const ImageLightbox = React.memo(function ImageLightbox({
         <text fg={palette.dim}>{closeHint}</text>
       </box>
       <box flexGrow={1} width={Math.max(1, width - 2)} alignItems="center" justifyContent="center">
-        <Image
-          data={preview.image.data}
-          imageWidth={preview.image.imageWidth}
-          imageHeight={preview.image.imageHeight}
-          columns={fitted.columns}
-          rows={fitted.rows}
+        <image
+          source={preview.image.source}
+          width={fitted.columns}
+          height={fitted.rows}
+          fit="fill"
         />
       </box>
     </box>

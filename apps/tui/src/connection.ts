@@ -111,7 +111,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Socket from "effect/unstable/socket/Socket";
 
 import { createAttachmentImageCache } from "./attachmentImages.ts";
-import type { RgbaImage } from "@t3tools/opentui-image";
+import type { ImagePreview } from "@t3tools/opentui-image";
 
 /**
  * Connection inputs the host (the server CLI) provides. The TUI never talks to
@@ -559,7 +559,7 @@ export interface TuiClient {
   readonly getAttachmentImage: (
     attachmentId: string,
     resolvedUrl: string,
-  ) => Promise<RgbaImage | null>;
+  ) => Promise<ImagePreview | null>;
   /** List the workspace's files + directories (bounded index) for the file browser. */
   readonly listEntries: (cwd: string) => Promise<ReadonlyArray<ProjectEntry>>;
   /** Read a workspace file's contents, or null on failure. */

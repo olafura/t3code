@@ -1,5 +1,5 @@
 import { type ScrollBoxRenderable, SyntaxStyle } from "@opentui/core";
-import { Image, type RgbaImage } from "@t3tools/opentui-image/react";
+import type { ImagePreview } from "@t3tools/opentui-image";
 import type { OrchestrationCheckpointSummary, OrchestrationThread } from "@t3tools/contracts";
 import { shouldCollapseUserMessage } from "@t3tools/shared/chatMessages";
 import * as React from "react";
@@ -141,9 +141,10 @@ interface RowRenderContext {
   readonly getAttachmentImage?: (
     attachmentId: string,
     resolvedUrl: string,
-  ) => Promise<RgbaImage | null>;
+  ) => Promise<ImagePreview | null>;
   readonly inlineImagesSupported: boolean;
   readonly imageCellWidth: number;
+  readonly imageCellHeight: number;
   /** Surface a resolved attachment URL (e.g. in the status line) when clicked. */
   readonly onOpenUrl?: (url: string) => void;
   /** Open an already-decoded image in the conversation lightbox. */
@@ -223,6 +224,7 @@ function AttachmentPreview({
     getAttachmentImage,
     inlineImagesSupported,
     imageCellWidth,
+    imageCellHeight,
     onOpenUrl,
     onOpenImage,
   } = ctx;
@@ -230,7 +232,7 @@ function AttachmentPreview({
   const [link, setLink] = React.useState<"pending" | "failed" | string>(
     getAttachmentUrl ? "pending" : "failed",
   );
-  const [image, setImage] = React.useState<RgbaImage | null>(null);
+  const [image, setImage] = React.useState<ImagePreview | null>(null);
   React.useEffect(() => {
     setImage(null);
     if (!getAttachmentUrl) {
@@ -279,6 +281,14 @@ function AttachmentPreview({
     ? Math.max(1, Math.round((image.imageWidth * scale) / imageCellWidth))
     : 1;
   const columns = Math.min(naturalColumns, Math.max(1, width - 2));
+  const rows = image
+    ? Math.max(
+        1,
+        Math.round(
+          (image.imageHeight / image.imageWidth) * columns * (imageCellWidth / imageCellHeight),
+        ),
+      )
+    : 1;
   return (
     <box flexDirection="column">
       <box {...(openUrl ? { onMouseDown: openUrl } : {})}>
@@ -291,12 +301,12 @@ function AttachmentPreview({
       </box>
       {image ? (
         <box {...(openImage ? { onMouseDown: openImage } : {})}>
-          <Image
+          <image
             id={`attachment-image-${attachment.id}`}
-            data={image.data}
-            imageWidth={image.imageWidth}
-            imageHeight={image.imageHeight}
-            columns={columns}
+            source={image.source}
+            width={columns}
+            height={rows}
+            fit="fill"
           />
         </box>
       ) : null}
@@ -650,7 +660,7 @@ export const MessagesTimeline = React.memo(function MessagesTimeline({
   readonly getAttachmentImage?: (
     attachmentId: string,
     resolvedUrl: string,
-  ) => Promise<RgbaImage | null>;
+  ) => Promise<ImagePreview | null>;
   /** Surface a resolved attachment URL when clicked (e.g. in the status line). */
   readonly onOpenUrl?: (url: string) => void;
   /** Open an already-decoded attachment in a larger conversation preview. */
@@ -670,6 +680,7 @@ export const MessagesTimeline = React.memo(function MessagesTimeline({
     });
   }, [scrollRef]);
   const imageCellWidth = renderer.resolution ? renderer.resolution.width / renderer.width : 18;
+  const imageCellHeight = renderer.resolution ? renderer.resolution.height / renderer.height : 35;
   const mdClient = treeSitterClient ? { treeSitterClient: treeSitterClient as never } : {};
   const palette = usePalette();
   // The outer border and horizontal padding consume four cells. Concrete child
@@ -745,6 +756,7 @@ export const MessagesTimeline = React.memo(function MessagesTimeline({
     checkpointByMessage,
     inlineImagesSupported,
     imageCellWidth,
+    imageCellHeight,
     ...(onOpenDiff ? { onOpenDiff } : {}),
     ...(getAttachmentUrl ? { getAttachmentUrl } : {}),
     ...(getAttachmentImage ? { getAttachmentImage } : {}),

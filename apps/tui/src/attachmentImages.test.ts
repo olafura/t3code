@@ -3,7 +3,7 @@ import { describe, expect, it } from "bun:test";
 import { createAttachmentImageCache } from "./attachmentImages.ts";
 
 const IMAGE = {
-  data: new Uint8Array([1, 2, 3, 255]),
+  source: new Uint8Array([1, 2, 3]),
   imageWidth: 1,
   imageHeight: 1,
 };

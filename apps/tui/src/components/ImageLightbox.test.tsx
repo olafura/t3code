@@ -1,25 +1,32 @@
 import { describe, expect, it } from "bun:test";
 import { testRender } from "@opentui/react/test-utils";
-import { Image, type RgbaImage } from "@t3tools/opentui-image/react";
+import type { ImagePreview } from "@t3tools/opentui-image";
 import * as React from "react";
 
 import { deferMouseAction } from "../mouse.ts";
 import { fitImageToCells, ImageLightbox } from "./ImageLightbox.tsx";
 
-function ImagePreviewTransition({ image }: { readonly image: RgbaImage }): React.ReactNode {
+const PNG_SOURCE = Uint8Array.from(
+  Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+    "base64",
+  ),
+);
+
+function ImagePreviewTransition({ image }: { readonly image: ImagePreview }): React.ReactNode {
   const [expanded, setExpanded] = React.useState(false);
   const open = React.useMemo(() => deferMouseAction(() => setExpanded(true)), []);
 
   return expanded ? (
     <ImageLightbox
-      preview={{ name: "diagram.png", sizeBytes: image.data.byteLength, image }}
+      preview={{ name: "diagram.png", sizeBytes: image.source.byteLength, image }}
       width={60}
       height={16}
       onClose={() => setExpanded(false)}
     />
   ) : (
     <box onMouseDown={open}>
-      <Image data={image.data} imageWidth={image.imageWidth} imageHeight={image.imageHeight} />
+      <image source={image.source} width={1} height={1} fit="fill" />
     </box>
   );
 }
@@ -46,7 +53,7 @@ describe("ImageLightbox", () => {
           name: "diagram.png",
           sizeBytes: 4096,
           image: {
-            data: new Uint8Array([255, 0, 0, 255]),
+            source: PNG_SOURCE,
             imageWidth: 1,
             imageHeight: 1,
           },
@@ -72,7 +79,7 @@ describe("ImageLightbox", () => {
 
   it("Given an inline image, when it is repeatedly expanded and closed, then its renderable is replaced safely", async () => {
     const image = {
-      data: Uint8Array.from([255, 0, 0, 255]),
+      source: PNG_SOURCE,
       imageWidth: 1,
       imageHeight: 1,
     };

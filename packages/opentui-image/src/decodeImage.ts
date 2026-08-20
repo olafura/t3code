@@ -1,7 +1,7 @@
 import sharp from "sharp";
 
-export interface RgbaImage {
-  readonly data: Uint8Array;
+export interface ImagePreview {
+  readonly source: Uint8Array;
   readonly imageWidth: number;
   readonly imageHeight: number;
 }
@@ -17,7 +17,7 @@ const DEFAULT_MAX_INPUT_PIXELS = 40_000_000;
 export async function decodeImage(
   encoded: Uint8Array,
   options: DecodeImageOptions = {},
-): Promise<RgbaImage> {
+): Promise<ImagePreview> {
   const maxWidth = options.maxWidth;
   const maxHeight = options.maxHeight;
   assertOptionalDimension(maxWidth, "maxWidth");
@@ -40,11 +40,11 @@ export async function decodeImage(
     });
   }
 
-  const result = await pipeline.ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+  const result = await pipeline.png().toBuffer({ resolveWithObject: true });
   return {
-    // Sharp owns the returned Buffer through a native N-API allocation. Copy it
-    // so render transitions never depend on the native allocation's lifetime.
-    data: Uint8Array.from(result.data),
+    // OpenTUI owns decoding and the native image lifetime. Copy Sharp's native
+    // allocation so the source remains valid until OpenTUI has loaded it.
+    source: Uint8Array.from(result.data),
     imageWidth: result.info.width,
     imageHeight: result.info.height,
   };

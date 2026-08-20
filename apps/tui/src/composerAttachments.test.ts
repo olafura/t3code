@@ -184,9 +184,9 @@ describe("composer image attachments", () => {
     );
   });
 
-  it("builds an upload attachment and bounded RGBA preview", async () => {
+  it("builds an upload attachment and bounded PNG preview", async () => {
     const decoded = {
-      data: new Uint8Array([255, 0, 0, 255]),
+      source: Uint8Array.from(Buffer.from(PNG_BASE64, "base64")),
       imageWidth: 1,
       imageHeight: 1,
     };
@@ -219,7 +219,7 @@ describe("composer image attachments", () => {
   it("Given clipboard image bytes, when prepared, then they use the same bounded upload path", async () => {
     const encoded = Uint8Array.from(Buffer.from(PNG_BASE64, "base64"));
     const preview = {
-      data: new Uint8Array([255, 0, 0, 255]),
+      source: encoded,
       imageWidth: 1,
       imageHeight: 1,
     };
@@ -243,7 +243,7 @@ describe("composer image attachments", () => {
 
   it("rejects truncated, empty, and malformed image payloads", async () => {
     const decoder = async () => ({
-      data: new Uint8Array([0, 0, 0, 0]),
+      source: new Uint8Array([0]),
       imageWidth: 1,
       imageHeight: 1,
     });
@@ -268,7 +268,7 @@ describe("composer image attachments", () => {
 
   it("Given a staged image, when it is removed, then the outgoing attachment list omits it", () => {
     const preview = {
-      data: new Uint8Array([255, 0, 0, 255]),
+      source: Uint8Array.from(Buffer.from(PNG_BASE64, "base64")),
       imageWidth: 1,
       imageHeight: 1,
     };

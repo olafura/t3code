@@ -11,6 +11,13 @@ import {
   TIMELINE_WINDOW_SIZE,
 } from "./MessagesTimeline.tsx";
 
+const PNG_SOURCE = Uint8Array.from(
+  Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+    "base64",
+  ),
+);
+
 // Component spec for the conversation header's plan/build indicator (^B).
 
 function detail(interactionMode: "default" | "plan"): OrchestrationThread {
@@ -291,7 +298,7 @@ describe("MessagesTimeline body", () => {
           loadedUrls.push(url);
           resolveImageLoad();
           return {
-            data: new Uint8Array([255, 0, 0, 255]),
+            source: PNG_SOURCE,
             imageWidth: 1,
             imageHeight: 1,
           };
@@ -356,7 +363,7 @@ describe("MessagesTimeline body", () => {
         scrollRef={ref as never}
         getAttachmentUrl={async () => "https://srv/assets/att1.png"}
         getAttachmentImage={async () => ({
-          data: new Uint8Array(600 * 300 * 4),
+          source: PNG_SOURCE,
           imageWidth: 600,
           imageHeight: 300,
         })}

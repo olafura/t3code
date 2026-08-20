@@ -5,7 +5,6 @@ import {
   type PasteEvent,
   type TextareaRenderable,
 } from "@opentui/core";
-import { Image } from "@t3tools/opentui-image/react";
 import * as React from "react";
 
 import type { ComposerImageAttachment } from "../composerAttachments.ts";
@@ -81,13 +80,7 @@ function ComposerImageAttachments({
             <span fg={palette.text}>{clip(attachment.upload.name, itemWidth - 2)}</span>
           </text>
           {inlineImagesSupported ? (
-            <Image
-              data={attachment.preview.data}
-              imageWidth={attachment.preview.imageWidth}
-              imageHeight={attachment.preview.imageHeight}
-              columns={8}
-              rows={3}
-            />
+            <image source={attachment.preview.source} width={8} height={3} fit="fill" />
           ) : null}
         </box>
       ))}
