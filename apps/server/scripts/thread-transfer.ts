@@ -122,6 +122,23 @@ export interface ImportThreadInput {
   readonly targetProjectId?: string | undefined;
 }
 
+export interface ListThreadsInput {
+  /** Workspace root, T3 base directory, or direct state directory. */
+  readonly source: string;
+  readonly state?: ThreadTransferState | undefined;
+}
+
+export const ListedThread = Schema.Struct({
+  id: Schema.String,
+  title: Schema.String,
+  projectId: Schema.String,
+  projectTitle: Schema.String,
+  workspaceRoot: Schema.String,
+  updatedAt: Schema.NullOr(Schema.String),
+  orchestrationVersion: Schema.Literals([1, 2]),
+});
+export type ListedThread = typeof ListedThread.Type;
+
 export interface ThreadTransferOptions {
   readonly sharedHome?: string | undefined;
 }
@@ -155,6 +172,13 @@ interface ProjectRow extends RawSqliteRow {
   readonly projectId: string;
   readonly title: string;
   readonly workspaceRoot: string;
+}
+
+interface ListedThreadRow extends RawSqliteRow {
+  readonly threadId: string;
+  readonly projectId: string;
+  readonly title: string;
+  readonly updatedAt: string | null;
 }
 
 const transferError = (operation: string, detail: string, cause?: unknown): ThreadTransferError =>
@@ -354,6 +378,74 @@ const loadProjectionTables = Effect.fn("loadThreadTransferProjectionTables")(fun
     }
   }
   return tables;
+});
+
+const loadListedThreads = Effect.fn("loadListedThreads")(function* (
+  table: "projection_threads" | "orchestration_v2_projection_threads",
+  orchestrationVersion: 1 | 2,
+) {
+  const sql = yield* SqlClient.SqlClient;
+  if (!(yield* tableExists(table))) return [];
+  const columns = yield* tableColumns(table);
+  if (
+    !columns.includes("thread_id") ||
+    !columns.includes("project_id") ||
+    !columns.includes("title")
+  ) {
+    return [];
+  }
+  const updatedAt = columns.includes("updated_at") ? "updated_at" : "NULL";
+  const where = columns.includes("deleted_at") ? "WHERE deleted_at IS NULL" : "";
+  const rows = yield* sql.unsafe<ListedThreadRow>(
+    `SELECT
+      thread_id AS threadId,
+      project_id AS projectId,
+      title,
+      ${updatedAt} AS updatedAt
+    FROM "${table}"
+    ${where}`,
+  ).unprepared;
+  return rows.map((row) => ({ ...row, orchestrationVersion }));
+});
+
+export const listThreads = Effect.fn("listThreads")(function* (input: ListThreadsInput) {
+  const location = yield* resolveT3Location(input.source, input.state);
+  return yield* Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const projects = yield* sql<ProjectRow>`
+      SELECT project_id AS "projectId", title, workspace_root AS "workspaceRoot"
+      FROM projection_projects`;
+    const projectsById = new Map(projects.map((project) => [project.projectId, project]));
+    const [v2Threads, v1Threads] = yield* Effect.all([
+      loadListedThreads("orchestration_v2_projection_threads", 2),
+      loadListedThreads("projection_threads", 1),
+    ]);
+    const v2Ids = new Set(v2Threads.map((thread) => thread.threadId));
+    return [...v2Threads, ...v1Threads.filter((thread) => !v2Ids.has(thread.threadId))]
+      .map((thread): ListedThread => {
+        const project = projectsById.get(thread.projectId);
+        return {
+          id: thread.threadId,
+          title: thread.title,
+          projectId: thread.projectId,
+          projectTitle: project?.title ?? thread.projectId,
+          workspaceRoot: project?.workspaceRoot ?? "",
+          updatedAt: thread.updatedAt,
+          orchestrationVersion: thread.orchestrationVersion,
+        };
+      })
+      .sort((left, right) => {
+        const updated = (right.updatedAt ?? "").localeCompare(left.updatedAt ?? "");
+        return updated !== 0 ? updated : left.id.localeCompare(right.id);
+      });
+  }).pipe(
+    Effect.provide(NodeSqliteClient.layer({ filename: location.databasePath, readonly: true })),
+    Effect.mapError((cause) =>
+      Schema.is(ThreadTransferError)(cause)
+        ? cause
+        : transferError("list threads", `Could not read '${location.databasePath}'.`, cause),
+    ),
+  );
 });
 
 const loadArchive = Effect.fn("loadThreadTransferArchive")(function* (filePath: string) {

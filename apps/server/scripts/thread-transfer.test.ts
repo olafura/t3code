@@ -8,7 +8,7 @@ import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import * as NodeSqliteClient from "../src/persistence/NodeSqliteClient.ts";
-import { exportThread, importThread } from "./thread-transfer.ts";
+import { exportThread, importThread, listThreads } from "./thread-transfer.ts";
 
 const encodeUnknownJson = Schema.encodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
 const decodeProjectPayload = Schema.decodeUnknownSync(
@@ -198,6 +198,19 @@ it.layer(NodeServices.layer)("thread transfer", (it) => {
         "unrelated output\n",
       );
 
+      const listed = yield* listThreads({ source });
+      assert.deepStrictEqual(listed, [
+        {
+          id: "thread-v1",
+          title: "Image rendering thread",
+          projectId: "project-source",
+          projectTitle: "Project project-source",
+          workspaceRoot: source,
+          updatedAt: "2026-08-20T12:00:00.000Z",
+          orchestrationVersion: 1,
+        },
+      ]);
+
       const exported = yield* exportThread({
         source,
         threadId: "thread-v1",
@@ -272,6 +285,19 @@ it.layer(NodeServices.layer)("thread transfer", (it) => {
           orchestrationVersion: 2,
           state: "dev",
         });
+
+        const listed = yield* listThreads({ source, state: "dev" });
+        assert.deepStrictEqual(listed, [
+          {
+            id: "thread-v2",
+            title: "Codex turn mapping thread",
+            projectId: "project-source-v2",
+            projectTitle: "Project project-source-v2",
+            workspaceRoot: source,
+            updatedAt: null,
+            orchestrationVersion: 2,
+          },
+        ]);
 
         const exported = yield* exportThread({
           source,
