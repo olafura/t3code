@@ -1,5 +1,6 @@
 import { CliRenderEvents, type ScrollBoxRenderable, type SelectOption } from "@opentui/core";
 import {
+  type ContextMenuItem,
   DEFAULT_SERVER_SETTINGS,
   DEFAULT_SIDEBAR_AUTO_SETTLE_AFTER_DAYS,
   type GitStackedAction,
@@ -10,6 +11,7 @@ import {
   type RuntimeMode,
   type SourceControlDiscoveryResult,
   type SourceControlRepositoryInfo,
+  type ThreadId,
   type VcsRef,
 } from "@t3tools/contracts";
 import { truncate } from "@t3tools/shared/String";
@@ -76,7 +78,7 @@ import {
 } from "../models.ts";
 import { isWorking, revertableCheckpoints } from "../timeline.ts";
 import { buildUserInputAnswers, derivePendingUserInputs } from "../userInput.ts";
-import { buildRows, nextSidebarRefreshAt } from "./Sidebar.logic.ts";
+import { buildRows, nextSidebarRefreshAt, type Row } from "./Sidebar.logic.ts";
 import { ChatComposer } from "./ChatComposer.tsx";
 import {
   CHAT_CONTENT_MAX_WIDTH,
@@ -96,6 +98,7 @@ import {
 import { type Command, filterCommands } from "../commands.ts";
 import { buildFileTree, flattenFileTree } from "../fileTree.ts";
 import { CommandPalette } from "./CommandPalette.tsx";
+import { ContextMenu, firstContextMenuIndex, moveContextMenuIndex } from "./ContextMenu.tsx";
 import { ComposerDock, type ComposerDockContext } from "./ComposerDock.tsx";
 import { FilesView, type FilesStatus, type ViewingFile } from "./FilesView.tsx";
 import { SettingsView } from "./SettingsView.tsx";
@@ -170,6 +173,60 @@ function branchPickerOptions(refs: ReadonlyArray<VcsRef>): ReadonlyArray<SelectO
   });
 }
 
+type ThreadContextMenuAction =
+  | "settle"
+  | "unsettle"
+  | "rename"
+  | "copy-path"
+  | "copy-branch"
+  | "copy-thread-id"
+  | "archive"
+  | "delete";
+
+type ThreadRow = Extract<Row, { kind: "thread" }>;
+
+export function buildThreadContextMenuItems(input: {
+  readonly row: ThreadRow;
+  readonly settlementSupported: boolean;
+  readonly hasWorkspacePath: boolean;
+}): ReadonlyArray<ContextMenuItem<ThreadContextMenuAction>> {
+  const { row } = input;
+  const settled = row.section === "settled";
+  return [
+    ...(input.settlementSupported
+      ? [
+          settled
+            ? { id: "unsettle" as const, label: "Un-settle thread" }
+            : {
+                id: "settle" as const,
+                label: "Settle thread",
+                disabled: !canSettle(row.thread, { now: new Date().toISOString() }),
+              },
+        ]
+      : []),
+    {
+      id: "rename",
+      label: "Rename thread",
+      separatorBefore: input.settlementSupported,
+    },
+    {
+      id: "copy-path",
+      label: "Copy path",
+      disabled: !input.hasWorkspacePath,
+      separatorBefore: true,
+    },
+    ...(row.thread.branch ? [{ id: "copy-branch" as const, label: "Copy branch" }] : []),
+    { id: "copy-thread-id", label: "Copy thread ID" },
+    {
+      id: "archive",
+      label: "Archive thread",
+      disabled: row.thread.session?.status === "running",
+      separatorBefore: true,
+    },
+    { id: "delete", label: "Delete", destructive: true },
+  ];
+}
+
 // Top-level layout + state wiring (mirrors apps/web/src/components/ChatView.tsx):
 // owns the external store + UI state, derives the row window and pane heights,
 // routes key bindings to actions, and composes Sidebar / MessagesTimeline /
@@ -237,6 +294,20 @@ export function ChatView({
   const [overlay, setOverlay] = React.useState<"none" | "command" | "confirmDelete" | "revert">(
     "none",
   );
+  const [threadContextMenu, setThreadContextMenu] = React.useState<{
+    readonly row: ThreadRow;
+    readonly x: number;
+    readonly y: number;
+    readonly selectedIndex: number;
+  } | null>(null);
+  const [deleteTarget, setDeleteTarget] = React.useState<{
+    readonly id: ThreadId;
+    readonly title: string;
+  } | null>(null);
+  const [renameTarget, setRenameTarget] = React.useState<{
+    readonly id: ThreadId;
+    readonly title: string;
+  } | null>(null);
   const [revertIndex, setRevertIndex] = React.useState(0);
   // The command palette (^K): its filter query and highlighted row.
   const [commandQuery, setCommandQuery] = React.useState("");
@@ -561,6 +632,27 @@ export function ChatView({
         projects[activeProjectIndex]?.workspaceRoot ??
         process.cwd())
       : terminalCwd;
+  const threadContextProject = threadContextMenu
+    ? (projects.find((project) => project.id === threadContextMenu.row.thread.projectId) ?? null)
+    : null;
+  const threadContextWorkspacePath = threadContextMenu
+    ? (threadContextMenu.row.thread.worktreePath ?? threadContextProject?.workspaceRoot ?? null)
+    : null;
+  const threadContextMenuItems = React.useMemo(
+    () =>
+      threadContextMenu
+        ? buildThreadContextMenuItems({
+            row: threadContextMenu.row,
+            settlementSupported,
+            hasWorkspacePath: threadContextWorkspacePath !== null,
+          })
+        : [],
+    [settlementSupported, threadContextMenu, threadContextWorkspacePath],
+  );
+  const safeThreadContextMenuIndex = Math.min(
+    threadContextMenu?.selectedIndex ?? 0,
+    Math.max(0, threadContextMenuItems.length - 1),
+  );
   const detailTabs = detail ? (terminalTabs.get(detail.id) ?? null) : null;
   const activeTerminal: TerminalInfo | null =
     terminalOpen && detail && detailTabs
@@ -1597,7 +1689,8 @@ export function ChatView({
     !!picker ||
     overlay === "command" ||
     overlay === "revert" ||
-    overlay === "confirmDelete";
+    overlay === "confirmDelete" ||
+    threadContextMenu !== null;
   const composerThreadId = detail?.id ?? null;
   const composerInputFocused =
     !terminalFocused &&
@@ -2467,6 +2560,7 @@ export function ChatView({
         title: "Rename thread",
         run: () =>
           runCommand(() => {
+            setRenameTarget({ id: detail.id, title: detail.title });
             setRenameDraft(detail.title);
             setFocus("rename");
           }),
@@ -2523,7 +2617,11 @@ export function ChatView({
       list.push({
         id: "delete",
         title: "Delete thread",
-        run: () => runCommand(() => setOverlay("confirmDelete")),
+        run: () =>
+          runCommand(() => {
+            setDeleteTarget({ id: detail.id, title: detail.title });
+            setOverlay("confirmDelete");
+          }),
       });
       list.push({
         id: "stop",
@@ -2741,37 +2839,115 @@ export function ChatView({
   // end — no highlight, Enter no-ops.
   const safeCommandIndex = Math.min(commandIndex, Math.max(0, filteredCommands.length - 1));
 
+  const openThreadContextMenu = React.useCallback(
+    (row: ThreadRow, position: { readonly x: number; readonly y: number }) => {
+      const project = projects.find((candidate) => candidate.id === row.thread.projectId) ?? null;
+      const items = buildThreadContextMenuItems({
+        row,
+        settlementSupported,
+        hasWorkspacePath: row.thread.worktreePath !== null || project !== null,
+      });
+      store.select({ kind: "thread", id: row.id });
+      setOverlay("none");
+      setThreadContextMenu({
+        row,
+        x: position.x,
+        y: position.y,
+        selectedIndex: firstContextMenuIndex(items),
+      });
+    },
+    [projects, settlementSupported, store],
+  );
+
+  const runThreadContextMenuAction = React.useCallback(
+    (item: ContextMenuItem) => {
+      const menu = threadContextMenu;
+      if (!menu || item.disabled || item.header) return;
+      const thread = menu.row.thread;
+      const threadId = thread.id;
+      setThreadContextMenu(null);
+
+      const reportMutation = (promise: Promise<void>, success: string) => {
+        void promise.then(
+          () => store.setStatus(success, "success"),
+          (error) => store.setStatus(String(error), "error"),
+        );
+      };
+      const copy = (value: string, label: string) => {
+        renderer.copyToClipboardOSC52(value);
+        const supported = renderer.isOsc52Supported();
+        store.setStatus(
+          supported ? `${label} copied.` : "Clipboard not supported by this terminal.",
+          supported ? "success" : "error",
+        );
+      };
+
+      switch (item.id as ThreadContextMenuAction) {
+        case "settle":
+          reportMutation(client.settleThread(threadId), "Settled.");
+          return;
+        case "unsettle":
+          reportMutation(client.unsettleThread(threadId), "Un-settled.");
+          return;
+        case "rename":
+          setRenameTarget({ id: threadId, title: thread.title });
+          setRenameDraft(thread.title);
+          setFocus("rename");
+          return;
+        case "copy-path":
+          if (threadContextWorkspacePath) copy(threadContextWorkspacePath, "Path");
+          return;
+        case "copy-branch":
+          if (thread.branch) copy(thread.branch, "Branch");
+          return;
+        case "copy-thread-id":
+          copy(threadId, "Thread ID");
+          return;
+        case "archive":
+          reportMutation(client.archiveThread(threadId), "Archived.");
+          return;
+        case "delete":
+          setDeleteTarget({ id: threadId, title: thread.title });
+          setOverlay("confirmDelete");
+          return;
+      }
+    },
+    [client, renderer, store, threadContextMenu, threadContextWorkspacePath],
+  );
+
   const keyMode = expandedImage
     ? "imagePreview"
-    : activeTerminal && terminalFocused
-      ? "terminal"
-      : settingsOpen
-        ? "settings"
-        : filesOpen
-          ? "files"
-          : diffOpen
-            ? "diff"
-            : projectFlow
-              ? "project"
-              : picker
-                ? "select"
-                : overlay === "command"
-                  ? "command"
-                  : overlay === "confirmDelete"
-                    ? "confirmDelete"
-                    : overlay === "revert"
-                      ? "revert"
-                      : focus === "rename"
-                        ? "rename"
-                        : focus === "filter"
-                          ? "filter"
-                          : focus === "commit"
-                            ? "commit"
-                            : rightPanelVisible && rightPanelFocused
-                              ? "panel"
-                              : composerUserInputActive
-                                ? "userInput"
-                                : "compose";
+    : threadContextMenu
+      ? "contextMenu"
+      : activeTerminal && terminalFocused
+        ? "terminal"
+        : settingsOpen
+          ? "settings"
+          : filesOpen
+            ? "files"
+            : diffOpen
+              ? "diff"
+              : projectFlow
+                ? "project"
+                : picker
+                  ? "select"
+                  : overlay === "command"
+                    ? "command"
+                    : overlay === "confirmDelete"
+                      ? "confirmDelete"
+                      : overlay === "revert"
+                        ? "revert"
+                        : focus === "rename"
+                          ? "rename"
+                          : focus === "filter"
+                            ? "filter"
+                            : focus === "commit"
+                              ? "commit"
+                              : rightPanelVisible && rightPanelFocused
+                                ? "panel"
+                                : composerUserInputActive
+                                  ? "userInput"
+                                  : "compose";
 
   useKeyBindings({
     mode: keyMode,
@@ -2785,6 +2961,33 @@ export function ChatView({
     },
     onTerminalScroll: (action) => terminalScrollRef.current?.(action),
     onImagePreviewClose: closeExpandedImage,
+    onContextMenuPrev: () =>
+      setThreadContextMenu((current) =>
+        current
+          ? {
+              ...current,
+              selectedIndex: moveContextMenuIndex(
+                threadContextMenuItems,
+                current.selectedIndex,
+                -1,
+              ),
+            }
+          : null,
+      ),
+    onContextMenuNext: () =>
+      setThreadContextMenu((current) =>
+        current
+          ? {
+              ...current,
+              selectedIndex: moveContextMenuIndex(threadContextMenuItems, current.selectedIndex, 1),
+            }
+          : null,
+      ),
+    onContextMenuRun: () => {
+      const item = threadContextMenuItems[safeThreadContextMenuIndex];
+      if (item) runThreadContextMenuAction(item);
+    },
+    onContextMenuClose: () => setThreadContextMenu(null),
     onToggleFocus: toggleFocus,
     onFocusComposer: focusComposer,
     // Plain arrows stay with the composer except while choosing between multiple
@@ -2934,26 +3137,32 @@ export function ChatView({
       if (picker) applyPicker(picker.selectedIndex);
     },
     onCloseSelect: () => setPicker(null),
-    onCloseOverlay: () => setOverlay("none"),
+    onCloseOverlay: () => {
+      setOverlay("none");
+      setDeleteTarget(null);
+    },
     onConfirmDelete: () => {
-      if (!detail) {
+      if (!deleteTarget) {
         setOverlay("none");
         return;
       }
-      void client.deleteThread(detail.id).catch(() => {});
+      void client.deleteThread(deleteTarget.id).catch(() => {});
       setOverlay("none");
+      setDeleteTarget(null);
       store.setStatus("Deleted.", "success");
     },
     onSubmitRename: () => {
       const title = renameDraft.trim();
-      if (detail && title.length > 0 && title !== detail.title) {
-        void client.renameThread(detail.id, title).catch(() => {});
+      if (renameTarget && title.length > 0 && title !== renameTarget.title) {
+        void client.renameThread(renameTarget.id, title).catch(() => {});
         store.setStatus("Renamed.", "success");
       }
+      setRenameTarget(null);
       setRenameDraft("");
       setFocus("compose");
     },
     onCancelRename: () => {
+      setRenameTarget(null);
       setRenameDraft("");
       setFocus("compose");
     },
@@ -3116,7 +3325,7 @@ export function ChatView({
   const hintWidth = Math.max(0, mainWidth - 2 - statusWidth);
 
   return (
-    <box flexDirection="row" width={width} height={height}>
+    <box position="relative" flexDirection="row" width={width} height={height}>
       {sidebarVisible || sidebarAsMain ? (
         <Sidebar
           rows={rows}
@@ -3132,11 +3341,16 @@ export function ChatView({
               : (projects.find((project) => project.id === state.projectScopeId)?.title ??
                 state.projectScopeId)
           }
-          searchFocused={focus === "filter" && !terminalFocused && !diffOpen && !picker}
+          searchFocused={
+            focus === "filter" && !terminalFocused && !diffOpen && !picker && !threadContextMenu
+          }
           onSearchInput={store.setFilter}
           onFocusSearch={() => setFocus("filter")}
           onChooseProjectScope={openProjectScopePicker}
           onAddProject={openAddProject}
+          onThreadContextMenu={(row, event) =>
+            openThreadContextMenu(row, { x: event.x, y: event.y })
+          }
         />
       ) : null}
 
@@ -3283,8 +3497,8 @@ export function ChatView({
               checkpoints={checkpoints}
               selected={Math.min(revertIndex, checkpoints.length - 1)}
             />
-          ) : overlay === "confirmDelete" && detail ? (
-            <ConfirmDeleteMenu title={detail.title} />
+          ) : overlay === "confirmDelete" && deleteTarget ? (
+            <ConfirmDeleteMenu title={deleteTarget.title} />
           ) : null}
 
           <ComposerDock
@@ -3360,6 +3574,20 @@ export function ChatView({
             <text fg={statusStyle.color}>{clip(statusLabel, statusWidth)}</text>
           </box>
         </box>
+      ) : null}
+
+      {threadContextMenu ? (
+        <ContextMenu
+          items={threadContextMenuItems}
+          selectedIndex={safeThreadContextMenuIndex}
+          position={{ x: threadContextMenu.x, y: threadContextMenu.y }}
+          viewport={{ width, height }}
+          onSelectIndex={(selectedIndex) =>
+            setThreadContextMenu((current) => (current ? { ...current, selectedIndex } : null))
+          }
+          onRun={runThreadContextMenuAction}
+          onClose={() => setThreadContextMenu(null)}
+        />
       ) : null}
     </box>
   );

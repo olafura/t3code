@@ -1,4 +1,4 @@
-import type { ScrollBoxRenderable } from "@opentui/core";
+import { MouseButton, type MouseEvent, type ScrollBoxRenderable } from "@opentui/core";
 import * as React from "react";
 
 import { padClip } from "../format.ts";
@@ -12,24 +12,31 @@ const SidebarThreadRow = React.memo(function SidebarThreadRow({
   selected,
   innerWidth,
   store,
+  onContextMenu,
 }: {
   readonly row: Extract<Row, { kind: "thread" }>;
   readonly selected: boolean;
   readonly innerWidth: number;
   readonly store: Store;
+  readonly onContextMenu: (row: Extract<Row, { kind: "thread" }>, event: MouseEvent) => void;
 }): React.ReactNode {
   const palette = usePalette();
   const status = resolveThreadStatus(row.thread);
   const time = relativeTime(row.timestamp);
   const active = row.section === "active";
   const titleBudget = Math.max(1, innerWidth - (active ? 5 : 4) - (active ? 0 : time.length + 1));
+  const activateFromMouse = (event: MouseEvent) => {
+    event.stopPropagation();
+    if (event.button === MouseButton.RIGHT) {
+      event.preventDefault();
+      onContextMenu(row, event);
+      return;
+    }
+    store.select({ kind: "thread", id: row.id });
+  };
   return (
-    <box
-      flexDirection="column"
-      height={active ? 2 : 1}
-      onMouseDown={() => store.select({ kind: "thread", id: row.id })}
-    >
-      <text>
+    <box flexDirection="column" height={active ? 2 : 1} onMouseDown={activateFromMouse}>
+      <text onMouseDown={activateFromMouse}>
         <span fg={palette.accent}>{selected ? "▌ " : "  "}</span>
         <StatusDot status={status} />
         <span fg={palette.text}>{` ${padClip(row.thread.title, titleBudget)}`}</span>
@@ -97,6 +104,7 @@ export const Sidebar = React.memo(function Sidebar({
   onFocusSearch,
   onChooseProjectScope,
   onAddProject,
+  onThreadContextMenu,
 }: {
   readonly rows: ReadonlyArray<Row>;
   readonly selection: Selection | null;
@@ -111,6 +119,7 @@ export const Sidebar = React.memo(function Sidebar({
   readonly onFocusSearch: () => void;
   readonly onChooseProjectScope: () => void;
   readonly onAddProject: () => void;
+  readonly onThreadContextMenu: (row: Extract<Row, { kind: "thread" }>, event: MouseEvent) => void;
 }): React.ReactNode {
   const palette = usePalette();
   const innerWidth = Math.max(8, width - 4);
@@ -242,6 +251,7 @@ export const Sidebar = React.memo(function Sidebar({
                 selected={selected}
                 innerWidth={innerWidth}
                 store={store}
+                onContextMenu={onThreadContextMenu}
               />
             );
           })}

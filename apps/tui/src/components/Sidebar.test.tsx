@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import * as React from "react";
 import { testRender } from "@opentui/react/test-utils";
+import { MouseButtons } from "@opentui/core/testing";
 
 import type { Store } from "../store.ts";
 import type { Row } from "./Sidebar.logic.ts";
@@ -21,6 +22,7 @@ const baseProps = {
   onFocusSearch: () => {},
   onChooseProjectScope: () => {},
   onAddProject: () => {},
+  onThreadContextMenu: () => {},
 } as const;
 
 describe("Sidebar search box", () => {
@@ -145,6 +147,40 @@ describe("Sidebar V2 thread cards", () => {
     const frame = t.captureCharFrame();
     expect(frame).toContain("Thread one");
     expect(frame).toContain("Project one");
+    t.renderer.destroy();
+  });
+
+  it("opens a thread context menu on right-click", async () => {
+    const rows = [activeRow("t1", "Thread one")];
+    let contextThread = "";
+    let selectedThread = "";
+    const t = await testRender(
+      <Sidebar
+        {...baseProps}
+        rows={rows}
+        selection={null}
+        filter=""
+        searchFocused={false}
+        store={
+          {
+            select: (selection: { readonly id: string }) => {
+              selectedThread = selection.id;
+            },
+          } as unknown as Store
+        }
+        onThreadContextMenu={(row) => {
+          contextThread = row.id;
+        }}
+      />,
+      { width: 30, height: 18 },
+    );
+    await t.renderOnce();
+    const lines = t.captureCharFrame().split("\n");
+    const row = lines.findIndex((line) => line.includes("Thread one"));
+    await t.mockMouse.click(6, row, MouseButtons.RIGHT);
+    await t.flush();
+    expect(contextThread).toBe("t1");
+    expect(selectedThread).toBe("");
     t.renderer.destroy();
   });
 });

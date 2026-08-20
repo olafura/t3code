@@ -16,6 +16,7 @@ import { useKeyboard } from "@opentui/react";
 export type KeyBindingMode =
   | "terminal"
   | "imagePreview"
+  | "contextMenu"
   | "command"
   | "files"
   | "settings"
@@ -48,6 +49,11 @@ export interface KeyBindingActions {
   ) => void;
   // Expanded image preview: Escape closes without affecting the draft/session.
   readonly onImagePreviewClose: () => void;
+  // Context menu: ↑/↓ or j/k move, Enter activates, Esc dismisses.
+  readonly onContextMenuPrev: () => void;
+  readonly onContextMenuNext: () => void;
+  readonly onContextMenuRun: () => void;
+  readonly onContextMenuClose: () => void;
   // Command palette (^K): a fuzzy filter input (owns typed chars) over commands;
   // ↑/↓ move the highlight, Enter runs, Esc closes.
   readonly onOpenCommandPalette: () => void;
@@ -175,6 +181,14 @@ export function useKeyBindings(actions: KeyBindingActions): void {
 
     if (actions.mode === "imagePreview") {
       if (key.name === "escape") return actions.onImagePreviewClose();
+      return;
+    }
+
+    if (actions.mode === "contextMenu") {
+      if (key.name === "up" || key.name === "k") return actions.onContextMenuPrev();
+      if (key.name === "down" || key.name === "j") return actions.onContextMenuNext();
+      if (key.name === "return" || key.name === "enter") return actions.onContextMenuRun();
+      if (key.name === "escape") return actions.onContextMenuClose();
       return;
     }
 

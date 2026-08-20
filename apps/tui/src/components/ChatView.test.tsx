@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { type Renderable, ScrollBoxRenderable } from "@opentui/core";
 import { testRender } from "@opentui/react/test-utils";
+import { MouseButtons } from "@opentui/core/testing";
 import type { ImagePreview } from "@t3tools/opentui-image";
 import * as NodeFSP from "node:fs/promises";
 import * as NodeOS from "node:os";
@@ -147,6 +148,10 @@ function fakeClient({
   terminalClose = async () => {},
   approve = async () => {},
   setInteractionMode = async () => {},
+  renameThread = async () => {},
+  archiveThread = async () => {},
+  unarchiveThread = async () => {},
+  deleteThread = async () => {},
   settleThread = async () => {},
   unsettleThread = async () => {},
   vcsStatus,
@@ -198,6 +203,10 @@ function fakeClient({
   readonly terminalClose?: TuiClient["terminalClose"];
   readonly approve?: TuiClient["approve"];
   readonly setInteractionMode?: TuiClient["setInteractionMode"];
+  readonly renameThread?: TuiClient["renameThread"];
+  readonly archiveThread?: TuiClient["archiveThread"];
+  readonly unarchiveThread?: TuiClient["unarchiveThread"];
+  readonly deleteThread?: TuiClient["deleteThread"];
   readonly settleThread?: TuiClient["settleThread"];
   readonly unsettleThread?: TuiClient["unsettleThread"];
   readonly vcsStatus?: VcsStatusResult;
@@ -257,6 +266,10 @@ function fakeClient({
     terminalClear,
     terminalRestart,
     setInteractionMode,
+    renameThread,
+    archiveThread,
+    unarchiveThread,
+    deleteThread,
     settleThread,
     unsettleThread,
     terminalClose,
@@ -294,6 +307,42 @@ async function selectThread(
   await setup.waitForFrame((frame) => frame.includes("Project one"));
   await setup.waitForFrame((frame) => frame.includes("Thread one"));
 }
+
+describe("ChatView thread context menu", () => {
+  it("right-clicks a thread and archives that exact row", async () => {
+    const archived: string[] = [];
+    const fake = fakeClient({
+      detail: thread(),
+      archiveThread: async (threadId) => {
+        archived.push(String(threadId));
+      },
+    });
+    const setup = await testRender(<ChatView client={fake.client} onExit={() => {}} />, {
+      width: 110,
+      height: 28,
+    });
+    await selectThread(setup, fake.connect);
+    let lines = setup.captureCharFrame().split("\n");
+    const threadRow = lines.findIndex((line) => line.slice(0, 34).includes("Thread one"));
+    await React.act(async () => {
+      await setup.mockMouse.click(6, threadRow, MouseButtons.RIGHT);
+      await setup.flush();
+    });
+    await setup.waitForFrame(
+      (frame) => frame.includes("Rename thread") && frame.includes("Archive thread"),
+    );
+    lines = setup.captureCharFrame().split("\n");
+    const archiveRow = lines.findIndex((line) => line.includes("Archive thread"));
+    const archiveColumn = lines[archiveRow]!.indexOf("Archive thread");
+    await React.act(async () => {
+      await setup.mockMouse.click(archiveColumn, archiveRow, MouseButtons.LEFT);
+      await setup.flush();
+    });
+    await setup.waitFor(() => archived.length === 1);
+    expect(archived).toEqual(["t1"]);
+    setup.renderer.destroy();
+  });
+});
 
 describe("ChatView responsive shell", () => {
   it("Given the desktop layout, the projects sidebar spans the full terminal height", async () => {
