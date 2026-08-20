@@ -6,6 +6,7 @@ import type {
 } from "@t3tools/contracts";
 
 import type { TuiClient } from "./connection.ts";
+import type { EnvironmentThreadPageState } from "@t3tools/client-runtime/state/threads";
 import { gitActionNeedsCommitMessage } from "./gitActions.logic.ts";
 import {
   buildRows,
@@ -33,6 +34,8 @@ export interface StoreState {
   readonly loadedInFull: ReadonlySet<string>;
   readonly selection: Selection | null;
   readonly detail: OrchestrationThread | null;
+  /** Pagination state for the selected thread's bounded server snapshot. */
+  readonly threadPage: EnvironmentThreadPageState | null;
   readonly status: string;
   readonly statusKind: StatusKind;
   /** Sidebar filter text; empty = unfiltered. */
@@ -75,6 +78,7 @@ export function createStore(client: TuiClient): Store {
     loadedInFull: new Set<string>(),
     selection: null,
     detail: null,
+    threadPage: null,
     status: "Connecting…",
     statusKind: "busy",
     filter: "",
@@ -133,9 +137,9 @@ export function createStore(client: TuiClient): Store {
     unsubThread?.();
     unsubThread = null;
     if (!threadId) return;
-    unsubThread = client.subscribeThread(threadId as never, (thread) => {
+    unsubThread = client.subscribeThread(threadId as never, (thread, page) => {
       if (state.selection?.kind === "thread" && state.selection.id === thread.id) {
-        set({ detail: thread });
+        set({ detail: thread, threadPage: page });
         syncVcs();
       }
     });
@@ -149,7 +153,7 @@ export function createStore(client: TuiClient): Store {
     // Seed from the warm cache so re-selecting a thread paints instantly; the
     // live value streams in immediately after (no refetch, no blank).
     const cached = threadId ? client.peekThread(threadId as never) : null;
-    set({ selection, detail: cached });
+    set({ selection, detail: cached, threadPage: null });
     syncVcs();
   };
 

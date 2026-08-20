@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 
 import type { OrchestrationShellSnapshot, OrchestrationThread } from "@t3tools/contracts";
+import type { EnvironmentThreadPageState } from "@t3tools/client-runtime/state/threads";
 
 import type { TuiClient } from "./connection.ts";
 import { createStore } from "./store.ts";
@@ -8,15 +9,21 @@ import { createStore } from "./store.ts";
 /** A fake TuiClient that captures the shell/thread callbacks so the test can drive them. */
 function fakeClient() {
   let onShell: ((s: OrchestrationShellSnapshot) => void) | null = null;
+  let onThread:
+    | ((thread: OrchestrationThread, page: EnvironmentThreadPageState | null) => void)
+    | null = null;
   const threadSubs: string[] = [];
   const client = {
     subscribeShell: (cb: (s: OrchestrationShellSnapshot) => void) => {
       onShell = cb;
       return () => {};
     },
-    subscribeThread: (threadId: string) => {
+    subscribeThread: (threadId: string, callback: typeof onThread) => {
       threadSubs.push(threadId);
-      return () => {};
+      onThread = callback;
+      return () => {
+        onThread = null;
+      };
     },
     peekThread: () => null as OrchestrationThread | null,
     subscribeVcsStatus: () => () => {},
@@ -26,6 +33,8 @@ function fakeClient() {
   return {
     client,
     pushShell: (s: OrchestrationShellSnapshot) => onShell?.(s),
+    pushThread: (thread: OrchestrationThread, page: EnvironmentThreadPageState | null) =>
+      onThread?.(thread, page),
     threadSubs,
   };
 }
@@ -60,6 +69,24 @@ describe("createStore", () => {
     store.start();
     f.pushShell(oneProjectTwoThreads);
     expect(store.getState().selection).toEqual({ kind: "thread", id: "t1" });
+  });
+
+  it("tracks older-page availability from the selected thread subscription", () => {
+    const f = fakeClient();
+    const store = createStore(f.client);
+    store.start();
+    f.pushShell(oneProjectTwoThreads);
+    f.pushThread({ id: "t1" } as unknown as OrchestrationThread, {
+      beforeCursor: "older",
+      hasMore: true,
+      loadingOlder: false,
+    });
+
+    expect(store.getState().threadPage).toEqual({
+      beforeCursor: "older",
+      hasMore: true,
+      loadingOlder: false,
+    });
   });
 
   it("Given a project filter, when selected, then it scopes the flat list", () => {

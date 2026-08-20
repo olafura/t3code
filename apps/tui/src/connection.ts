@@ -1,6 +1,7 @@
 // @effect-diagnostics anyUnknownInErrorContext:off
 // @effect-diagnostics unknownInEffectCatch:off
 // @effect-diagnostics globalErrorInEffectFailure:off
+// @effect-diagnostics globalFetch:off
 import * as NodeFS from "node:fs";
 
 import {
@@ -70,6 +71,7 @@ import {
 } from "@t3tools/client-runtime/operations";
 import { inferProjectTitleFromPath } from "@t3tools/client-runtime/state/projects";
 import {
+  remoteHttpClientLayer,
   request,
   rpcSessionFactoryLayer,
   RpcSessionFactory,
@@ -77,7 +79,6 @@ import {
   subscribe,
 } from "@t3tools/client-runtime/rpc";
 import { ShellSnapshotLoader } from "@t3tools/client-runtime/state/shell";
-import { ThreadSnapshotLoader } from "@t3tools/client-runtime/state/threads";
 import type { RpcSession } from "@t3tools/client-runtime/rpc";
 import { buildTemporaryWorktreeBranchName } from "@t3tools/shared/git";
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
@@ -91,8 +92,12 @@ import {
   makeEnvironmentShellState,
 } from "@t3tools/client-runtime/state/shell";
 import {
+  type EnvironmentThreadPageState,
   type EnvironmentThreadState,
   makeEnvironmentThreadState,
+  requestOlderThreadTurns,
+  ThreadSnapshotLoader,
+  threadSnapshotLoaderLayer,
 } from "@t3tools/client-runtime/state/threads";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
@@ -408,25 +413,18 @@ export function buildTuiRuntime(options: TuiOptions): TuiRuntime {
     Layer.provideMerge(services),
   );
 
-  // HTTP snapshot preloading (web's fast-path before live sync) is an
-  // optimization the TUI doesn't need: Option.none() makes the state machines
-  // fall back to the socket-embedded snapshots, the TUI's existing sole path.
-  const noopSnapshotLoaders = Layer.mergeAll(
-    Layer.succeed(
-      ThreadSnapshotLoader,
-      ThreadSnapshotLoader.of({ load: () => Effect.succeed(Option.none()) }),
-    ),
+  // The first snapshot can fall back to the socket, but older thread pages are
+  // HTTP-only. Keep the real thread loader so long conversations can reach
+  // history outside the bounded initial window.
+  const snapshotLoaders = Layer.mergeAll(
+    threadSnapshotLoaderLayer.pipe(Layer.provide(remoteHttpClientLayer(globalThis.fetch))),
     Layer.succeed(
       ShellSnapshotLoader,
       ShellSnapshotLoader.of({ load: () => Effect.succeed(Option.none()) }),
     ),
   );
 
-  const runtimeLayer = Layer.mergeAll(
-    supervisorLayer,
-    inMemoryCacheStoreLayer,
-    noopSnapshotLoaders,
-  );
+  const runtimeLayer = Layer.mergeAll(supervisorLayer, inMemoryCacheStoreLayer, snapshotLoaders);
 
   return ManagedRuntime.make(runtimeLayer) as unknown as TuiRuntime;
 }
@@ -452,8 +450,10 @@ export interface TuiClient {
   /** Live detail (messages, session, activities) for one thread. */
   readonly subscribeThread: (
     threadId: ThreadId,
-    onThread: (thread: OrchestrationThread) => void,
+    onThread: (thread: OrchestrationThread, page: EnvironmentThreadPageState | null) => void,
   ) => () => void;
+  /** Request the next bounded page of older turns for a live thread. */
+  readonly loadOlderThreadTurns: (threadId: ThreadId) => boolean;
   /** Last-seen detail for a thread (from the warm cache), or null. Synchronous. */
   readonly peekThread: (threadId: ThreadId) => OrchestrationThread | null;
   /** Attach to a thread terminal; raw PTY bytes are delivered via onEvent. */
@@ -555,7 +555,7 @@ export interface TuiClient {
   ) => () => void;
   /** Resolve a message image attachment to an absolute URL, or null on failure. */
   readonly getAttachmentUrl: (attachmentId: string) => Promise<string | null>;
-  /** Download and decode a bounded RGBA preview for a resolved attachment URL. */
+  /** Download and decode a bounded native-image preview for a resolved attachment URL. */
   readonly getAttachmentImage: (
     attachmentId: string,
     resolvedUrl: string,
@@ -776,9 +776,11 @@ export function makeTuiClient(runtime: TuiRuntime, origin = ""): TuiClient {
     subscribeThread: (threadId, onThread) => {
       const entry = acquireThread(threadId);
       return subscribeToWarmRef(entry, (state) => {
-        if (Option.isSome(state.data)) onThread(state.data.value);
+        if (Option.isSome(state.data)) onThread(state.data.value, Option.getOrNull(state.page));
       });
     },
+
+    loadOlderThreadTurns: (threadId) => requestOlderThreadTurns(TUI_ENVIRONMENT_ID, threadId),
 
     peekThread: (threadId) => latestThreads.get(threadId as string) ?? null,
 

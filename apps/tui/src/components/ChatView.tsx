@@ -3199,6 +3199,11 @@ export function ChatView({
                   onOpenDiff={openDiffAtTurn}
                   getAttachmentUrl={client.getAttachmentUrl}
                   getAttachmentImage={client.getAttachmentImage}
+                  hasOlderTurns={state.threadPage?.hasMore ?? false}
+                  loadingOlderTurns={state.threadPage?.loadingOlder ?? false}
+                  onLoadOlderTurns={() => {
+                    if (detail) client.loadOlderThreadTurns(detail.id);
+                  }}
                   onOpenUrl={(url) => store.setStatus(url, "info")}
                   onOpenImage={openExpandedImage}
                 />

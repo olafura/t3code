@@ -638,6 +638,9 @@ export const MessagesTimeline = React.memo(function MessagesTimeline({
   onOpenDiff,
   getAttachmentUrl,
   getAttachmentImage,
+  hasOlderTurns = false,
+  loadingOlderTurns = false,
+  onLoadOlderTurns,
   onOpenUrl,
   onOpenImage,
   treeSitterClient,
@@ -661,6 +664,12 @@ export const MessagesTimeline = React.memo(function MessagesTimeline({
     attachmentId: string,
     resolvedUrl: string,
   ) => Promise<ImagePreview | null>;
+  /** Whether the server has an older bounded page outside the loaded thread. */
+  readonly hasOlderTurns?: boolean;
+  /** Whether that older page is currently being fetched. */
+  readonly loadingOlderTurns?: boolean;
+  /** Fetch the next older server page. */
+  readonly onLoadOlderTurns?: () => void;
   /** Surface a resolved attachment URL when clicked (e.g. in the status line). */
   readonly onOpenUrl?: (url: string) => void;
   /** Open an already-decoded attachment in a larger conversation preview. */
@@ -719,8 +728,17 @@ export const MessagesTimeline = React.memo(function MessagesTimeline({
   const timelineWindow = resolveTimelineWindow(timeline.length, requestedWindowEnd);
   const visibleTimeline = timeline.slice(timelineWindow.start, timelineWindow.end);
   const showingLatest = timelineWindow.end === timeline.length;
+  const pendingOlderPageRef = React.useRef<{
+    readonly detailId: string | null;
+    readonly rowCount: number;
+  } | null>(null);
   const showOlder = () => {
-    setWindowState({ detailId, end: timelineWindow.start });
+    if (timelineWindow.start > 0) {
+      setWindowState({ detailId, end: timelineWindow.start });
+    } else if (hasOlderTurns && !loadingOlderTurns && onLoadOlderTurns) {
+      pendingOlderPageRef.current = { detailId, rowCount: timeline.length };
+      onLoadOlderTurns();
+    }
     queueMicrotask(() => {
       if (scrollRef.current) scrollRef.current.scrollTop = 0;
     });
@@ -736,6 +754,23 @@ export const MessagesTimeline = React.memo(function MessagesTimeline({
     const box = scrollRef.current;
     if (box && box.scrollLeft !== 0) box.scrollLeft = 0;
   }, [detail?.id, scrollRef, timeline, width]);
+  React.useEffect(() => {
+    const pending = pendingOlderPageRef.current;
+    if (pending === null) return;
+    if (pending.detailId !== detailId) {
+      pendingOlderPageRef.current = null;
+      return;
+    }
+    if (timeline.length > pending.rowCount) {
+      pendingOlderPageRef.current = null;
+      setWindowState({ detailId, end: timeline.length - pending.rowCount });
+      queueMicrotask(() => {
+        if (scrollRef.current) scrollRef.current.scrollTop = 0;
+      });
+      return;
+    }
+    if (!loadingOlderTurns) pendingOlderPageRef.current = null;
+  }, [detailId, loadingOlderTurns, scrollRef, timeline.length]);
   const checkpointByMessage = React.useMemo(
     () =>
       checkpoints
@@ -869,9 +904,15 @@ export const MessagesTimeline = React.memo(function MessagesTimeline({
             flexShrink={0}
             overflow="hidden"
           >
-            {timelineWindow.start > 0 ? (
+            {timelineWindow.start > 0 || hasOlderTurns ? (
               <box onMouseDown={showOlder} marginBottom={1}>
-                <text fg={palette.dim}>{`▴ ${timelineWindow.start} earlier entries`}</text>
+                <text fg={palette.dim}>
+                  {timelineWindow.start > 0
+                    ? `▴ ${timelineWindow.start} earlier entries`
+                    : loadingOlderTurns
+                      ? "▴ Loading earlier turns…"
+                      : "▴ Load earlier turns"}
+                </text>
               </box>
             ) : null}
             {visibleTimeline.map((row) => {

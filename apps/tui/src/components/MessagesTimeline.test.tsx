@@ -327,6 +327,83 @@ describe("MessagesTimeline body", () => {
     t.renderer.destroy();
   });
 
+  it("loads an older server page and reveals its image attachment", async () => {
+    const requested: string[] = [];
+    const loadedUrls: string[] = [];
+    const ref = React.createRef<ScrollBoxRenderable | null>();
+    const olderMessage = {
+      id: "older-image",
+      role: "user",
+      text: "older screenshot",
+      createdAt: "2026-06-18T00:00:00.000Z",
+      updatedAt: "2026-06-18T00:00:00.000Z",
+      streaming: false,
+      attachments: [
+        {
+          type: "image",
+          id: "older-att",
+          name: "older.png",
+          mimeType: "image/png",
+          sizeBytes: 4,
+        },
+      ],
+    };
+    const recentMessage = {
+      id: "recent",
+      role: "assistant",
+      text: "recent reply",
+      createdAt: "2026-06-19T00:00:00.000Z",
+      updatedAt: "2026-06-19T00:00:00.000Z",
+      streaming: false,
+      attachments: [],
+    };
+
+    function PaginatedTimeline(): React.ReactNode {
+      const [olderLoaded, setOlderLoaded] = React.useState(false);
+      const messages = olderLoaded ? [olderMessage, recentMessage] : [recentMessage];
+      return (
+        <MessagesTimeline
+          detail={{ ...detail("default"), messages } as unknown as OrchestrationThread}
+          approvals={[]}
+          approvalIndex={0}
+          projectHint={null}
+          width={88}
+          height={20}
+          syntaxStyle={SyntaxStyle.create()}
+          scrollRef={ref}
+          hasOlderTurns={!olderLoaded}
+          onLoadOlderTurns={() => {
+            requested.push("older");
+            setOlderLoaded(true);
+          }}
+          getAttachmentUrl={async () => "https://srv/assets/older.png"}
+          getAttachmentImage={async (_attachmentId, url) => {
+            loadedUrls.push(url);
+            return { source: PNG_SOURCE, imageWidth: 1, imageHeight: 1 };
+          }}
+        />
+      );
+    }
+
+    const t = await testRender(<PaginatedTimeline />, { width: 92, height: 24 });
+    await t.renderOnce();
+    await t.flush();
+    const lines = t.captureCharFrame().split("\n");
+    const loadRow = lines.findIndex((line) => line.includes("Load earlier turns"));
+    const loadColumn = (lines[loadRow] ?? "").indexOf("Load earlier turns");
+    expect(loadRow).toBeGreaterThanOrEqual(0);
+    await t.mockMouse.click(loadColumn, loadRow);
+    await t.waitFor(() =>
+      Boolean(t.renderer.root.findDescendantById("attachment-image-older-att")),
+    );
+    await t.renderOnce();
+
+    expect(requested).toEqual(["older"]);
+    expect(loadedUrls).toEqual(["https://srv/assets/older.png"]);
+    expect(t.captureCharFrame()).toContain("older.png");
+    t.renderer.destroy();
+  });
+
   it("Given an inline image, when the timeline scrolls, then OpenTUI keeps the native image mounted", async () => {
     const full = {
       ...detail("default"),
