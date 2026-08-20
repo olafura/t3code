@@ -3348,9 +3348,7 @@ export function ChatView({
           onFocusSearch={() => setFocus("filter")}
           onChooseProjectScope={openProjectScopePicker}
           onAddProject={openAddProject}
-          onThreadContextMenu={(row, event) =>
-            openThreadContextMenu(row, { x: event.x, y: event.y })
-          }
+          onThreadContextMenu={openThreadContextMenu}
         />
       ) : null}
 

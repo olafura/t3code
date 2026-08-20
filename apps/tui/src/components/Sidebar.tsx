@@ -7,6 +7,8 @@ import { relativeTime, resolveThreadStatus, usePalette } from "../theme.ts";
 import { type Row, rowHeight, type Selection, selectionEquals } from "./Sidebar.logic.ts";
 import { StatusDot } from "./ThreadStatusIndicators.tsx";
 
+export const THREAD_CONTEXT_LONG_PRESS_MS = 500;
+
 const SidebarThreadRow = React.memo(function SidebarThreadRow({
   row,
   selected,
@@ -18,25 +20,69 @@ const SidebarThreadRow = React.memo(function SidebarThreadRow({
   readonly selected: boolean;
   readonly innerWidth: number;
   readonly store: Store;
-  readonly onContextMenu: (row: Extract<Row, { kind: "thread" }>, event: MouseEvent) => void;
+  readonly onContextMenu: (
+    row: Extract<Row, { kind: "thread" }>,
+    position: { readonly x: number; readonly y: number },
+  ) => void;
 }): React.ReactNode {
   const palette = usePalette();
   const status = resolveThreadStatus(row.thread);
   const time = relativeTime(row.timestamp);
   const active = row.section === "active";
   const titleBudget = Math.max(1, innerWidth - (active ? 5 : 4) - (active ? 0 : time.length + 1));
-  const activateFromMouse = (event: MouseEvent) => {
+  const longPressTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pressOriginRef = React.useRef<{ readonly x: number; readonly y: number } | null>(null);
+  const longPressOpenedRef = React.useRef(false);
+  const cancelLongPress = React.useCallback(() => {
+    if (longPressTimerRef.current !== null) clearTimeout(longPressTimerRef.current);
+    longPressTimerRef.current = null;
+    pressOriginRef.current = null;
+  }, []);
+  React.useEffect(() => cancelLongPress, [cancelLongPress]);
+
+  const handleMouseDown = (event: MouseEvent) => {
     event.stopPropagation();
     if (event.button === MouseButton.RIGHT) {
       event.preventDefault();
-      onContextMenu(row, event);
+      cancelLongPress();
+      onContextMenu(row, { x: event.x, y: event.y });
       return;
     }
-    store.select({ kind: "thread", id: row.id });
+    if (event.button !== MouseButton.LEFT) return;
+    event.preventDefault();
+    cancelLongPress();
+    longPressOpenedRef.current = false;
+    const position = { x: event.x, y: event.y };
+    pressOriginRef.current = position;
+    longPressTimerRef.current = setTimeout(() => {
+      longPressTimerRef.current = null;
+      longPressOpenedRef.current = true;
+      onContextMenu(row, position);
+    }, THREAD_CONTEXT_LONG_PRESS_MS);
+  };
+  const handleMouseUp = (event: MouseEvent) => {
+    event.stopPropagation();
+    if (event.button !== MouseButton.LEFT) return;
+    const openedContextMenu = longPressOpenedRef.current;
+    longPressOpenedRef.current = false;
+    cancelLongPress();
+    if (!openedContextMenu) store.select({ kind: "thread", id: row.id });
+  };
+  const handleMouseDrag = (event: MouseEvent) => {
+    const origin = pressOriginRef.current;
+    if (!origin || Math.abs(event.x - origin.x) + Math.abs(event.y - origin.y) <= 1) return;
+    cancelLongPress();
   };
   return (
-    <box flexDirection="column" height={active ? 2 : 1} onMouseDown={activateFromMouse}>
-      <text onMouseDown={activateFromMouse}>
+    <box
+      flexDirection="column"
+      height={active ? 2 : 1}
+      onMouseDown={handleMouseDown}
+      onMouseUp={handleMouseUp}
+      onMouseDrag={handleMouseDrag}
+      onMouseOut={cancelLongPress}
+    >
+      <text selectable={false}>
         <span fg={palette.accent}>{selected ? "▌ " : "  "}</span>
         <StatusDot status={status} />
         <span fg={palette.text}>{` ${padClip(row.thread.title, titleBudget)}`}</span>
@@ -119,7 +165,10 @@ export const Sidebar = React.memo(function Sidebar({
   readonly onFocusSearch: () => void;
   readonly onChooseProjectScope: () => void;
   readonly onAddProject: () => void;
-  readonly onThreadContextMenu: (row: Extract<Row, { kind: "thread" }>, event: MouseEvent) => void;
+  readonly onThreadContextMenu: (
+    row: Extract<Row, { kind: "thread" }>,
+    position: { readonly x: number; readonly y: number },
+  ) => void;
 }): React.ReactNode {
   const palette = usePalette();
   const innerWidth = Math.max(8, width - 4);

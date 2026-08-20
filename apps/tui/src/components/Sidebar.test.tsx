@@ -1,11 +1,11 @@
-import { describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it, jest } from "bun:test";
 import * as React from "react";
 import { testRender } from "@opentui/react/test-utils";
 import { MouseButtons } from "@opentui/core/testing";
 
 import type { Store } from "../store.ts";
 import type { Row } from "./Sidebar.logic.ts";
-import { Sidebar } from "./Sidebar.tsx";
+import { Sidebar, THREAD_CONTEXT_LONG_PRESS_MS } from "./Sidebar.tsx";
 
 // A no-op store — the search box test never triggers the action handlers.
 const fakeStore = {} as unknown as Store;
@@ -76,6 +76,8 @@ describe("Sidebar search box", () => {
 });
 
 describe("Sidebar V2 thread cards", () => {
+  afterEach(() => jest.useRealTimers());
+
   const activeRow = (id: string, title: string): Row => ({
     kind: "thread",
     id,
@@ -180,6 +182,90 @@ describe("Sidebar V2 thread cards", () => {
     await t.mockMouse.click(6, row, MouseButtons.RIGHT);
     await t.flush();
     expect(contextThread).toBe("t1");
+    expect(selectedThread).toBe("");
+    t.renderer.destroy();
+  });
+
+  it("selects a thread on a short tap without opening its context menu", async () => {
+    const rows = [activeRow("t1", "Thread one")];
+    let contextThread = "";
+    let selectedThread = "";
+    const t = await testRender(
+      <Sidebar
+        {...baseProps}
+        rows={rows}
+        selection={null}
+        filter=""
+        searchFocused={false}
+        store={
+          {
+            select: (selection: { readonly id: string }) => {
+              selectedThread = selection.id;
+            },
+          } as unknown as Store
+        }
+        onThreadContextMenu={(row) => {
+          contextThread = row.id;
+        }}
+      />,
+      { width: 30, height: 18 },
+    );
+    await t.renderOnce();
+    await t.flush();
+    jest.useFakeTimers();
+    const lines = t.captureCharFrame().split("\n");
+    const row = lines.findIndex((line) => line.includes("Thread one"));
+
+    await t.mockMouse.pressDown(6, row);
+    jest.advanceTimersByTime(THREAD_CONTEXT_LONG_PRESS_MS - 1);
+    await t.mockMouse.release(6, row);
+
+    expect(selectedThread).toBe("t1");
+    expect(contextThread).toBe("");
+    t.renderer.destroy();
+  });
+
+  it("opens a thread context menu on long press without selecting it", async () => {
+    const rows = [activeRow("t1", "Thread one")];
+    let contextThread = "";
+    let contextPosition: { readonly x: number; readonly y: number } | null = null;
+    let selectedThread = "";
+    const t = await testRender(
+      <Sidebar
+        {...baseProps}
+        rows={rows}
+        selection={null}
+        filter=""
+        searchFocused={false}
+        store={
+          {
+            select: (selection: { readonly id: string }) => {
+              selectedThread = selection.id;
+            },
+          } as unknown as Store
+        }
+        onThreadContextMenu={(row, position) => {
+          contextThread = row.id;
+          contextPosition = position;
+        }}
+      />,
+      { width: 30, height: 18 },
+    );
+    await t.renderOnce();
+    await t.flush();
+    jest.useFakeTimers();
+    const lines = t.captureCharFrame().split("\n");
+    const row = lines.findIndex((line) => line.includes("Thread one"));
+
+    await t.mockMouse.pressDown(6, row);
+    jest.advanceTimersByTime(THREAD_CONTEXT_LONG_PRESS_MS);
+    await t.mockMouse.release(6, row);
+
+    expect(contextThread).toBe("t1");
+    expect(contextPosition as { readonly x: number; readonly y: number } | null).toEqual({
+      x: 6,
+      y: row,
+    });
     expect(selectedThread).toBe("");
     t.renderer.destroy();
   });
