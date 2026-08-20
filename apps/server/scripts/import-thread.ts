@@ -36,7 +36,7 @@ export const importThreadCommand = Command.make(
         dangerousAllowT3Directory,
       });
       yield* Console.log(
-        `Imported '${result.title}' (${result.threadId}) into ${result.targetProjectTitle}`,
+        `Imported '${result.title}' (${result.threadId}, orchestrator v${result.orchestrationVersion}) into ${result.targetProjectTitle}`,
       );
       yield* Console.log(
         `  ${result.eventCount} events, ${result.attachmentCount} attachments, ${result.terminalLogCount} terminal logs`,

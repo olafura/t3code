@@ -29,7 +29,9 @@ export const exportThreadCommand = Command.make(
         output,
         includeTerminalLogs,
       });
-      yield* Console.log(`Exported '${result.title}' (${result.threadId}) to ${result.output}`);
+      yield* Console.log(
+        `Exported '${result.title}' (${result.threadId}, orchestrator v${result.orchestrationVersion}) to ${result.output}`,
+      );
       yield* Console.log(
         `  ${result.eventCount} events, ${result.attachmentCount} attachments, ${result.terminalLogCount} terminal logs`,
       );

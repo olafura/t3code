@@ -45,7 +45,9 @@ const ThreadArchiveFile = Schema.Struct({
 
 /**
  * One thread's canonical events plus the files that travel with it. Every
- * event belongs to the archived thread.
+ * event belongs to the archived thread and carries the archive's
+ * `orchestrationVersion`: a v1 archive holds only v1 events, a v2 archive only
+ * the v2 events of its stream.
  */
 export const ThreadArchive = Schema.Struct({
   format: Schema.Literal("t3-thread-export"),
@@ -56,6 +58,7 @@ export const ThreadArchive = Schema.Struct({
     title: Schema.String,
     sourceProjectId: Schema.String,
     sourceWorkspaceRoot: Schema.String,
+    orchestrationVersion: Schema.Literals([1, 2]),
   }),
   events: Schema.Array(ThreadArchiveEvent),
   attachments: Schema.Array(ThreadArchiveFile),
@@ -140,6 +143,7 @@ export const ListedThread = Schema.Struct({
   projectTitle: Schema.String,
   workspaceRoot: Schema.String,
   updatedAt: Schema.NullOr(Schema.String),
+  orchestrationVersion: Schema.Literals([1, 2]),
 });
 export type ListedThread = typeof ListedThread.Type;
 
@@ -176,6 +180,7 @@ interface RawEventRow extends RawSqliteRow {
   readonly actorKind: string;
   readonly payloadJson: string;
   readonly metadataJson: string;
+  readonly applicationEventVersion: number;
 }
 
 interface ProjectRow extends RawSqliteRow {
@@ -247,6 +252,27 @@ const tableExists = Effect.fn("threadTransferTableExists")(function* (table: str
     SELECT COUNT(*) AS count
     FROM sqlite_master
     WHERE type = 'table' AND name = ${table}`;
+  return Number(rows[0]?.count ?? 0) > 0;
+});
+
+const tableColumns = Effect.fn("threadTransferTableColumns")(function* (table: string) {
+  const sql = yield* SqlClient.SqlClient;
+  const rows = yield* sql.unsafe<{ readonly name: string }>(`PRAGMA table_info("${table}")`)
+    .unprepared;
+  return rows.map((row) => row.name);
+});
+
+/** Whether `table` exists and already holds rows for `threadId`. */
+const hasThreadRows = Effect.fn("threadTransferHasThreadRows")(function* (
+  table: string,
+  threadId: string,
+) {
+  const sql = yield* SqlClient.SqlClient;
+  if (!(yield* tableExists(table))) return false;
+  const rows = yield* sql.unsafe<{ readonly count: number }>(
+    `SELECT COUNT(*) AS count FROM "${table}" WHERE thread_id = ?`,
+    [threadId],
+  ).unprepared;
   return Number(rows[0]?.count ?? 0) > 0;
 });
 
@@ -366,6 +392,29 @@ const loadThreadFiles = Effect.fn("loadThreadTransferFiles")(function* (
   );
 });
 
+/**
+ * Live threads of one projection table. The v1 `projection_threads` and the
+ * Orchestrator v2 `orchestration_v2_projection_threads` tables share the
+ * columns read here; a database that predates v2 simply lacks the v2 table.
+ */
+const loadListedThreads = Effect.fn("loadThreadTransferListedThreads")(function* (
+  table: "projection_threads" | "orchestration_v2_projection_threads",
+  orchestrationVersion: 1 | 2,
+) {
+  const sql = yield* SqlClient.SqlClient;
+  if (!(yield* tableExists(table))) return [];
+  const rows = yield* sql.unsafe<ListedThreadRow>(
+    `SELECT
+      thread_id AS threadId,
+      project_id AS projectId,
+      title,
+      updated_at AS updatedAt
+    FROM "${table}"
+    WHERE deleted_at IS NULL`,
+  ).unprepared;
+  return rows.map((row) => ({ ...row, orchestrationVersion }));
+});
+
 export const listThreads = Effect.fn("listThreads")(function* (input: ListThreadsInput) {
   const location = yield* resolveStateLocation(input.source, input.state);
   return yield* Effect.gen(function* () {
@@ -379,10 +428,11 @@ export const listThreads = Effect.fn("listThreads")(function* (input: ListThread
         deleted_at AS "deletedAt"
       FROM projection_projects`;
     const projectsById = new Map(projects.map((project) => [project.projectId, project]));
-    const threads = yield* sql<ListedThreadRow>`
-      SELECT thread_id AS "threadId", project_id AS "projectId", title, updated_at AS "updatedAt"
-      FROM projection_threads
-      WHERE deleted_at IS NULL`;
+    const [v2Threads, v1Threads] = yield* Effect.all([
+      loadListedThreads("orchestration_v2_projection_threads", 2),
+      loadListedThreads("projection_threads", 1),
+    ]);
+    const v2Ids = new Set(v2Threads.map((thread) => thread.threadId));
     const listing: ThreadListing = {
       projects: projects
         .filter((project) => project.deletedAt === null)
@@ -393,7 +443,7 @@ export const listThreads = Effect.fn("listThreads")(function* (input: ListThread
           updatedAt: project.updatedAt,
         }))
         .sort((left, right) => left.workspaceRoot.localeCompare(right.workspaceRoot)),
-      threads: threads
+      threads: [...v2Threads, ...v1Threads.filter((thread) => !v2Ids.has(thread.threadId))]
         .map((thread): ListedThread => {
           const project = projectsById.get(thread.projectId);
           return {
@@ -403,6 +453,7 @@ export const listThreads = Effect.fn("listThreads")(function* (input: ListThread
             projectTitle: project?.title ?? thread.projectId,
             workspaceRoot: project?.workspaceRoot ?? "",
             updatedAt: thread.updatedAt,
+            orchestrationVersion: thread.orchestrationVersion,
           };
         })
         .sort((left, right) => {
@@ -460,6 +511,28 @@ const loadArchive = Effect.fn("loadThreadTransferArchive")(function* (filePath: 
   return invalid === null ? archive : yield* invalid;
 });
 
+/**
+ * A v1 thread that Orchestrator v2 migrated keeps its shell in v2 events but
+ * hydrates its transcript lazily, when the thread is next opened. Until then
+ * the messages exist only as v1 events, which a v2 archive does not carry.
+ */
+const ensureLegacyTranscriptHydrated = Effect.fn("ensureThreadTransferTranscriptHydrated")(
+  function* (threadId: string) {
+    const sql = yield* SqlClient.SqlClient;
+    if (!(yield* tableExists("orchestration_v2_legacy_imports"))) return;
+    const rows = yield* sql<{ readonly count: number }>`
+      SELECT COUNT(*) AS count
+      FROM orchestration_v2_legacy_imports
+      WHERE thread_id = ${threadId} AND transcript_imported_at IS NULL`;
+    if (Number(rows[0]?.count ?? 0) > 0) {
+      return yield* transferError(
+        "export thread",
+        `Thread '${threadId}' still has a pending v1 transcript import. Open it in the source T3 server first so its messages become v2 events.`,
+      );
+    }
+  },
+);
+
 /** Reads one thread's events and files from the source into an archive. */
 const buildThreadArchive = Effect.fn("buildThreadTransferArchive")(function* (
   location: StateLocation,
@@ -469,34 +542,58 @@ const buildThreadArchive = Effect.fn("buildThreadTransferArchive")(function* (
   if (!(yield* tableExists("orchestration_events"))) {
     return yield* transferError("export thread", "The source has no orchestration event log.");
   }
-  const rawEvents = yield* sql<RawEventRow>`
-    SELECT
-      event_id AS "eventId",
-      aggregate_kind AS "aggregateKind",
-      stream_id AS "streamId",
-      stream_version AS "streamVersion",
-      event_type AS "eventType",
-      occurred_at AS "occurredAt",
-      command_id AS "commandId",
-      causation_event_id AS "causationEventId",
-      correlation_id AS "correlationId",
-      actor_kind AS "actorKind",
-      payload_json AS "payloadJson",
-      metadata_json AS "metadataJson"
-    FROM orchestration_events
-    WHERE aggregate_kind = 'thread' AND stream_id = ${input.threadId}
-    ORDER BY sequence`;
+  const eventColumns = yield* tableColumns("orchestration_events");
+  const versionExpression = eventColumns.includes("application_event_version")
+    ? "application_event_version"
+    : "1";
+  const rawEvents = yield* sql.unsafe<RawEventRow>(
+    `SELECT
+        event_id AS eventId,
+        aggregate_kind AS aggregateKind,
+        stream_id AS streamId,
+        stream_version AS streamVersion,
+        event_type AS eventType,
+        occurred_at AS occurredAt,
+        command_id AS commandId,
+        causation_event_id AS causationEventId,
+        correlation_id AS correlationId,
+        actor_kind AS actorKind,
+        payload_json AS payloadJson,
+        metadata_json AS metadataJson,
+        ${versionExpression} AS applicationEventVersion
+      FROM orchestration_events
+      WHERE aggregate_kind = 'thread' AND stream_id = ?
+      ORDER BY sequence`,
+    [input.threadId],
+  ).unprepared;
   if (rawEvents.length === 0) {
     return yield* transferError(
       "export thread",
       `Thread '${input.threadId}' has no canonical events.`,
     );
   }
-  const threadRows = yield* sql<{ readonly projectId: string; readonly title: string }>`
-    SELECT project_id AS "projectId", title
-    FROM projection_threads
-    WHERE thread_id = ${input.threadId}`;
-  const createdEvent = rawEvents.find((event) => event.eventType === "thread.created");
+  const orchestrationVersion = rawEvents.some(
+    (event) => Number(event.applicationEventVersion) === 2,
+  )
+    ? 2
+    : 1;
+  const selectedEvents = rawEvents.filter(
+    (event) => Number(event.applicationEventVersion) === orchestrationVersion,
+  );
+  if (selectedEvents.length < rawEvents.length) {
+    yield* ensureLegacyTranscriptHydrated(input.threadId);
+  }
+  const threadTable =
+    orchestrationVersion === 2 && (yield* tableExists("orchestration_v2_projection_threads"))
+      ? "orchestration_v2_projection_threads"
+      : "projection_threads";
+  const threadRows = yield* sql.unsafe<{
+    readonly projectId: string;
+    readonly title: string;
+  }>(`SELECT project_id AS projectId, title FROM "${threadTable}" WHERE thread_id = ?`, [
+    input.threadId,
+  ]).unprepared;
+  const createdEvent = selectedEvents.find((event) => event.eventType === "thread.created");
   const eventProjectId =
     createdEvent === undefined ? null : yield* readProjectIdFromPayload(createdEvent.payloadJson);
   const sourceProjectId = threadRows[0]?.projectId ?? eventProjectId;
@@ -527,8 +624,9 @@ const buildThreadArchive = Effect.fn("buildThreadTransferArchive")(function* (
       title: threadRows[0]?.title ?? input.threadId,
       sourceProjectId,
       sourceWorkspaceRoot: project.workspaceRoot,
+      orchestrationVersion,
     },
-    events: rawEvents.map((event) => ({
+    events: selectedEvents.map((event) => ({
       eventId: event.eventId,
       aggregateKind: event.aggregateKind,
       streamId: event.streamId,
@@ -579,6 +677,7 @@ export const exportThread = Effect.fn("exportThread")(function* (input: ExportTh
     output,
     threadId: archive.thread.id,
     title: archive.thread.title,
+    orchestrationVersion: archive.thread.orchestrationVersion,
     eventCount: archive.events.length,
     attachmentCount: archive.attachments.length,
     terminalLogCount: archive.terminalLogs.length,
@@ -680,10 +779,11 @@ const prepareEvents = Effect.fn("prepareThreadTransferEvents")(function* (
 });
 
 /**
- * The destination server decodes every event against its orchestration
+ * The destination server decodes every v1 event against its orchestration
  * contract at startup and refuses to start on one it cannot read, so an
  * archive from a differently-versioned source is rejected here, before any
- * write.
+ * write. Orchestrator v2 events have no contract in this checkout and are
+ * written as exported.
  */
 const ensureEventsDecode = Effect.fn("ensureThreadTransferEventsDecode")(function* (
   events: ReadonlyArray<ThreadArchiveEvent>,
@@ -721,6 +821,7 @@ const ensureEventsDecode = Effect.fn("ensureThreadTransferEventsDecode")(functio
 
 const insertEvents = Effect.fn("insertThreadTransferEvents")(function* (
   events: ReadonlyArray<ThreadArchiveEvent>,
+  applicationEventVersion: 1 | 2 | null,
 ) {
   const sql = yield* SqlClient.SqlClient;
   const columns = [
@@ -736,6 +837,7 @@ const insertEvents = Effect.fn("insertThreadTransferEvents")(function* (
     "actor_kind",
     "payload_json",
     "metadata_json",
+    ...(applicationEventVersion === null ? [] : ["application_event_version"]),
   ];
   const insertSql = `INSERT INTO orchestration_events (${columns.join(", ")}) VALUES (${columns.map(() => "?").join(", ")})`;
   for (const event of events) {
@@ -752,6 +854,7 @@ const insertEvents = Effect.fn("insertThreadTransferEvents")(function* (
       event.actorKind,
       event.payloadJson,
       event.metadataJson,
+      ...(applicationEventVersion === null ? [] : [applicationEventVersion]),
     ];
     yield* sql.unsafe(insertSql, params).unprepared;
   }
@@ -793,14 +896,23 @@ export const importThread = Effect.fn("importThread")(function* (
       SELECT COUNT(*) AS count
       FROM orchestration_events
       WHERE aggregate_kind = 'thread' AND stream_id = ${archive.thread.id}`;
-    const existingThreads = yield* sql<{ readonly count: number }>`
-      SELECT COUNT(*) AS count
-      FROM projection_threads
-      WHERE thread_id = ${archive.thread.id}`;
-    if (Number(existingEvents[0]?.count ?? 0) > 0 || Number(existingThreads[0]?.count ?? 0) > 0) {
+    const hasV1Projection = yield* hasThreadRows("projection_threads", archive.thread.id);
+    const hasV2Projection = yield* hasThreadRows(
+      "orchestration_v2_projection_threads",
+      archive.thread.id,
+    );
+    if (Number(existingEvents[0]?.count ?? 0) > 0 || hasV1Projection || hasV2Projection) {
       return yield* transferError(
         "import thread",
         `Thread '${archive.thread.id}' already exists in the destination.`,
+      );
+    }
+    const eventColumns = yield* tableColumns("orchestration_events");
+    const supportsEventVersion = eventColumns.includes("application_event_version");
+    if (archive.thread.orchestrationVersion === 2 && !supportsEventVersion) {
+      return yield* transferError(
+        "import thread",
+        "The destination schema does not support Orchestrator v2 events.",
       );
     }
 
@@ -819,7 +931,9 @@ export const importThread = Effect.fn("importThread")(function* (
       droppedWorktreePaths: new Set(),
     };
     const events = yield* prepareEvents(archive, rewrite);
-    yield* ensureEventsDecode(events);
+    if (archive.thread.orchestrationVersion === 1) {
+      yield* ensureEventsDecode(events);
+    }
 
     const timestamp = DateTime.formatIso(yield* DateTime.now).replaceAll(":", "-");
     const backupPath = `${location.databasePath}.backup-thread-import-${timestamp}`;
@@ -834,11 +948,17 @@ export const importThread = Effect.fn("importThread")(function* (
         writtenFiles.push(file.path);
         yield* fs.chmod(file.path, 0o600);
       }
-      // Only events are written. The destination server derives the thread's
-      // read model from them on its next start, when the projectors replay
-      // every event above their recorded sequence. Copying projection rows as
-      // well would make that replay append onto already-complete rows.
-      yield* sql.withTransaction(insertEvents(events));
+      // Only events are written. The destination server derives the read
+      // model from them on its next start: the v1 projectors replay every
+      // event above their recorded sequence, and Orchestrator v2 notices the
+      // unprojected thread during startup verification and rebuilds its whole
+      // projection set from all v2 events (a one-time replay that blocks
+      // startup in proportion to the destination's event log). Copying
+      // projection rows as well would make that replay append onto
+      // already-complete rows.
+      yield* sql.withTransaction(
+        insertEvents(events, supportsEventVersion ? archive.thread.orchestrationVersion : null),
+      );
     }).pipe(
       Effect.onError(() =>
         Effect.forEach(
@@ -856,6 +976,7 @@ export const importThread = Effect.fn("importThread")(function* (
       title: archive.thread.title,
       targetProjectId: targetProject.projectId,
       targetProjectTitle: targetProject.title,
+      orchestrationVersion: archive.thread.orchestrationVersion,
       eventCount: events.length,
       attachmentCount: archive.attachments.length,
       terminalLogCount: archive.terminalLogs.length,

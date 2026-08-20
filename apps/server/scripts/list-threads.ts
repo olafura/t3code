@@ -45,9 +45,11 @@ export const listThreadsCommand = Command.make(
         yield* Console.log("No threads found.");
         return;
       }
-      yield* Console.log("THREAD_ID\tPROJECT_ID\tTITLE");
+      yield* Console.log("THREAD_ID\tVERSION\tPROJECT_ID\tTITLE");
       for (const thread of listing.threads) {
-        yield* Console.log(`${thread.id}\t${thread.projectId}\t${oneLine(thread.title)}`);
+        yield* Console.log(
+          `${thread.id}\tv${thread.orchestrationVersion}\t${thread.projectId}\t${oneLine(thread.title)}`,
+        );
       }
     }),
 ).pipe(Command.withDescription("List the projects and threads stored in a T3 state directory."));

@@ -134,6 +134,7 @@ it.layer(NodeServices.layer)("thread list", (it) => {
             projectTitle: "Project project-b",
             workspaceRoot: otherWorkspace,
             updatedAt: "2026-08-20T12:00:00.000Z",
+            orchestrationVersion: 1,
           },
           {
             id: "thread-old",
@@ -142,6 +143,7 @@ it.layer(NodeServices.layer)("thread list", (it) => {
             projectTitle: "Project project-a",
             workspaceRoot: workspace,
             updatedAt: "2026-08-19T12:00:00.000Z",
+            orchestrationVersion: 1,
           },
         ],
       });
