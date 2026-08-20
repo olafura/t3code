@@ -6,13 +6,17 @@ import * as Console from "effect/Console";
 import * as Effect from "effect/Effect";
 import { Command, Flag } from "effect/unstable/cli";
 
-import { exportThread } from "./thread-transfer.ts";
+import { exportThread, ThreadTransferState } from "./thread-transfer.ts";
 
 export const exportThreadCommand = Command.make(
   "export-thread",
   {
     source: Flag.string("source").pipe(
-      Flag.withDescription("Workspace root containing .t3, or an explicit .t3 directory."),
+      Flag.withDescription("Workspace root, T3 base directory, or direct state directory."),
+    ),
+    state: Flag.choice("state", ThreadTransferState.literals).pipe(
+      Flag.withDefault("userdata"),
+      Flag.withDescription("State directory below the T3 base directory; defaults to userdata."),
     ),
     threadId: Flag.string("thread-id"),
     output: Flag.string("output").pipe(Flag.withDescription("Archive JSON file to create.")),
@@ -21,9 +25,15 @@ export const exportThreadCommand = Command.make(
       Flag.withDescription("Include persisted terminal history, which may contain secrets."),
     ),
   },
-  ({ source, threadId, output, includeTerminalLogs }) =>
+  ({ source, state, threadId, output, includeTerminalLogs }) =>
     Effect.gen(function* () {
-      const result = yield* exportThread({ source, threadId, output, includeTerminalLogs });
+      const result = yield* exportThread({
+        source,
+        state,
+        threadId,
+        output,
+        includeTerminalLogs,
+      });
       yield* Console.log(
         `Exported '${result.title}' (${result.threadId}, orchestrator v${result.orchestrationVersion}) to ${result.output}`,
       );

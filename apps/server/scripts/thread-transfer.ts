@@ -84,6 +84,8 @@ export const ThreadArchive = Schema.Struct({
   ),
 });
 export type ThreadArchive = typeof ThreadArchive.Type;
+export const ThreadTransferState = Schema.Literals(["userdata", "dev"]);
+export type ThreadTransferState = typeof ThreadTransferState.Type;
 
 const decodeThreadArchive = Schema.decodeEffect(Schema.fromJsonString(ThreadArchive));
 const encodeThreadArchive = Schema.encodeEffect(fromJsonStringPretty(ThreadArchive));
@@ -104,16 +106,18 @@ export class ThreadTransferError extends Schema.TaggedErrorClass<ThreadTransferE
 }
 
 export interface ExportThreadInput {
-  /** Workspace root containing .t3, or the .t3 base directory itself. */
+  /** Workspace root, T3 base directory, or direct state directory. */
   readonly source: string;
+  readonly state?: ThreadTransferState | undefined;
   readonly threadId: string;
   readonly output: string;
   readonly includeTerminalLogs?: boolean | undefined;
 }
 
 export interface ImportThreadInput {
-  /** Workspace root containing .t3, or the .t3 base directory itself. */
+  /** Workspace root, T3 base directory, or direct state directory. */
   readonly destination: string;
+  readonly state?: ThreadTransferState | undefined;
   readonly archive: string;
   readonly targetProjectId?: string | undefined;
 }
@@ -123,7 +127,7 @@ export interface ThreadTransferOptions {
 }
 
 interface T3Location {
-  readonly baseDir: string;
+  readonly stateDir: string;
   readonly databasePath: string;
   readonly workspaceRoot: string | null;
 }
@@ -174,30 +178,43 @@ function restoreSqliteValue(value: typeof SqliteValue.Type): null | string | num
   return value instanceof Array ? Uint8Array.from(value) : value;
 }
 
-const resolveT3Location = Effect.fn("resolveThreadTransferT3Location")(function* (input: string) {
+const resolveT3Location = Effect.fn("resolveThreadTransferT3Location")(function* (
+  input: string,
+  state: ThreadTransferState = "userdata",
+) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const root = path.resolve(input);
-  const directDatabase = path.join(root, "userdata", "state.sqlite");
+  const directDatabase = path.join(root, "state.sqlite");
   if (yield* fs.exists(directDatabase)) {
     return {
-      baseDir: root,
+      stateDir: root,
       databasePath: directDatabase,
       workspaceRoot: null,
     } satisfies T3Location;
   }
+  const stateDir = path.join(root, state);
+  const stateDatabase = path.join(stateDir, "state.sqlite");
+  if (yield* fs.exists(stateDatabase)) {
+    return {
+      stateDir,
+      databasePath: stateDatabase,
+      workspaceRoot: null,
+    } satisfies T3Location;
+  }
   const nestedBaseDir = path.join(root, ".t3");
-  const nestedDatabase = path.join(nestedBaseDir, "userdata", "state.sqlite");
+  const nestedStateDir = path.join(nestedBaseDir, state);
+  const nestedDatabase = path.join(nestedStateDir, "state.sqlite");
   if (yield* fs.exists(nestedDatabase)) {
     return {
-      baseDir: nestedBaseDir,
+      stateDir: nestedStateDir,
       databasePath: nestedDatabase,
       workspaceRoot: root,
     } satisfies T3Location;
   }
   return yield* transferError(
     "resolve directory",
-    `No T3 database found at '${directDatabase}' or '${nestedDatabase}'.`,
+    `No T3 ${state} database found at '${directDatabase}', '${stateDatabase}', or '${nestedDatabase}'.`,
   );
 });
 
@@ -270,7 +287,7 @@ const loadAttachments = Effect.fn("loadThreadTransferAttachments")(function* (
 ) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const attachmentsDir = path.join(location.baseDir, "userdata", "attachments");
+  const attachmentsDir = path.join(location.stateDir, "attachments");
   if (!(yield* fs.exists(attachmentsDir))) return [];
   const names = (yield* fs.readDirectory(attachmentsDir))
     .filter((name) => isAttachmentForThread(name, threadId))
@@ -303,7 +320,7 @@ const loadTerminalLogs = Effect.fn("loadThreadTransferTerminalLogs")(function* (
 ) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const logsDir = path.join(location.baseDir, "userdata", "logs", "terminals");
+  const logsDir = path.join(location.stateDir, "logs", "terminals");
   if (!(yield* fs.exists(logsDir))) return [];
   const names = (yield* fs.readDirectory(logsDir))
     .filter((name) => isTerminalLogForThread(name, threadId))
@@ -360,7 +377,7 @@ const loadArchive = Effect.fn("loadThreadTransferArchive")(function* (filePath: 
 export const exportThread = Effect.fn("exportThread")(function* (input: ExportThreadInput) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const location = yield* resolveT3Location(input.source);
+  const location = yield* resolveT3Location(input.source, input.state);
   const output = path.resolve(input.output);
   if (yield* fs.exists(output)) {
     return yield* transferError("export thread", `Output '${output}' already exists.`);
@@ -548,7 +565,7 @@ const writeArchiveFiles = Effect.fn("writeThreadTransferFiles")(function* (
 ) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const destinationDir = path.join(location.baseDir, ...directory);
+  const destinationDir = path.join(location.stateDir, ...directory);
   const pending: Array<{ readonly path: string; readonly data: Uint8Array }> = [];
   for (const file of files) {
     if (path.basename(file.fileName) !== file.fileName) {
@@ -623,13 +640,14 @@ export const importThread = Effect.fn("importThread")(function* (
 ) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const location = yield* resolveT3Location(input.destination);
+  const location = yield* resolveT3Location(input.destination, input.state);
   const sharedHome = path.resolve(options.sharedHome ?? path.join(NodeOS.homedir(), ".t3"));
-  const [canonicalBaseDir, canonicalSharedHome] = yield* Effect.all([
-    fs.realPath(location.baseDir).pipe(Effect.orElseSucceed(() => location.baseDir)),
-    fs.realPath(sharedHome).pipe(Effect.orElseSucceed(() => sharedHome)),
+  const sharedDatabase = path.join(sharedHome, "userdata", "state.sqlite");
+  const [canonicalDatabase, canonicalSharedDatabase] = yield* Effect.all([
+    fs.realPath(location.databasePath).pipe(Effect.orElseSucceed(() => location.databasePath)),
+    fs.realPath(sharedDatabase).pipe(Effect.orElseSucceed(() => sharedDatabase)),
   ]);
-  if (canonicalBaseDir === canonicalSharedHome) {
+  if (canonicalDatabase === canonicalSharedDatabase) {
     return yield* transferError(
       "import thread",
       "Refusing to mutate the shared ~/.t3 database. Choose an isolated destination.",
@@ -686,16 +704,12 @@ export const importThread = Effect.fn("importThread")(function* (
     yield* sql`VACUUM INTO ${backup}`;
     yield* fs.chmod(backup, 0o600);
     const writtenFiles = yield* Effect.all([
-      writeArchiveFiles(
-        location,
-        ["userdata", "attachments"],
-        archive.attachments,
-        "Attachment",
-        (fileName) => isAttachmentForThread(fileName, archive.thread.id),
+      writeArchiveFiles(location, ["attachments"], archive.attachments, "Attachment", (fileName) =>
+        isAttachmentForThread(fileName, archive.thread.id),
       ),
       writeArchiveFiles(
         location,
-        ["userdata", "logs", "terminals"],
+        ["logs", "terminals"],
         archive.terminalLogs,
         "Terminal log",
         (fileName) => isTerminalLogForThread(fileName, archive.thread.id),

@@ -21,6 +21,7 @@ interface FixtureInput {
   readonly threadId?: string;
   readonly orchestrationVersion: 1 | 2;
   readonly includeV1EventBesideV2?: boolean;
+  readonly state?: "userdata" | "dev";
 }
 
 const createFixtureDatabase = Effect.fn("createThreadTransferFixtureDatabase")(function* (
@@ -28,7 +29,7 @@ const createFixtureDatabase = Effect.fn("createThreadTransferFixtureDatabase")(f
 ) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const stateDir = path.join(input.workspace, ".t3", "userdata");
+  const stateDir = path.join(input.workspace, ".t3", input.state ?? "userdata");
   const databasePath = path.join(stateDir, "state.sqlite");
   yield* fs.makeDirectory(stateDir, { recursive: true });
   yield* Effect.gen(function* () {
@@ -257,8 +258,9 @@ it.layer(NodeServices.layer)("thread transfer", (it) => {
           threadId: "thread-v2",
           orchestrationVersion: 2,
           includeV1EventBesideV2: true,
+          state: "dev",
         });
-        const sourceTerminalLogs = path.join(source, ".t3", "userdata", "logs", "terminals");
+        const sourceTerminalLogs = path.join(source, ".t3", "dev", "logs", "terminals");
         yield* fs.makeDirectory(sourceTerminalLogs, { recursive: true });
         yield* fs.writeFileString(
           path.join(sourceTerminalLogs, `terminal_${Encoding.encodeBase64Url("thread-v2")}.log`),
@@ -268,10 +270,12 @@ it.layer(NodeServices.layer)("thread transfer", (it) => {
           workspace: destination,
           projectId: "project-target-v2",
           orchestrationVersion: 2,
+          state: "dev",
         });
 
         const exported = yield* exportThread({
           source,
+          state: "dev",
           threadId: "thread-v2",
           output: archivePath,
         });
@@ -280,7 +284,7 @@ it.layer(NodeServices.layer)("thread transfer", (it) => {
         assert.equal(exported.terminalLogCount, 0);
 
         const imported = yield* importThread(
-          { archive: archivePath, destination },
+          { archive: archivePath, destination, state: "dev" },
           { sharedHome: path.join(root, "shared-home") },
         );
         assert.equal(imported.terminalLogCount, 0);
@@ -307,5 +311,54 @@ it.layer(NodeServices.layer)("thread transfer", (it) => {
           Effect.provide(NodeSqliteClient.layer({ filename: destinationDatabase, readonly: true })),
         );
       }),
+  );
+
+  it.effect("imports a released v1 thread into a direct v2 dev state directory", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "thread-transfer-cross-version-" });
+      const source = path.join(root, "source");
+      const destination = path.join(root, "destination");
+      const archivePath = path.join(root, "thread.json");
+      const sourceDatabase = yield* createFixtureDatabase({
+        workspace: source,
+        projectId: "project-release",
+        threadId: "thread-from-release",
+        orchestrationVersion: 1,
+      });
+      const destinationDatabase = yield* createFixtureDatabase({
+        workspace: destination,
+        projectId: "project-dev",
+        orchestrationVersion: 2,
+        state: "dev",
+      });
+
+      yield* exportThread({
+        source: path.dirname(sourceDatabase),
+        threadId: "thread-from-release",
+        output: archivePath,
+      });
+      const imported = yield* importThread(
+        {
+          archive: archivePath,
+          destination: path.dirname(destinationDatabase),
+          targetProjectId: "project-dev",
+        },
+        { sharedHome: path.join(root, "shared-home") },
+      );
+      assert.equal(imported.orchestrationVersion, 1);
+
+      yield* Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const events = yield* sql<{ readonly version: number }>`
+          SELECT application_event_version AS version
+          FROM orchestration_events
+          WHERE stream_id = 'thread-from-release'`;
+        assert.deepStrictEqual(events, [{ version: 1 }]);
+      }).pipe(
+        Effect.provide(NodeSqliteClient.layer({ filename: destinationDatabase, readonly: true })),
+      );
+    }),
   );
 });
