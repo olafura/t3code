@@ -16,16 +16,22 @@ export const exportThreadCommand = Command.make(
     ),
     threadId: Flag.string("thread-id"),
     output: Flag.string("output").pipe(Flag.withDescription("Archive JSON file to create.")),
+    includeTerminalLogs: Flag.boolean("include-terminal-logs").pipe(
+      Flag.withDefault(false),
+      Flag.withDescription("Include persisted terminal history, which may contain secrets."),
+    ),
   },
-  ({ source, threadId, output }) =>
+  ({ source, threadId, output, includeTerminalLogs }) =>
     Effect.gen(function* () {
-      const result = yield* exportThread({ source, threadId, output });
+      const result = yield* exportThread({ source, threadId, output, includeTerminalLogs });
       yield* Console.log(
         `Exported '${result.title}' (${result.threadId}, orchestrator v${result.orchestrationVersion}) to ${result.output}`,
       );
-      yield* Console.log(`  ${result.eventCount} events, ${result.attachmentCount} attachments`);
+      yield* Console.log(
+        `  ${result.eventCount} events, ${result.attachmentCount} attachments, ${result.terminalLogCount} terminal logs`,
+      );
     }),
-).pipe(Command.withDescription("Export one T3 thread and its image attachments."));
+).pipe(Command.withDescription("Export one T3 thread and its supporting files."));
 
 if (import.meta.main) {
   Command.run(exportThreadCommand, { version: "0.0.0" }).pipe(

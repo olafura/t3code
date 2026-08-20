@@ -1,6 +1,7 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Encoding from "effect/Encoding";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
@@ -184,14 +185,27 @@ it.layer(NodeServices.layer)("thread transfer", (it) => {
         path.join(sourceAttachments, attachmentName),
         Uint8Array.from([137, 80, 78, 71]),
       );
+      const terminalLogName = `terminal_${Encoding.encodeBase64Url("thread-v1")}.log`;
+      const sourceTerminalLogs = path.join(source, ".t3", "userdata", "logs", "terminals");
+      yield* fs.makeDirectory(sourceTerminalLogs, { recursive: true });
+      yield* fs.writeFileString(
+        path.join(sourceTerminalLogs, terminalLogName),
+        "\u001b[32mterminal output\u001b[0m\n",
+      );
+      yield* fs.writeFileString(
+        path.join(sourceTerminalLogs, "terminal_dW5yZWxhdGVk.log"),
+        "unrelated output\n",
+      );
 
       const exported = yield* exportThread({
         source,
         threadId: "thread-v1",
         output: archivePath,
+        includeTerminalLogs: true,
       });
       assert.equal(exported.orchestrationVersion, 1);
       assert.equal(exported.attachmentCount, 1);
+      assert.equal(exported.terminalLogCount, 1);
 
       const imported = yield* importThread(
         { archive: archivePath, destination },
@@ -201,6 +215,13 @@ it.layer(NodeServices.layer)("thread transfer", (it) => {
       assert.isTrue(yield* fs.exists(imported.backup));
       assert.isTrue(
         yield* fs.exists(path.join(destination, ".t3", "userdata", "attachments", attachmentName)),
+      );
+      assert.equal(imported.terminalLogCount, 1);
+      assert.equal(
+        yield* fs.readFileString(
+          path.join(destination, ".t3", "userdata", "logs", "terminals", terminalLogName),
+        ),
+        "\u001b[32mterminal output\u001b[0m\n",
       );
 
       yield* Effect.gen(function* () {
@@ -237,6 +258,12 @@ it.layer(NodeServices.layer)("thread transfer", (it) => {
           orchestrationVersion: 2,
           includeV1EventBesideV2: true,
         });
+        const sourceTerminalLogs = path.join(source, ".t3", "userdata", "logs", "terminals");
+        yield* fs.makeDirectory(sourceTerminalLogs, { recursive: true });
+        yield* fs.writeFileString(
+          path.join(sourceTerminalLogs, `terminal_${Encoding.encodeBase64Url("thread-v2")}.log`),
+          "excluded by default\n",
+        );
         const destinationDatabase = yield* createFixtureDatabase({
           workspace: destination,
           projectId: "project-target-v2",
@@ -250,11 +277,13 @@ it.layer(NodeServices.layer)("thread transfer", (it) => {
         });
         assert.equal(exported.orchestrationVersion, 2);
         assert.equal(exported.eventCount, 1);
+        assert.equal(exported.terminalLogCount, 0);
 
-        yield* importThread(
+        const imported = yield* importThread(
           { archive: archivePath, destination },
           { sharedHome: path.join(root, "shared-home") },
         );
+        assert.equal(imported.terminalLogCount, 0);
         yield* Effect.gen(function* () {
           const sql = yield* SqlClient.SqlClient;
           const events = yield* sql<{

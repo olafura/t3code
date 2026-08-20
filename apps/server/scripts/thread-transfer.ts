@@ -5,6 +5,7 @@ import * as NodeOS from "node:os";
 import { fromJsonStringPretty } from "@t3tools/shared/schemaJson";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Encoding from "effect/Encoding";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Predicate from "effect/Predicate";
@@ -58,7 +59,7 @@ const ThreadArchiveEvent = Schema.Struct({
   metadataJson: Schema.String,
   applicationEventVersion: Schema.Literals([1, 2]),
 });
-const ThreadArchiveAttachment = Schema.Struct({
+const ThreadArchiveFile = Schema.Struct({
   fileName: Schema.String,
   sha256: Schema.String,
   dataBase64: Schema.String,
@@ -77,7 +78,10 @@ export const ThreadArchive = Schema.Struct({
   }),
   events: Schema.Array(ThreadArchiveEvent),
   projections: Schema.Array(ThreadProjectionTable),
-  attachments: Schema.Array(ThreadArchiveAttachment),
+  attachments: Schema.Array(ThreadArchiveFile),
+  terminalLogs: Schema.Array(ThreadArchiveFile).pipe(
+    Schema.withDecodingDefault(Effect.succeed([])),
+  ),
 });
 export type ThreadArchive = typeof ThreadArchive.Type;
 
@@ -104,6 +108,7 @@ export interface ExportThreadInput {
   readonly source: string;
   readonly threadId: string;
   readonly output: string;
+  readonly includeTerminalLogs?: boolean | undefined;
 }
 
 export interface ImportThreadInput {
@@ -252,25 +257,60 @@ const rewriteEventProject = Effect.fn("rewriteThreadTransferEventProject")(funct
   );
 });
 
+function isAttachmentForThread(fileName: string, threadId: string): boolean {
+  const segment = toSafeThreadAttachmentSegment(threadId);
+  if (segment === null) return false;
+  const attachmentId = parseAttachmentIdFromRelativePath(fileName);
+  return attachmentId !== null && parseThreadSegmentFromAttachmentId(attachmentId) === segment;
+}
+
 const loadAttachments = Effect.fn("loadThreadTransferAttachments")(function* (
   location: T3Location,
   threadId: string,
 ) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const segment = toSafeThreadAttachmentSegment(threadId);
-  if (segment === null) return [];
   const attachmentsDir = path.join(location.baseDir, "userdata", "attachments");
   if (!(yield* fs.exists(attachmentsDir))) return [];
   const names = (yield* fs.readDirectory(attachmentsDir))
-    .filter((name) => {
-      const attachmentId = parseAttachmentIdFromRelativePath(name);
-      return attachmentId !== null && parseThreadSegmentFromAttachmentId(attachmentId) === segment;
-    })
+    .filter((name) => isAttachmentForThread(name, threadId))
     .sort();
   return yield* Effect.forEach(names, (fileName) =>
     Effect.gen(function* () {
       const data = yield* fs.readFile(path.join(attachmentsDir, fileName));
+      return {
+        fileName,
+        sha256: NodeCrypto.createHash("sha256").update(data).digest("hex"),
+        dataBase64: Buffer.from(data).toString("base64"),
+      };
+    }),
+  );
+});
+
+function isTerminalLogForThread(fileName: string, threadId: string): boolean {
+  const safeThreadId = `terminal_${Encoding.encodeBase64Url(threadId)}`;
+  const legacyThreadId = threadId.replace(/[^a-zA-Z0-9._-]/g, "_");
+  return (
+    fileName === `${safeThreadId}.log` ||
+    fileName === `${legacyThreadId}.log` ||
+    (fileName.startsWith(`${safeThreadId}_`) && fileName.endsWith(".log"))
+  );
+}
+
+const loadTerminalLogs = Effect.fn("loadThreadTransferTerminalLogs")(function* (
+  location: T3Location,
+  threadId: string,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const logsDir = path.join(location.baseDir, "userdata", "logs", "terminals");
+  if (!(yield* fs.exists(logsDir))) return [];
+  const names = (yield* fs.readDirectory(logsDir))
+    .filter((name) => isTerminalLogForThread(name, threadId))
+    .sort();
+  return yield* Effect.forEach(names, (fileName) =>
+    Effect.gen(function* () {
+      const data = yield* fs.readFile(path.join(logsDir, fileName));
       return {
         fileName,
         sha256: NodeCrypto.createHash("sha256").update(data).digest("hex"),
@@ -431,6 +471,8 @@ export const exportThread = Effect.fn("exportThread")(function* (input: ExportTh
       })),
       projections: yield* loadProjectionTables(input.threadId),
       attachments: yield* loadAttachments(location, input.threadId),
+      terminalLogs:
+        input.includeTerminalLogs === true ? yield* loadTerminalLogs(location, input.threadId) : [],
     } satisfies ThreadArchive;
   }).pipe(
     Effect.provide(NodeSqliteClient.layer({ filename: location.databasePath, readonly: true })),
@@ -460,6 +502,7 @@ export const exportThread = Effect.fn("exportThread")(function* (input: ExportTh
     orchestrationVersion: archive.thread.orchestrationVersion,
     eventCount: archive.events.length,
     attachmentCount: archive.attachments.length,
+    terminalLogCount: archive.terminalLogs.length,
   } as const;
 });
 
@@ -496,44 +539,50 @@ const resolveTargetProject = Effect.fn("resolveThreadTransferTargetProject")(fun
   );
 });
 
-const writeArchiveAttachments = Effect.fn("writeThreadTransferAttachments")(function* (
+const writeArchiveFiles = Effect.fn("writeThreadTransferFiles")(function* (
   location: T3Location,
-  attachments: ThreadArchive["attachments"],
+  directory: ReadonlyArray<string>,
+  files: ThreadArchive["attachments"],
+  kind: "Attachment" | "Terminal log",
+  isAllowedName: (fileName: string) => boolean,
 ) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const attachmentsDir = path.join(location.baseDir, "userdata", "attachments");
+  const destinationDir = path.join(location.baseDir, ...directory);
   const pending: Array<{ readonly path: string; readonly data: Uint8Array }> = [];
-  for (const attachment of attachments) {
-    if (path.basename(attachment.fileName) !== attachment.fileName) {
+  for (const file of files) {
+    if (path.basename(file.fileName) !== file.fileName) {
+      return yield* transferError("import thread", `${kind} name '${file.fileName}' is not safe.`);
+    }
+    if (!isAllowedName(file.fileName)) {
       return yield* transferError(
         "import thread",
-        `Attachment name '${attachment.fileName}' is not safe.`,
+        `${kind} '${file.fileName}' does not belong to this thread.`,
       );
     }
-    const data = Uint8Array.from(Buffer.from(attachment.dataBase64, "base64"));
+    const data = Uint8Array.from(Buffer.from(file.dataBase64, "base64"));
     const hash = NodeCrypto.createHash("sha256").update(data).digest("hex");
-    if (hash !== attachment.sha256) {
+    if (hash !== file.sha256) {
       return yield* transferError(
         "import thread",
-        `Attachment '${attachment.fileName}' failed its checksum.`,
+        `${kind} '${file.fileName}' failed its checksum.`,
       );
     }
-    const destination = path.join(attachmentsDir, attachment.fileName);
+    const destination = path.join(destinationDir, file.fileName);
     if (yield* fs.exists(destination)) {
       const existing = yield* fs.readFile(destination);
       const existingHash = NodeCrypto.createHash("sha256").update(existing).digest("hex");
       if (existingHash !== hash) {
         return yield* transferError(
           "import thread",
-          `Attachment '${attachment.fileName}' already exists with different contents.`,
+          `${kind} '${file.fileName}' already exists with different contents.`,
         );
       }
       continue;
     }
     pending.push({ path: destination, data });
   }
-  yield* fs.makeDirectory(attachmentsDir, { recursive: true });
+  if (pending.length > 0) yield* fs.makeDirectory(destinationDir, { recursive: true });
   for (const entry of pending) {
     yield* fs.writeFile(entry.path, entry.data);
     yield* fs.chmod(entry.path, 0o600);
@@ -636,9 +685,24 @@ export const importThread = Effect.fn("importThread")(function* (
     const backup = `${location.databasePath}.backup-thread-import-${timestamp}`;
     yield* sql`VACUUM INTO ${backup}`;
     yield* fs.chmod(backup, 0o600);
-    const writtenAttachments = yield* writeArchiveAttachments(location, archive.attachments);
-    const cleanupAttachments = Effect.forEach(
-      writtenAttachments,
+    const writtenFiles = yield* Effect.all([
+      writeArchiveFiles(
+        location,
+        ["userdata", "attachments"],
+        archive.attachments,
+        "Attachment",
+        (fileName) => isAttachmentForThread(fileName, archive.thread.id),
+      ),
+      writeArchiveFiles(
+        location,
+        ["userdata", "logs", "terminals"],
+        archive.terminalLogs,
+        "Terminal log",
+        (fileName) => isTerminalLogForThread(fileName, archive.thread.id),
+      ),
+    ]).pipe(Effect.map(([attachments, terminalLogs]) => [...attachments, ...terminalLogs]));
+    const cleanupFiles = Effect.forEach(
+      writtenFiles,
       (filePath) => fs.remove(filePath).pipe(Effect.orElseSucceed(() => undefined)),
       { discard: true },
     );
@@ -690,7 +754,7 @@ export const importThread = Effect.fn("importThread")(function* (
           }
         }),
       )
-      .pipe(Effect.tapError(() => cleanupAttachments));
+      .pipe(Effect.tapError(() => cleanupFiles));
 
     return {
       database: location.databasePath,
@@ -702,6 +766,7 @@ export const importThread = Effect.fn("importThread")(function* (
       orchestrationVersion: archive.thread.orchestrationVersion,
       eventCount: archive.events.length,
       attachmentCount: archive.attachments.length,
+      terminalLogCount: archive.terminalLogs.length,
     } as const;
   }).pipe(
     Effect.provide(NodeSqliteClient.layer({ filename: location.databasePath })),

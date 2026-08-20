@@ -31,7 +31,9 @@ export const importThreadCommand = Command.make(
       yield* Console.log(
         `Imported '${result.title}' (${result.threadId}, orchestrator v${result.orchestrationVersion}) into ${result.targetProjectTitle}`,
       );
-      yield* Console.log(`  ${result.eventCount} events, ${result.attachmentCount} attachments`);
+      yield* Console.log(
+        `  ${result.eventCount} events, ${result.attachmentCount} attachments, ${result.terminalLogCount} terminal logs`,
+      );
       yield* Console.log(`  Database backup: ${result.backup}`);
       yield* Console.log(
         "Restart the destination T3 server so its projector reads the new events.",

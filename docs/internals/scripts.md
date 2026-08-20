@@ -65,7 +65,9 @@ authenticated.
   an isolated T3 SQLite database; writes create a private backup first.
 - `vp run thread:export --source <project-dir> --thread-id <id> --output <archive.json>`: Exports
   one v1 or Orchestrator v2 thread, including its image attachments. The source can be a workspace
-  containing `.t3` or the `.t3` directory itself.
+  containing `.t3` or the `.t3` directory itself. Pass `--include-terminal-logs` to also export
+  persisted terminal history. Terminal logs may contain credentials or other sensitive output, so
+  they are excluded by default.
 - `vp run thread:import --archive <archive.json> --destination <project-dir>`: Imports the thread
   into an isolated T3 project directory, remaps it to the destination project, and backs up the
   destination database first. Stop the destination server before importing. Pass
