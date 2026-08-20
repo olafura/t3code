@@ -8,7 +8,7 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { Command, Flag } from "effect/unstable/cli";
 
-import { listThreads, ThreadListing, ThreadTransferState } from "./thread-transfer.ts";
+import { listThreads, ThreadListing, threadTransferFlags } from "./thread-transfer.ts";
 
 const oneLine = (value: string) => value.replaceAll(/[\r\n\t]+/g, " ");
 const encodeListing = Schema.encodeEffect(fromJsonStringPretty(ThreadListing));
@@ -16,13 +16,8 @@ const encodeListing = Schema.encodeEffect(fromJsonStringPretty(ThreadListing));
 export const listThreadsCommand = Command.make(
   "list-threads",
   {
-    source: Flag.string("source").pipe(
-      Flag.withDescription("Workspace root, T3 base directory, or direct state directory."),
-    ),
-    state: Flag.choice("state", ThreadTransferState.literals).pipe(
-      Flag.withDefault("userdata"),
-      Flag.withDescription("State directory below the T3 base directory; defaults to userdata."),
-    ),
+    source: threadTransferFlags.directory("source"),
+    state: threadTransferFlags.state,
     json: Flag.boolean("json").pipe(
       Flag.withDefault(false),
       Flag.withDescription("Print the complete thread list as JSON."),
