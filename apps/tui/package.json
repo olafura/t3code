@@ -18,8 +18,8 @@
   },
   "dependencies": {
     "@effect/platform-node": "catalog:",
-    "@opentui/core": "^0.4.1",
-    "@opentui/react": "^0.4.1",
+    "@opentui/core": "^0.5.4",
+    "@opentui/react": "^0.5.4",
     "@t3tools/client-runtime": "workspace:*",
     "@t3tools/contracts": "workspace:*",
     "@t3tools/opentui-image": "workspace:*",

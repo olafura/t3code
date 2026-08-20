@@ -1,9 +1,8 @@
 import { describe, expect, it } from "bun:test";
-import { CliRenderEvents, getLinkId, type ScrollBoxRenderable, SyntaxStyle } from "@opentui/core";
-import { MockTreeSitterClient, setRendererCapabilities } from "@opentui/core/testing";
+import { getLinkId, ImageRenderable, type ScrollBoxRenderable, SyntaxStyle } from "@opentui/core";
+import { MockTreeSitterClient } from "@opentui/core/testing";
 import * as React from "react";
 import { testRender } from "@opentui/react/test-utils";
-import { installKittyImageExtension } from "@t3tools/opentui-image";
 
 import type { OrchestrationThread } from "@t3tools/contracts";
 import {
@@ -197,7 +196,7 @@ describe("MessagesTimeline body", () => {
     t.renderer.destroy();
   });
 
-  it("Given Kitty graphics are unavailable, then an image attachment remains a file link", async () => {
+  it("Given no image loader, then an image attachment remains a file link", async () => {
     const full = {
       ...detail("default"),
       messages: [
@@ -247,7 +246,7 @@ describe("MessagesTimeline body", () => {
     t.renderer.destroy();
   });
 
-  it("Given Kitty graphics are available, then an image attachment renders inline", async () => {
+  it("Given an image loader, then an image attachment renders inline", async () => {
     const full = {
       ...detail("default"),
       messages: [
@@ -271,7 +270,6 @@ describe("MessagesTimeline body", () => {
       ],
     } as unknown as OrchestrationThread;
     const ref = React.createRef<null>();
-    const writes: string[] = [];
     const loadedUrls: string[] = [];
     const openedImages: string[] = [];
     let resolveImageLoad: () => void = () => {};
@@ -302,20 +300,15 @@ describe("MessagesTimeline body", () => {
       />,
       { width: 92, height: 24 },
     );
-    installKittyImageExtension(t.renderer, {
-      writer: { write: (value) => writes.push(value) },
-    });
-    const capabilities = setRendererCapabilities(t.renderer, { kitty_graphics: true });
-    await React.act(async () => {
-      t.renderer.emit(CliRenderEvents.CAPABILITIES, capabilities);
-    });
     await imageLoaded;
     await React.act(async () => {});
     await t.renderOnce();
     await t.flush();
 
     expect(loadedUrls).toEqual(["https://srv/assets/att1.png"]);
-    expect(writes.join("")).toContain("a=T");
+    expect(t.renderer.root.findDescendantById("attachment-image-att1")).toBeInstanceOf(
+      ImageRenderable,
+    );
     const frame = t.captureCharFrame();
     expect(frame).toContain("diagram.png");
     const metadataRow = frame.split("\n").findIndex((line) => line.includes("diagram.png"));
@@ -327,7 +320,7 @@ describe("MessagesTimeline body", () => {
     t.renderer.destroy();
   });
 
-  it("Given an inline image, when the timeline scrolls, then it pauses blank until scrolling settles", async () => {
+  it("Given an inline image, when the timeline scrolls, then OpenTUI keeps the native image mounted", async () => {
     const full = {
       ...detail("default"),
       messages: [
@@ -351,7 +344,6 @@ describe("MessagesTimeline body", () => {
       ],
     } as unknown as OrchestrationThread;
     const ref = React.createRef<null>();
-    const writes: string[] = [];
     const t = await testRender(
       <MessagesTimeline
         detail={full}
@@ -371,11 +363,6 @@ describe("MessagesTimeline body", () => {
       />,
       { width: 92, height: 24 },
     );
-    const manager = installKittyImageExtension(t.renderer, {
-      writer: { write: (value) => writes.push(value) },
-    });
-    const capabilities = setRendererCapabilities(t.renderer, { kitty_graphics: true });
-    t.renderer.emit(CliRenderEvents.CAPABILITIES, capabilities);
     for (let i = 0; i < 8; i += 1) {
       await t.renderOnce();
       await t.flush();
@@ -385,21 +372,14 @@ describe("MessagesTimeline body", () => {
       .split("\n")
       .findIndex((line) => line.includes("large-diagram.png"));
     expect(metadataRow).toBeGreaterThanOrEqual(0);
-    expect(writes.join("")).toContain("a=T");
+    const image = t.renderer.root.findDescendantById("attachment-image-att1");
+    expect(image).toBeInstanceOf(ImageRenderable);
 
     await t.mockMouse.scroll(2, metadataRow + 2, "up");
     await t.renderOnce();
 
-    expect(manager.isScrollPaused).toBe(true);
-    expect(writes.at(-1)).toContain("a=d");
-    // The paused image leaves its bubble-framed area blank — no caption.
+    expect(t.renderer.root.findDescendantById("attachment-image-att1")).toBe(image);
     expect(t.captureCharFrame()).not.toContain("[ image");
-
-    manager.resumeAfterScroll();
-    await t.renderOnce();
-
-    expect(manager.isScrollPaused).toBe(false);
-    expect(writes.at(-1)).toContain("a=T");
     t.renderer.destroy();
   });
 

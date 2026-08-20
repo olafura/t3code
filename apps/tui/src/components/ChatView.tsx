@@ -14,7 +14,7 @@ import {
 } from "@t3tools/contracts";
 import { truncate } from "@t3tools/shared/String";
 import { useRenderer, useTerminalDimensions } from "@opentui/react";
-import { getKittyClipboardManager, getKittyImageManager } from "@t3tools/opentui-image";
+import { getKittyClipboardManager } from "@t3tools/opentui-image";
 import {
   addProjectRemoteSourceLabel,
   buildAddProjectRemoteSourceReadiness,
@@ -63,7 +63,6 @@ import {
   validateNewThread,
 } from "../newThread.logic.ts";
 import { useKeyBindings } from "../hooks/useKeyBindings.ts";
-import { useKittyGraphicsSupport } from "../hooks/useKittyGraphicsSupport.ts";
 import { latestActionableProposedPlan } from "../proposedPlan.ts";
 import { createStore } from "../store.ts";
 import { createTuiSyntaxStyle, statusGlyphColor, usePalette } from "../theme.ts";
@@ -185,7 +184,7 @@ export function ChatView({
 }): React.ReactNode {
   const { width, height } = useTerminalDimensions();
   const renderer = useRenderer();
-  const inlineImagesSupported = useKittyGraphicsSupport();
+  const inlineImagesSupported = true;
   const palette = usePalette();
   const store = React.useMemo(() => createStore(client), [client]);
   const syntaxStyle = React.useMemo(() => createTuiSyntaxStyle(palette), [palette]);
@@ -2388,7 +2387,6 @@ export function ChatView({
           VISUAL: process.env.VISUAL,
           EDITOR: process.env.EDITOR,
         });
-        getKittyImageManager(renderer).clearImages();
         renderer.suspend();
         try {
           await new Promise<void>((resolve) => {
@@ -2797,11 +2795,9 @@ export function ChatView({
     onApprovalNext: () => setApprovalIndex((index) => (index + 1) % approvals.length),
     onScrollUp: () => {
       const box = scrollRef.current;
-      getKittyImageManager(renderer).pauseForScroll();
       box?.scrollBy({ x: 0, y: -SCROLL_STEP });
     },
     onScrollDown: () => {
-      getKittyImageManager(renderer).pauseForScroll();
       scrollRef.current?.scrollBy({ x: 0, y: SCROLL_STEP });
     },
     onNewThread: openNewThread,

@@ -2,7 +2,7 @@ import * as NodeFS from "node:fs";
 
 import { createCliRenderer } from "@opentui/core";
 import { createRoot } from "@opentui/react";
-import { installKittyClipboardExtension, installKittyImageExtension } from "@t3tools/opentui-image";
+import { installKittyClipboardExtension } from "@t3tools/opentui-image";
 
 import { ChatView } from "./components/ChatView.tsx";
 import { buildTuiRuntime, makeTuiClient, type TuiOptions } from "./connection.ts";
@@ -125,9 +125,6 @@ async function main(): Promise<void> {
   };
   logColorCapabilities("startup");
   setTimeout(() => logColorCapabilities("settled"), 2000).unref?.();
-  installKittyImageExtension(renderer, {
-    tmuxPassthrough,
-  });
   installKittyClipboardExtension(renderer, {
     tmuxPassthrough,
   });

@@ -1,8 +1,7 @@
 import { describe, expect, it } from "bun:test";
-import { CliRenderEvents, type Renderable, ScrollBoxRenderable } from "@opentui/core";
-import { setRendererCapabilities } from "@opentui/core/testing";
+import { type Renderable, ScrollBoxRenderable } from "@opentui/core";
 import { testRender } from "@opentui/react/test-utils";
-import { installKittyImageExtension, type RgbaImage } from "@t3tools/opentui-image";
+import type { RgbaImage } from "@t3tools/opentui-image";
 import * as NodeFSP from "node:fs/promises";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
@@ -930,12 +929,6 @@ describe("ChatView image lightbox", () => {
       width: 110,
       height: 28,
     });
-    const manager = installKittyImageExtension(setup.renderer, {
-      writer: { write: () => {} },
-    });
-    const capabilities = setRendererCapabilities(setup.renderer, { kitty_graphics: true });
-    setup.renderer.emit(CliRenderEvents.CAPABILITIES, capabilities);
-
     await selectThread(setup, fake.connect);
     for (let index = 0; index < 8; index += 1) {
       await setup.renderOnce();
@@ -949,7 +942,6 @@ describe("ChatView image lightbox", () => {
 
     await setup.mockMouse.scroll(40, initialDiagramRow, "up");
     await setup.renderOnce();
-    manager.resumeAfterScroll();
     for (let index = 0; index < 8; index += 1) {
       await setup.renderOnce();
       await setup.flush();
@@ -1685,7 +1677,9 @@ describe("ChatView new-thread parity", () => {
     });
     await setup.waitFor(() => calls.length === 1);
     await setup.waitFor(() => fake.subscribedThreadIds.at(-1) === "t-created");
-    const frame = setup.captureCharFrame();
+    const frame = await setup.waitForFrame(
+      (current) => !current.includes("Creating thread") && !current.includes("create in isolation"),
+    );
 
     expect(calls[0]).toMatchObject({
       projectCwd: "/workspace/project-one",

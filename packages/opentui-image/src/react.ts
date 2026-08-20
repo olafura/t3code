@@ -1,21 +1,103 @@
-import { extend, type ExtendedComponentProps } from "@opentui/react";
-import { createElement } from "react";
+import { NativeImage } from "@opentui/core";
+import {
+  useRenderer,
+  useTerminalDimensions,
+  type ImageProps as NativeImageProps,
+} from "@opentui/react";
 import type * as React from "react";
+import * as ReactRuntime from "react";
 
-import { ImageRenderable } from "./ImageRenderable.ts";
+const DEFAULT_CELL_WIDTH = 18;
+const DEFAULT_CELL_HEIGHT = 35;
 
-declare module "@opentui/react" {
-  interface OpenTUIComponents {
-    image: typeof ImageRenderable;
-  }
+export interface ImageProps extends Omit<NativeImageProps, "fit" | "height" | "source" | "width"> {
+  readonly data: Uint8Array;
+  readonly imageWidth: number;
+  readonly imageHeight: number;
+  readonly columns?: number;
+  readonly rows?: number;
+  readonly fallbackCellWidth?: number;
+  readonly fallbackCellHeight?: number;
 }
 
-extend({ image: ImageRenderable });
+export function Image(props: ImageProps): React.ReactElement {
+  const {
+    data,
+    imageWidth,
+    imageHeight,
+    columns,
+    rows,
+    fallbackCellWidth = DEFAULT_CELL_WIDTH,
+    fallbackCellHeight = DEFAULT_CELL_HEIGHT,
+    ...imageProps
+  } = props;
+  const renderer = useRenderer();
+  useTerminalDimensions();
+  const source = ReactRuntime.useMemo(
+    () => NativeImage.fromRgba(data, imageWidth, imageHeight),
+    [data, imageHeight, imageWidth],
+  );
+  ReactRuntime.useEffect(() => () => source.dispose(), [source]);
+  const size = resolveCellSize({
+    imageWidth,
+    imageHeight,
+    ...(columns === undefined ? {} : { columns }),
+    ...(rows === undefined ? {} : { rows }),
+    cellWidth: renderer.resolution ? renderer.resolution.width / renderer.width : fallbackCellWidth,
+    cellHeight: renderer.resolution
+      ? renderer.resolution.height / renderer.height
+      : fallbackCellHeight,
+  });
 
-export type ImageProps = ExtendedComponentProps<typeof ImageRenderable>;
+  return ReactRuntime.createElement("image", {
+    ...imageProps,
+    source,
+    width: size.columns,
+    height: size.rows,
+    fit: "fill",
+  });
+}
 
-export function Image(props: ImageProps): React.ReactElement<ImageProps> {
-  return createElement("image", props);
+function resolveCellSize(input: {
+  readonly imageWidth: number;
+  readonly imageHeight: number;
+  readonly columns?: number;
+  readonly rows?: number;
+  readonly cellWidth: number;
+  readonly cellHeight: number;
+}): { readonly columns: number; readonly rows: number } {
+  const naturalColumns = Math.max(1, Math.ceil(input.imageWidth / input.cellWidth));
+  const naturalRows = Math.max(1, Math.ceil(input.imageHeight / input.cellHeight));
+  if (input.columns !== undefined && input.rows === undefined) {
+    return {
+      columns: input.columns,
+      rows: Math.max(
+        1,
+        Math.round(
+          (input.imageHeight / input.imageWidth) *
+            input.columns *
+            (input.cellWidth / input.cellHeight),
+        ),
+      ),
+    };
+  }
+  if (input.rows !== undefined && input.columns === undefined) {
+    return {
+      columns: Math.max(
+        1,
+        Math.round(
+          (input.imageWidth / input.imageHeight) *
+            input.rows *
+            (input.cellHeight / input.cellWidth),
+        ),
+      ),
+      rows: input.rows,
+    };
+  }
+  return {
+    columns: input.columns ?? naturalColumns,
+    rows: input.rows ?? naturalRows,
+  };
 }
 
 export * from "./index.ts";

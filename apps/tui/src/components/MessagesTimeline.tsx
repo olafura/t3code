@@ -1,12 +1,11 @@
 import { type ScrollBoxRenderable, SyntaxStyle } from "@opentui/core";
-import { getKittyImageManager, Image, type RgbaImage } from "@t3tools/opentui-image/react";
+import { Image, type RgbaImage } from "@t3tools/opentui-image/react";
 import type { OrchestrationCheckpointSummary, OrchestrationThread } from "@t3tools/contracts";
 import { shouldCollapseUserMessage } from "@t3tools/shared/chatMessages";
 import * as React from "react";
 import { useRenderer } from "@opentui/react";
 
 import type { PendingApproval } from "../approvals.ts";
-import { useKittyGraphicsSupport } from "../hooks/useKittyGraphicsSupport.ts";
 import {
   type ContextWindowSnapshot,
   deriveContextWindow,
@@ -293,6 +292,7 @@ function AttachmentPreview({
       {image ? (
         <box {...(openImage ? { onMouseDown: openImage } : {})}>
           <Image
+            id={`attachment-image-${attachment.id}`}
             data={image.data}
             imageWidth={image.imageWidth}
             imageHeight={image.imageHeight}
@@ -659,9 +659,8 @@ export const MessagesTimeline = React.memo(function MessagesTimeline({
   readonly treeSitterClient?: unknown;
 }): React.ReactNode {
   const renderer = useRenderer();
-  const inlineImagesSupported = useKittyGraphicsSupport();
-  const pauseImagesForScroll = React.useCallback(() => {
-    getKittyImageManager(renderer).pauseForScroll();
+  const inlineImagesSupported = true;
+  const handleTimelineScroll = React.useCallback(() => {
     // A conversation is vertical-only. OpenTUI still processes horizontal mouse
     // wheel events when a descendant briefly measures wider than the viewport;
     // reset after its internal event handler so the whole timeline cannot drift.
@@ -669,7 +668,7 @@ export const MessagesTimeline = React.memo(function MessagesTimeline({
       const box = scrollRef.current;
       if (box && box.scrollLeft !== 0) box.scrollLeft = 0;
     });
-  }, [renderer, scrollRef]);
+  }, [scrollRef]);
   const imageCellWidth = renderer.resolution ? renderer.resolution.width / renderer.width : 18;
   const mdClient = treeSitterClient ? { treeSitterClient: treeSitterClient as never } : {};
   const palette = usePalette();
@@ -837,7 +836,7 @@ export const MessagesTimeline = React.memo(function MessagesTimeline({
         scrollX={false}
         stickyScroll={showingLatest}
         stickyStart="bottom"
-        onMouseScroll={pauseImagesForScroll}
+        onMouseScroll={handleTimelineScroll}
         style={{
           rootOptions: { backgroundColor: "transparent" },
           contentOptions: { width: "100%", maxWidth: "100%", overflow: "hidden" },
