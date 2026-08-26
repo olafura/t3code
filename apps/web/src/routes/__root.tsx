@@ -48,6 +48,7 @@ import { applyAppearanceContrast } from "~/appearanceContrast";
 import { useClientSettings } from "../hooks/useSettings";
 import { PlanAgentSelectionHeal } from "../planAgentSelectionHeal";
 import { ShellSettingsBridge } from "../shell/ShellSettingsBridge";
+import { ShellToastBridge } from "../shell/ShellToastBridge";
 import { ShellThemeBridge } from "../shell/ShellThemeBridge";
 import { T3ShellBridge } from "../shell/T3ShellBridge";
 import {
@@ -227,7 +228,7 @@ function RootRouteView() {
   // decision is known, so a fresh install renders nothing (not the shell,
   // not a flash of threads) before landing on the welcome wizard.
   return (
-    <ToastProvider>
+    <ToastProvider shellMirror={isT3Shell ? <ShellToastBridge /> : undefined}>
       <AnchoredToastProvider>
         <DocumentTitleSync />
         <ContrastAppearanceSync />
