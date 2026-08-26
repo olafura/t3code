@@ -40,6 +40,7 @@ import { applyAppearanceContrast } from "~/appearanceContrast";
 import { useClientSettings } from "../hooks/useSettings";
 import { PlanAgentSelectionHeal } from "../planAgentSelectionHeal";
 import { ShellSettingsBridge } from "../shell/ShellSettingsBridge";
+import { ShellToastBridge } from "../shell/ShellToastBridge";
 import { ShellThemeBridge } from "../shell/ShellThemeBridge";
 import { T3ShellBridge } from "../shell/T3ShellBridge";
 import {
@@ -156,7 +157,7 @@ function RootRouteView() {
   );
 
   return (
-    <ToastProvider>
+    <ToastProvider shellMirror={isT3Shell ? <ShellToastBridge /> : undefined}>
       <AnchoredToastProvider>
         <DocumentTitleSync />
         <ContrastAppearanceSync />
