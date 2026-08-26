@@ -39,6 +39,7 @@ import { applyAppearanceFontVariables } from "~/appearanceFonts";
 import { applyAppearanceContrast } from "~/appearanceContrast";
 import { useClientSettings } from "../hooks/useSettings";
 import { PlanAgentSelectionHeal } from "../planAgentSelectionHeal";
+import { ShellSettingsBridge } from "../shell/ShellSettingsBridge";
 import { T3ShellBridge } from "../shell/T3ShellBridge";
 import {
   deriveLogicalProjectKeyFromSettings,
@@ -171,6 +172,7 @@ function RootRouteView() {
         <HostedStaticEnvironmentBootstrap />
         {primaryEnvironmentAuthenticated ? <EventRouter /> : null}
         {isT3Shell ? <T3ShellBridge /> : null}
+        {isT3Shell ? <ShellSettingsBridge /> : null}
         {primaryEnvironmentAuthenticated ? <PlanAgentSelectionHeal /> : null}
         {primaryEnvironmentAuthenticated ? <ProviderUpdateLaunchNotification /> : null}
         {appShell}

@@ -220,9 +220,9 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
   return (
     <SidebarProvider className="h-dvh! min-h-0!" defaultOpen style={sidebarProviderStyle}>
       <ProjectProjectionRetention />
-      {/* Hosted by the Qt shell, the thread sidebar is native chrome fed by
-          T3ShellBridge; the settings nav stays HTML. */}
-      {isT3Shell && !isOnSettings ? null : (
+      {/* Hosted by the Qt shell, the thread sidebar and the settings nav are
+          native chrome fed by T3ShellBridge / ShellSettingsBridge. */}
+      {isT3Shell ? null : (
         <Sidebar
           side="left"
           collapsible="offcanvas"
@@ -254,7 +254,7 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
         </Sidebar>
       )}
       {children}
-      {isT3Shell && !isOnSettings ? null : <SidebarControl />}
+      {isT3Shell ? null : <SidebarControl />}
     </SidebarProvider>
   );
 }
