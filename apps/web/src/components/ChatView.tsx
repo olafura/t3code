@@ -105,7 +105,7 @@ import {
 import * as Cause from "effect/Cause";
 import * as Schema from "effect/Schema";
 import { AsyncResult } from "effect/unstable/reactivity";
-import { isElectron } from "../env";
+import { isElectron, isT3Shell } from "../env";
 import { readLocalApi } from "../localApi";
 import { useDiffPanelStore } from "../diffPanelStore";
 import {
@@ -176,6 +176,7 @@ import {
   type RightPanelSurface,
   useRightPanelStore,
 } from "../rightPanelStore";
+import { ShellRightPanelBridge } from "../shell/ShellRightPanelBridge";
 import {
   isPreviewSupportedInRuntime,
   setActivePreviewTab,
@@ -676,6 +677,8 @@ type ChatViewProps =
       threadSyncPhase?: ThreadSyncPhase | null;
       routeKind: "server";
       draftId?: never;
+      /** `rightPanel` renders only the right panel's content (the shell's embed route). */
+      presentation?: "full" | "rightPanel";
     }
   | {
       environmentId: EnvironmentId;
@@ -686,6 +689,7 @@ type ChatViewProps =
       threadSyncPhase?: never;
       routeKind: "draft";
       draftId: DraftId;
+      presentation?: "full" | "rightPanel";
     };
 
 interface TerminalLaunchContext {
@@ -1387,7 +1391,11 @@ function releaseChatTimelineAnchor<T extends { readonly messageId: MessageId | n
   return current.messageId === null ? current : { ...current, messageId: null };
 }
 
-export default function ChatView(props: ChatViewProps) {
+function ChatViewContent(props: ChatViewProps) {
+  const presentation = props.presentation ?? "full";
+  // Hosted by the Qt shell, the right panel's chrome is a native brick and its
+  // content is this same view rendered by the embed route.
+  const shellHostsChrome = isT3Shell && presentation === "full";
   const {
     environmentId,
     threadId,
@@ -8155,9 +8163,42 @@ export default function ChatView(props: ChatViewProps) {
     addFiles: (files) => composerRef.current?.addDroppedFiles(files),
   });
 
+  if (presentation === "rightPanel") {
+    return (
+      <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-background">
+        {rightPanelContent}
+      </div>
+    );
+  }
+
   return (
     <div className="relative flex min-h-0 min-w-0 flex-1 overflow-hidden bg-background">
-      {rightPanelControlsAtRoot ? panelLayoutControls : null}
+      {shellHostsChrome && activeThreadRef ? (
+        <ShellRightPanelBridge
+          threadRef={activeThreadRef}
+          isOpen={rightPanelOpen}
+          activeSurfaceId={activeRightPanelSurface?.id ?? null}
+          surfaces={rightPanelState.surfaces}
+          terminalLabelsById={activeTerminalLabelsById}
+          previewSessions={activePreviewState.sessions}
+          canAdd={{
+            diff: isServerThread && isGitRepo,
+            files: activeProject !== null,
+            terminal: activeProject !== null,
+            pullRequest: pullRequestSurfaceAvailable,
+            agents: true,
+          }}
+          onToggle={toggleRightPanel}
+          onActivate={activateRightPanelSurface}
+          onClose={closeRightPanelSurface}
+          onAddDiff={addDiffSurface}
+          onAddFiles={addFilesSurface}
+          onAddTerminal={addTerminalSurface}
+          onAddPullRequest={addPullRequestSurface}
+          onAddAgents={addAgentsSurface}
+        />
+      ) : null}
+      {rightPanelControlsAtRoot && !shellHostsChrome ? panelLayoutControls : null}
       <div
         className={cn(
           "flex min-h-0 min-w-0 flex-col overflow-x-hidden",
@@ -8178,7 +8219,7 @@ export default function ChatView(props: ChatViewProps) {
               className="pointer-events-none fixed top-[var(--workspace-controls-top)] right-[var(--workspace-controls-right)] h-[var(--workspace-topbar-height)] w-28 [-webkit-app-region:no-drag]"
             />
           ) : null}
-          {!rightPanelControlsAtRoot && !rightPanelControlsInPanel ? panelLayoutControls : null}
+          {!shellHostsChrome && !rightPanelControlsAtRoot && !rightPanelControlsInPanel ? panelLayoutControls : null}
           <ChatHeader
             {...(!supportsPullRequests || activeProjectRepository === null
               ? {}
@@ -8628,7 +8669,7 @@ export default function ChatView(props: ChatViewProps) {
         ))}
       </div>
 
-      {rightPanelPresent && !shouldUseRightPanelSheet && activeThreadRef ? (
+      {!shellHostsChrome && rightPanelPresent && !shouldUseRightPanelSheet && activeThreadRef ? (
         <RightPanelTabs
           mode="inline"
           open={rightPanelOpen}
@@ -8667,7 +8708,7 @@ export default function ChatView(props: ChatViewProps) {
           {rightPanelContent}
         </RightPanelTabs>
       ) : null}
-      {rightPanelPresent && shouldUseRightPanelSheet && activeThreadRef ? (
+      {!shellHostsChrome && rightPanelPresent && shouldUseRightPanelSheet && activeThreadRef ? (
         <RightPanelSheet
           animationDurationMs={panelAnimationsActive ? panelAnimationDurationMs : 0}
           open={rightPanelOpen}

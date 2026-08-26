@@ -30,6 +30,7 @@ import { Route as SettingsAppearanceRouteImport } from './routes/settings.appear
 import { Route as ProjectsProjectKeyRouteImport } from './routes/projects.$projectKey'
 import { Route as ConnectCallbackRouteImport } from './routes/connect_.callback'
 import { Route as ChatPullRequestsRouteImport } from './routes/_chat.pull-requests'
+import { Route as EmbedEnvironmentIdThreadIdRouteImport } from './routes/embed.$environmentId.$threadId'
 import { Route as ChatDraftDraftIdRouteImport } from './routes/_chat.draft.$draftId'
 import { Route as ChatEnvironmentIdThreadIdRouteImport } from './routes/_chat.$environmentId.$threadId'
 
@@ -137,6 +138,12 @@ const ChatPullRequestsRoute = ChatPullRequestsRouteImport.update({
   path: '/pull-requests',
   getParentRoute: () => ChatRoute,
 } as any)
+const EmbedEnvironmentIdThreadIdRoute =
+  EmbedEnvironmentIdThreadIdRouteImport.update({
+    id: '/embed/$environmentId/$threadId',
+    path: '/embed/$environmentId/$threadId',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const ChatDraftDraftIdRoute = ChatDraftDraftIdRouteImport.update({
   id: '/draft/$draftId',
   path: '/draft/$draftId',
@@ -172,6 +179,7 @@ export interface FileRoutesByFullPath {
   '/settings/source-control': typeof SettingsSourceControlRoute
   '/$environmentId/$threadId': typeof ChatEnvironmentIdThreadIdRoute
   '/draft/$draftId': typeof ChatDraftDraftIdRoute
+  '/embed/$environmentId/$threadId': typeof EmbedEnvironmentIdThreadIdRoute
 }
 export interface FileRoutesByTo {
   '/connect': typeof ConnectRoute
@@ -196,6 +204,7 @@ export interface FileRoutesByTo {
   '/': typeof ChatIndexRoute
   '/$environmentId/$threadId': typeof ChatEnvironmentIdThreadIdRoute
   '/draft/$draftId': typeof ChatDraftDraftIdRoute
+  '/embed/$environmentId/$threadId': typeof EmbedEnvironmentIdThreadIdRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -222,6 +231,7 @@ export interface FileRoutesById {
   '/_chat/': typeof ChatIndexRoute
   '/_chat/$environmentId/$threadId': typeof ChatEnvironmentIdThreadIdRoute
   '/_chat/draft/$draftId': typeof ChatDraftDraftIdRoute
+  '/embed/$environmentId/$threadId': typeof EmbedEnvironmentIdThreadIdRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -248,6 +258,7 @@ export interface FileRouteTypes {
     | '/settings/source-control'
     | '/$environmentId/$threadId'
     | '/draft/$draftId'
+    | '/embed/$environmentId/$threadId'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/connect'
@@ -272,6 +283,7 @@ export interface FileRouteTypes {
     | '/'
     | '/$environmentId/$threadId'
     | '/draft/$draftId'
+    | '/embed/$environmentId/$threadId'
   id:
     | '__root__'
     | '/_chat'
@@ -297,6 +309,7 @@ export interface FileRouteTypes {
     | '/_chat/'
     | '/_chat/$environmentId/$threadId'
     | '/_chat/draft/$draftId'
+    | '/embed/$environmentId/$threadId'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -308,6 +321,7 @@ export interface RootRouteChildren {
   WelcomeRoute: typeof WelcomeRoute
   ConnectCallbackRoute: typeof ConnectCallbackRoute
   ProjectsProjectKeyRoute: typeof ProjectsProjectKeyRoute
+  EmbedEnvironmentIdThreadIdRoute: typeof EmbedEnvironmentIdThreadIdRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -459,6 +473,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ChatPullRequestsRouteImport
       parentRoute: typeof ChatRoute
     }
+    '/embed/$environmentId/$threadId': {
+      id: '/embed/$environmentId/$threadId'
+      path: '/embed/$environmentId/$threadId'
+      fullPath: '/embed/$environmentId/$threadId'
+      preLoaderRoute: typeof EmbedEnvironmentIdThreadIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/_chat/draft/$draftId': {
       id: '/_chat/draft/$draftId'
       path: '/draft/$draftId'
@@ -533,6 +554,7 @@ const rootRouteChildren: RootRouteChildren = {
   WelcomeRoute: WelcomeRoute,
   ConnectCallbackRoute: ConnectCallbackRoute,
   ProjectsProjectKeyRoute: ProjectsProjectKeyRoute,
+  EmbedEnvironmentIdThreadIdRoute: EmbedEnvironmentIdThreadIdRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
