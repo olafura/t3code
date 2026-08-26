@@ -43,6 +43,7 @@ import { applyAppearanceContrast } from "~/appearanceContrast";
 import { useClientSettings } from "../hooks/useSettings";
 import { PlanAgentSelectionHeal } from "../planAgentSelectionHeal";
 import { ShellSettingsBridge } from "../shell/ShellSettingsBridge";
+import { ShellThemeBridge } from "../shell/ShellThemeBridge";
 import { T3ShellBridge } from "../shell/T3ShellBridge";
 import {
   deriveLogicalProjectKeyFromSettings,
@@ -227,6 +228,7 @@ function RootRouteView() {
           {primaryEnvironmentAuthenticated ? <PlanAgentSelectionHeal /> : null}
           {isT3Shell ? <T3ShellBridge /> : null}
           {isT3Shell ? <ShellSettingsBridge /> : null}
+          {isT3Shell ? <ShellThemeBridge /> : null}
           {primaryEnvironmentAuthenticated ? <ProviderUpdateLaunchNotification /> : null}
           {appShell}
           {/* Above the router: a theme draft is judged by walking the app, so the
