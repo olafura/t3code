@@ -17,11 +17,7 @@ import {
 } from "@dnd-kit/sortable";
 import { restrictToFirstScrollableAncestor, restrictToVerticalAxis } from "@dnd-kit/modifiers";
 import { CSS } from "@dnd-kit/utilities";
-import {
-  canSnooze,
-  effectiveSnoozed,
-  threadWokeAt,
-} from "@t3tools/client-runtime/state/thread-settled";
+import { canSnooze, threadWokeAt } from "@t3tools/client-runtime/state/thread-settled";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/models";
 import {
   scopeProjectRef,
@@ -90,22 +86,19 @@ import { isMacPlatform } from "~/lib/utils";
 import { useOpenPrLink } from "../lib/openPullRequestLink";
 import { releaseComposerDraftUploads } from "../lib/composerDraftUploads";
 import { readLocalApi } from "../localApi";
-import { getProjectOrderKey, selectProjectGroupingSettings } from "../logicalProject";
-import {
-  buildSidebarProjectSnapshots,
-  type SidebarProjectSnapshot,
-} from "../sidebarProjectGrouping";
-import { legacyProjectCwdPreferenceKey, useUiStateStore } from "../uiStateStore";
+import { type SidebarProjectSnapshot } from "../sidebarProjectGrouping";
+import { useUiStateStore } from "../uiStateStore";
 import { useThreadSelectionStore } from "../threadSelectionStore";
 import { useThreadActions } from "../hooks/useThreadActions";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
+import { useSidebarProjectGroups } from "../hooks/useSidebarProjectGroups";
 import { openCommandPalette } from "../commandPaletteBus";
 import { startNewThreadFromContext } from "../lib/chatThreadActions";
 import { useClientSettings } from "../hooks/useSettings";
 import { useCopyToClipboard } from "../hooks/useCopyToClipboard";
 import { useLocalStorage } from "../hooks/useLocalStorage";
 import { useNowMinute } from "../hooks/useNowMinute";
-import { useEnvironments, usePrimaryEnvironmentId } from "../state/environments";
+import { usePrimaryEnvironmentId } from "../state/environments";
 import { useProjects, useThreadShells } from "../state/entities";
 import { environmentServerConfigsAtom, primaryServerKeybindingsAtom } from "../state/server";
 import { vcsEnvironment } from "../state/vcs";
@@ -126,11 +119,11 @@ import {
   buildBulkTitleRegenerationContextMenuItem,
   filterSidebarProjectScopeItems,
   formatWorkingDurationLabel,
-  firstValidTimestampMs,
   hasUnseenCompletion,
   isSidebarNestedLinkClick,
   isTrailingDoubleClick,
   orderItemsByPreferredIds,
+  partitionSidebarThreads,
   planPinnedReorder,
   reduceSidebarProjectScopeMenuState,
   resolveAdjacentThreadId,
@@ -139,10 +132,6 @@ import {
   searchSidebarThreadsByTitle,
   shouldCreateNewThreadInCurrentProject,
   resolveWorkingStartedAt,
-  sortLogicalProjectsForSidebar,
-  sortPinnedThreadsForSidebar,
-  sortSettledThreadsForSidebar,
-  sortThreadsForSidebar,
   useRetainedValue,
   useSidebarRowSubscriptionLease,
   useThreadJumpHintVisibility,
@@ -1746,16 +1735,13 @@ const SidebarSearchResultRow = memo(function SidebarSearchResultRow(props: {
 
 export default function Sidebar() {
   const projects = useProjects();
-  const projectOrder = useUiStateStore((store) => store.projectOrder);
   const threads = useThreadShells();
   const router = useRouter();
   const { isMobile, setOpenMobile } = useSidebar();
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const confirmThreadDelete = useClientSettings((s) => s.confirmThreadDelete);
   const confirmThreadArchive = useClientSettings((s) => s.confirmThreadArchive);
-  const sidebarProjectSortOrder = useClientSettings((s) => s.sidebarProjectSortOrder);
   const timestampFormat = useClientSettings((s) => s.timestampFormat);
-  const projectGroupingSettings = useClientSettings(selectProjectGroupingSettings);
   const {
     settleThread,
     unsettleThread,
@@ -1830,7 +1816,6 @@ export default function Sidebar() {
     () => openCommandPalette({ open: "add-project" }),
     [],
   );
-  const { environments } = useEnvironments();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const clearSelection = useThreadSelectionStore((s) => s.clearSelection);
   const setSelectionAnchor = useThreadSelectionStore((s) => s.setAnchor);
@@ -1864,47 +1849,7 @@ export default function Sidebar() {
   const routeThreadKeyRef = useRef(routeThreadKey);
   routeThreadKeyRef.current = routeThreadKey;
 
-  const environmentLabelById = useMemo(
-    () =>
-      new Map(
-        environments.map((environment) => [environment.environmentId, environment.label] as const),
-      ),
-    [environments],
-  );
-  const orderedProjects = useMemo(
-    () =>
-      orderItemsByPreferredIds({
-        items: projects,
-        preferredIds: projectOrder,
-        getId: getProjectOrderKey,
-        getPreferenceIds: (project) => [
-          getProjectOrderKey(project),
-          legacyProjectCwdPreferenceKey(project.workspaceRoot),
-        ],
-      }),
-    [projectOrder, projects],
-  );
-  const unsortedProjectGroups = useMemo(
-    () =>
-      buildSidebarProjectSnapshots({
-        projects: sidebarProjectSortOrder === "manual" ? orderedProjects : projects,
-        settings: projectGroupingSettings,
-        primaryEnvironmentId,
-        resolveEnvironmentLabel: (environmentId) => environmentLabelById.get(environmentId) ?? null,
-      }),
-    [
-      environmentLabelById,
-      orderedProjects,
-      primaryEnvironmentId,
-      projectGroupingSettings,
-      projects,
-      sidebarProjectSortOrder,
-    ],
-  );
-  const projectGroups = useMemo(
-    () => sortLogicalProjectsForSidebar(unsortedProjectGroups, threads, sidebarProjectSortOrder),
-    [sidebarProjectSortOrder, threads, unsortedProjectGroups],
-  );
+  const { environmentLabelById, projectGroups } = useSidebarProjectGroups(threads);
   const projectGroupsRef = useRef(projectGroups);
   projectGroupsRef.current = projectGroups;
   const serverConfigs = useAtomValue(environmentServerConfigsAtom);
@@ -2084,10 +2029,6 @@ export default function Sidebar() {
     [openProjectSettings],
   );
 
-  // Settled threads stay in the live shell stream (settled ≠ archived), so
-  // the partition works directly off live shells: no archived-snapshot
-  // merging, no optimistic holds. Archived threads remain hidden here —
-  // archive keeps its original "remove from sidebar" meaning.
   const {
     pinnedThreads,
     reorderablePinnedKeys,
@@ -2096,68 +2037,17 @@ export default function Sidebar() {
     settledThreads,
     snoozeNow,
   } = useMemo(() => {
-    // Snooze classification uses a REAL clock, not the quantized minute:
-    // wake times are second-precise and a woken thread must not linger on
-    // the shelf for the rest of the minute. snoozeWakeTick re-runs this
-    // memo exactly at the next wake boundary.
+    // The partition reads a real clock for snooze classification; the minute
+    // tick and snoozeWakeTick (exactly at the next wake boundary) re-run it.
+    void nowMinute;
     void snoozeWakeTick;
-    const preciseNow = new Date().toISOString();
-    const visible = threads.filter(
-      (thread) =>
-        thread.archivedAt === null &&
-        (scopedProjectKeys === null ||
-          scopedProjectKeys.has(`${thread.environmentId}:${thread.projectId}`)),
-    );
-    const pinned: EnvironmentThreadShell[] = [];
-    const active: EnvironmentThreadShell[] = [];
-    const snoozed: EnvironmentThreadShell[] = [];
-    const settled: EnvironmentThreadShell[] = [];
-    for (const thread of visible) {
-      // Threads on servers without the settlement capability (old server,
-      // or descriptor not loaded yet) never classify as settled: the user
-      // could neither un-settle nor pin them, so auto-settling them would
-      // strand rows in a tail with no working affordances.
-      const supportsSettlement =
-        serverConfigs.get(thread.environmentId)?.environment.capabilities.threadSettlement === true;
-      const supportsSnooze =
-        serverConfigs.get(thread.environmentId)?.environment.capabilities.threadSnooze === true;
-      // Snooze outranks settlement and pinning until the thread wakes.
-      if (supportsSnooze && effectiveSnoozed(thread, { now: preciseNow })) {
-        snoozed.push(thread);
-      } else if (supportsSettlement && thread.settledOverride === "settled") {
-        settled.push(thread);
-      } else if (thread.pinnedAt != null) {
-        pinned.push(thread);
-      } else {
-        active.push(thread);
-      }
-    }
-    // One shared rule on every platform (see sortPinnedThreadsByOrderKey):
-    // user-arranged keys first, keyless threads in creation order below.
-    // Server capability only gates DRAGGING — it must not influence the
-    // sort, or mixed-version fleets would render different pinned orders on
-    // web and mobile from the same data.
-    return {
-      pinnedThreads: sortPinnedThreadsForSidebar(pinned),
-      reorderablePinnedKeys: new Set(
-        pinned
-          .filter(
-            (thread) =>
-              serverConfigs.get(thread.environmentId)?.environment.capabilities.threadPinReorder ===
-              true,
-          )
-          .map((thread) => scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id))),
-      ),
-      activeThreads: sortThreadsForSidebar(active),
-      // Soonest wake first: "what comes back next" is the shelf's question.
-      snoozedThreads: snoozed.toSorted(
-        (left, right) =>
-          firstValidTimestampMs(left.snoozedUntil ?? null) -
-          firstValidTimestampMs(right.snoozedUntil ?? null),
-      ),
-      settledThreads: sortSettledThreadsForSidebar(settled),
-      snoozeNow: preciseNow,
-    };
+    return partitionSidebarThreads({
+      threads,
+      scopedProjectKeys,
+      capabilitiesFor: (environmentId) =>
+        serverConfigs.get(environmentId)?.environment.capabilities,
+      preciseNow: new Date().toISOString(),
+    });
   }, [nowMinute, scopedProjectKeys, serverConfigs, snoozeWakeTick, threads]);
 
   const threadSearchInputRef = useRef<HTMLInputElement>(null);
