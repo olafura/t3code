@@ -49,6 +49,8 @@ import {
 import { cn } from "~/lib/utils";
 
 interface ChatHeaderProps {
+  /** Hosted by the Qt shell: breadcrumb, scripts and editor live in native chrome; only git stays. */
+  shellHosted?: boolean;
   activeThreadEnvironmentId: EnvironmentId;
   activeThreadId: ThreadId;
   draftId?: DraftId;
@@ -119,6 +121,7 @@ export function shouldShowOpenInPicker(input: {
 }
 
 export const ChatHeader = memo(function ChatHeader({
+  shellHosted = false,
   activeThreadEnvironmentId,
   activeThreadId,
   draftId,
@@ -319,7 +322,10 @@ export const ChatHeader = memo(function ChatHeader({
     >
       <WorkspaceBreadcrumb
         ariaLabel="Thread breadcrumb"
-        className="flex-1 overflow-clip [overflow-clip-margin:2px]"
+        className={cn(
+          "flex-1 overflow-clip [overflow-clip-margin:2px]",
+          shellHosted && "invisible",
+        )}
       >
         {/* The project always leads the header: knowing which project a
             thread lives in is priority zero, and the thread title alone
@@ -409,7 +415,7 @@ export const ChatHeader = memo(function ChatHeader({
           "[[data-panel-animations=true]_&]:motion-safe:transition-[padding-right] [[data-panel-animations=true]_&]:motion-safe:[transition-duration:var(--panel-animation-duration)] [[data-panel-animations=true]_&]:motion-safe:ease-out",
         )}
       >
-        {activeProjectScripts && (
+        {activeProjectScripts && !shellHosted && (
           <ProjectScriptsControl
             scripts={activeProjectScripts}
             fileScripts={fileScripts}
@@ -421,7 +427,7 @@ export const ChatHeader = memo(function ChatHeader({
             onDeleteScript={onDeleteProjectScript}
           />
         )}
-        {showOpenInPicker && (
+        {showOpenInPicker && !shellHosted && (
           <OpenInPicker
             environmentId={activeThreadEnvironmentId}
             keybindings={keybindings}

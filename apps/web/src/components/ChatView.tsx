@@ -177,6 +177,7 @@ import {
   useRightPanelStore,
 } from "../rightPanelStore";
 import { ShellRightPanelBridge } from "../shell/ShellRightPanelBridge";
+import { ShellWorkspaceBridge } from "../shell/ShellWorkspaceBridge";
 import {
   isPreviewSupportedInRuntime,
   setActivePreviewTab,
@@ -8174,6 +8175,40 @@ function ChatViewContent(props: ChatViewProps) {
   return (
     <div className="relative flex min-h-0 min-w-0 flex-1 overflow-hidden bg-background">
       {shellHostsChrome && activeThreadRef ? (
+        <ShellWorkspaceBridge
+          threadRef={activeThreadRef}
+          projectTitle={activeProject?.title ?? null}
+          projectRoot={activeProject?.workspaceRoot ?? null}
+          openInCwd={gitCwd}
+          threadTitle={activeThread.title}
+          isDraft={isLocalDraftThread}
+          envMode={envMode}
+          envModeChangeable={isLocalDraftThread ? !envLocked : canOverrideServerThreadEnvMode}
+          startFromOrigin={startFromOrigin}
+          branch={activeThreadBranch}
+          worktreePath={activeThreadWorktreePath}
+          gitStatus={gitStatusQuery.data ?? null}
+          canOpenPullRequest={supportsPullRequests && activeProjectRepository !== null}
+          availableEditors={availableEditors}
+          scripts={activeProject?.scripts ?? []}
+          preferredScriptId={
+            activeProject ? (lastInvokedScriptByProjectId[activeProject.id] ?? null) : null
+          }
+          environments={logicalProjectEnvironments}
+          environmentChangeable={!envLocked && draftId !== undefined && draftId !== null}
+          onNewThread={handleNewThreadInActiveProject}
+          onRunScript={runProjectScript}
+          onEnvModeChange={onEnvModeChange}
+          onStartFromOriginChange={onStartFromOriginChange}
+          onOpenPullRequest={
+            supportsPullRequests && activeProjectRepository !== null
+              ? openProjectPullRequest
+              : undefined
+          }
+          onEnvironmentChange={onEnvironmentChange}
+        />
+      ) : null}
+      {shellHostsChrome && activeThreadRef ? (
         <ShellRightPanelBridge
           threadRef={activeThreadRef}
           isOpen={rightPanelOpen}
@@ -8221,6 +8256,7 @@ function ChatViewContent(props: ChatViewProps) {
           ) : null}
           {!shellHostsChrome && !rightPanelControlsAtRoot && !rightPanelControlsInPanel ? panelLayoutControls : null}
           <ChatHeader
+            shellHosted={shellHostsChrome}
             {...(!supportsPullRequests || activeProjectRepository === null
               ? {}
               : { onOpenPullRequest: openProjectPullRequest })}
@@ -8536,7 +8572,7 @@ function ChatViewContent(props: ChatViewProps) {
                           data-terminal-open={terminalUiState.terminalOpen ? "true" : undefined}
                           className="relative z-0"
                         >
-                          {mountComposerContextStrip && (
+                          {mountComposerContextStrip && !shellHostsChrome && (
                             <div className="pointer-events-auto">
                               <BranchToolbar
                                 environmentId={activeThread.environmentId}
