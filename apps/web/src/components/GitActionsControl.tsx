@@ -846,6 +846,7 @@ export default function GitActionsControl({
     isDefaultRef,
     allFiles,
     initAction,
+    initRepository,
     isGitActionRunning,
     gitActionMenuItems,
     quickAction,
@@ -956,23 +957,7 @@ export default function GitActionsControl({
           variant="outline"
           size="xs"
           disabled={initAction.isPending}
-          onClick={() => {
-            void (async () => {
-              const result = await initAction.run();
-              if (result._tag === "Success" || isAtomCommandInterrupted(result)) {
-                return;
-              }
-              const error = squashAtomCommandFailure(result);
-              toastManager.add(
-                stackedThreadToast({
-                  type: "error",
-                  title: "Git initialization failed",
-                  description: error instanceof Error ? error.message : "An error occurred.",
-                  ...(threadToastData !== undefined ? { data: threadToastData } : {}),
-                }),
-              );
-            })();
-          }}
+          onClick={() => void initRepository()}
         >
           <GitBranchPlusIcon className="size-3.5" aria-hidden />
           <span className="ml-0.5">
