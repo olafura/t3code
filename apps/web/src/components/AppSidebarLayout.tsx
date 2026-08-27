@@ -13,10 +13,12 @@ import { useLocation, useNavigate } from "@tanstack/react-router";
 
 import { isElectron, isT3Shell } from "../env";
 import { getLocalStorageItem, removeLocalStorageItem } from "../hooks/useLocalStorage";
-import { resolveShortcutCommand, shortcutLabelForCommand } from "../keybindings";
+import { shortcutLabelForCommand } from "../keybindings";
 import { cn, isMacPlatform } from "../lib/utils";
 import { primaryServerKeybindingsAtom } from "../state/server";
 import { useEnvironmentIdentificationMode, useLegacySidebarEnabled } from "../hooks/useSettings";
+import { useSidebarToggleKeybinding } from "../hooks/useSidebarToggleKeybinding";
+import { ShellLayoutBridge } from "../shell/ShellLayoutBridge";
 import LegacyThreadSidebar from "./LegacySidebar";
 import ThreadSidebar from "./Sidebar";
 import { SidebarChromeHeader } from "./sidebar/SidebarChrome";
@@ -37,7 +39,6 @@ import {
   SidebarProvider,
   SidebarRail,
   SidebarTrigger,
-  useSidebar,
   useSidebarVisibility,
 } from "./ui/sidebar";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
@@ -75,7 +76,6 @@ function readInitialThreadSidebarWidth(): number {
 
 function SidebarControl() {
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
-  const { toggleSidebar } = useSidebar();
   const isSidebarVisible = useSidebarVisibility();
   const environmentIdentificationMode = useEnvironmentIdentificationMode();
   const stageBackdropVariant = useSidebarStageBackdropVariant(
@@ -83,26 +83,7 @@ function SidebarControl() {
   );
   const shortcutLabel = shortcutLabelForCommand(keybindings, "sidebar.toggle");
 
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.defaultPrevented) return;
-      if (
-        event.target instanceof HTMLElement &&
-        event.target.closest("[data-keybinding-capture]")
-      ) {
-        return;
-      }
-      if (resolveShortcutCommand(event, keybindings) !== "sidebar.toggle") return;
-
-      event.preventDefault();
-      event.stopPropagation();
-      toggleSidebar();
-    };
-
-    // Capture before focused editors consume commands such as Mod+B for rich-text formatting.
-    window.addEventListener("keydown", onKeyDown, true);
-    return () => window.removeEventListener("keydown", onKeyDown, true);
-  }, [keybindings, toggleSidebar]);
+  useSidebarToggleKeybinding();
 
   return (
     // The right-side layout controls carry mr-px (border compensation inside
@@ -254,7 +235,7 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
         </Sidebar>
       )}
       {children}
-      {isT3Shell ? null : <SidebarControl />}
+      {isT3Shell ? <ShellLayoutBridge /> : <SidebarControl />}
     </SidebarProvider>
   );
 }
