@@ -37,6 +37,8 @@ export default defineConfig({
       "**/routeTree.gen.ts",
       "apps/mobile/android/**",
       "apps/mobile/ios/**",
+      // Generated QML-dialect JS (`.pragma library`), see scripts/gen-icons.mjs.
+      "apps/desktop-qt/qml/T3/Bricks/js/lucide.js",
       "apps/web/src/lib/vendor/qrcodegen.ts",
       "apps/mobile/uniwind-types.d.ts",
       "*.icon/**",
