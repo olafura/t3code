@@ -13,7 +13,7 @@ layer("045_046_OrchestrationV2", (it) => {
     Effect.sync(() => {
       assert.deepStrictEqual(
         migrationEntries.map(([id]) => id),
-        Array.from({ length: 53 }, (_, index) => index + 1),
+        Array.from({ length: 54 }, (_, index) => index + 1),
       );
     }),
   );
@@ -271,5 +271,46 @@ it.effect("adopts the legacy import schema from its previous migration number", 
         name: "LegacyV1ImportState",
       },
     ]);
+  }).pipe(Effect.provide(NodeSqliteClient.layerMemory())),
+);
+
+it.effect("repairs upstream schemas skipped by the previous migration numbering", () =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+
+    yield* runMigrations({ toMigrationInclusive: 53 });
+    yield* sql`ALTER TABLE auth_sessions DROP COLUMN client_surface`;
+    yield* sql`ALTER TABLE auth_sessions DROP COLUMN client_app_version`;
+    yield* sql`ALTER TABLE projection_threads DROP COLUMN linked_pull_request_json`;
+    yield* sql`ALTER TABLE projection_threads DROP COLUMN unsettled_at`;
+    yield* sql`
+      UPDATE effect_sql_migrations
+      SET name = CASE migration_id
+        WHEN 41 THEN 'OrchestrationV2'
+        WHEN 42 THEN 'OrchestrationV2Subagents'
+        WHEN 43 THEN 'OrchestrationV2Foundation'
+        WHEN 44 THEN 'OrchestrationV2ProviderSessionBindings'
+        WHEN 45 THEN 'OrchestrationV2ThreadLaunchWorkflows'
+        WHEN 46 THEN 'ApplicationEventSource'
+        WHEN 47 THEN 'OrchestrationV2EffectCancellation'
+        WHEN 48 THEN 'ScheduledTasks'
+        WHEN 49 THEN 'LegacyV1ImportState'
+        ELSE name
+      END
+      WHERE migration_id BETWEEN 41 AND 49
+    `;
+
+    yield* runMigrations({ toMigrationInclusive: 54 });
+
+    const authSessionColumns = yield* sql<{ readonly name: string }>`
+      PRAGMA table_info(auth_sessions)
+    `;
+    const threadColumns = yield* sql<{ readonly name: string }>`
+      PRAGMA table_info(projection_threads)
+    `;
+    assert.ok(authSessionColumns.some((column) => column.name === "client_surface"));
+    assert.ok(authSessionColumns.some((column) => column.name === "client_app_version"));
+    assert.ok(threadColumns.some((column) => column.name === "linked_pull_request_json"));
+    assert.ok(threadColumns.some((column) => column.name === "unsettled_at"));
   }).pipe(Effect.provide(NodeSqliteClient.layerMemory())),
 );
