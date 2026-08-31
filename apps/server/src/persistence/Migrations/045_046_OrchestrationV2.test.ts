@@ -229,3 +229,47 @@ it.effect("upgrades a database already at released main migration 043", () =>
     assert.strictEqual(legacyImportTables.length, 1);
   }).pipe(Effect.provide(NodeSqliteClient.layerMemory())),
 );
+
+it.effect("adopts the legacy import schema from its previous migration number", () =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+
+    yield* runMigrations({ toMigrationInclusive: 52 });
+    yield* sql`
+      CREATE TABLE orchestration_v2_legacy_imports (
+        thread_id TEXT PRIMARY KEY,
+        source_updated_at TEXT NOT NULL,
+        shell_imported_at TEXT NOT NULL,
+        transcript_imported_at TEXT,
+        imported_message_count INTEGER NOT NULL DEFAULT 0,
+        last_error TEXT
+      )
+    `;
+    yield* sql`
+      CREATE INDEX orchestration_v2_legacy_imports_pending_transcript_idx
+      ON orchestration_v2_legacy_imports(transcript_imported_at, shell_imported_at, thread_id)
+    `;
+    yield* sql`
+      UPDATE effect_sql_migrations
+      SET name = 'LegacyV1ImportState'
+      WHERE migration_id = 49
+    `;
+
+    yield* runMigrations({ toMigrationInclusive: 53 });
+
+    const migrations = yield* sql<{
+      readonly migration_id: number;
+      readonly name: string;
+    }>`
+      SELECT migration_id, name
+      FROM effect_sql_migrations
+      WHERE migration_id = 53
+    `;
+    assert.deepStrictEqual(migrations, [
+      {
+        migration_id: 53,
+        name: "LegacyV1ImportState",
+      },
+    ]);
+  }).pipe(Effect.provide(NodeSqliteClient.layerMemory())),
+);

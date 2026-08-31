@@ -10,7 +10,7 @@ export default Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
 
   yield* sql`
-    CREATE TABLE orchestration_v2_legacy_imports (
+    CREATE TABLE IF NOT EXISTS orchestration_v2_legacy_imports (
       thread_id TEXT PRIMARY KEY,
       source_updated_at TEXT NOT NULL,
       shell_imported_at TEXT NOT NULL,
@@ -21,7 +21,7 @@ export default Effect.gen(function* () {
   `;
 
   yield* sql`
-    CREATE INDEX orchestration_v2_legacy_imports_pending_transcript_idx
+    CREATE INDEX IF NOT EXISTS orchestration_v2_legacy_imports_pending_transcript_idx
     ON orchestration_v2_legacy_imports(transcript_imported_at, shell_imported_at, thread_id)
   `;
 });
