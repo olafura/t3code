@@ -935,7 +935,7 @@ import {
 import { proposedPlanTitle } from "../../proposedPlan";
 import { hasProviderSetup } from "./ProviderStatusBanner";
 import { isT3Shell } from "../../env";
-import { ShellComposerBridge } from "../../shell/ShellComposerBridge";
+import { ShellComposerBridge } from "../../shell/lazy";
 import {
   applyProviderInstanceSettings,
   deriveProviderInstanceEntries,
