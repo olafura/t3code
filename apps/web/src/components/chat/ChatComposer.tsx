@@ -316,7 +316,7 @@ import {
 import { proposedPlanTitle } from "../../proposedPlan";
 import { getProviderInteractionModeToggle } from "../../providerModels";
 import { isT3Shell } from "../../env";
-import { ShellComposerBridge } from "../../shell/ShellComposerBridge";
+import { ShellComposerBridge } from "../../shell/lazy";
 import {
   applyProviderInstanceSettings,
   deriveProviderInstanceEntries,

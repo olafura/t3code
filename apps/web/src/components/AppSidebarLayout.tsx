@@ -18,7 +18,7 @@ import { cn, isMacPlatform } from "../lib/utils";
 import { primaryServerKeybindingsAtom } from "../state/server";
 import { useEnvironmentIdentificationMode, useLegacySidebarEnabled } from "../hooks/useSettings";
 import { useSidebarToggleKeybinding } from "../hooks/useSidebarToggleKeybinding";
-import { ShellLayoutBridge } from "../shell/ShellLayoutBridge";
+import { ShellLayoutBridge } from "../shell/lazy";
 import LegacyThreadSidebar from "./LegacySidebar";
 import ThreadSidebar from "./Sidebar";
 import { SidebarChromeHeader } from "./sidebar/SidebarChrome";
