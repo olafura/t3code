@@ -8702,6 +8702,8 @@ function ChatViewContent(props: ChatViewProps) {
           worktreePath={activeThreadWorktreePath}
           gitStatus={gitStatusQuery.data ?? null}
           canOpenPullRequest={supportsPullRequests && activeProjectRepository !== null}
+          terminalAvailable={activeProject !== null}
+          terminalOpen={terminalUiState.terminalOpen}
           availableEditors={availableEditors}
           scripts={activeProject?.scripts ?? []}
           preferredScriptId={
@@ -8716,6 +8718,7 @@ function ChatViewContent(props: ChatViewProps) {
           onRenameRequested={requestShellRename}
           threadTitleForRename={activeThread.title}
           onNewThread={handleNewThreadInActiveProject}
+          onToggleTerminal={toggleTerminalVisibility}
           onRunScript={runProjectScript}
           onEnvModeChange={onEnvModeChange}
           onStartFromOriginChange={onStartFromOriginChange}
