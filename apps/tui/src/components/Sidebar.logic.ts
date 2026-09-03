@@ -1,8 +1,5 @@
-import {
-  DEFAULT_SIDEBAR_AUTO_SETTLE_AFTER_DAYS,
-  type OrchestrationThreadShell,
-} from "@t3tools/contracts";
-import { effectiveSettled, effectiveSnoozed } from "@t3tools/client-runtime/state/thread-settled";
+import type { OrchestrationThreadShell } from "@t3tools/contracts";
+import { effectiveSnoozed } from "@t3tools/client-runtime/state/thread-settled";
 
 import type { OrchestrationShellSnapshot } from "../connection.ts";
 import { herdrWorkspaceCwd } from "../herdr/host.ts";
@@ -201,8 +198,9 @@ export function buildRows(
   const snoozed: OrchestrationThreadShell[] = [];
   const settled: OrchestrationThreadShell[] = [];
   for (const thread of visibleThreads) {
-    // Snooze is the stronger lifecycle statement and therefore wins when a
-    // thread could otherwise also auto-settle, matching the web UI.
+    // Snooze is the stronger lifecycle statement and therefore wins over a
+    // settled thread, matching the web UI. The server projects settlement,
+    // including auto-settle, into settledOverride.
     if (
       effectiveSnoozed(
         {
@@ -214,12 +212,7 @@ export function buildRows(
       )
     ) {
       snoozed.push(thread);
-    } else if (
-      effectiveSettled(thread, {
-        now,
-        autoSettleAfterDays: DEFAULT_SIDEBAR_AUTO_SETTLE_AFTER_DAYS,
-      })
-    ) {
+    } else if (thread.settledOverride === "settled") {
       settled.push(thread);
     } else {
       active.push(thread);
