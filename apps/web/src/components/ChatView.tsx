@@ -1154,8 +1154,15 @@ const PersistentThreadTerminalDrawer = memo(function PersistentThreadTerminalDra
     <div
       className={cn(
         fill ? "flex min-h-0 flex-1 flex-col" : "grid shrink-0 overflow-clip",
-        fill ? (!visible && "hidden") : active ? (visible ? "grid-rows-[1fr]" : "grid-rows-[0fr]") : "hidden",
-        !fill && active &&
+        fill
+          ? !visible && "hidden"
+          : active
+            ? visible
+              ? "grid-rows-[1fr]"
+              : "grid-rows-[0fr]"
+            : "hidden",
+        !fill &&
+          active &&
           "[[data-panel-animations=true]_&]:transition-[grid-template-rows] [[data-panel-animations=true]_&]:[transition-duration:var(--panel-animation-duration)] [[data-panel-animations=true]_&]:ease-out",
         !fill && active && visible && "[[data-panel-animations=true]_&]:starting:grid-rows-[0fr]!",
       )}
@@ -1396,7 +1403,7 @@ function releaseChatTimelineAnchor<T extends { readonly messageId: MessageId | n
   return current.messageId === null ? current : { ...current, messageId: null };
 }
 
-function ChatViewContent(props: ChatViewProps) {
+export default function ChatView(props: ChatViewProps) {
   const presentation = props.presentation ?? "full";
   // Hosted by the Qt shell, the right panel's chrome is a native brick and its
   // content is this same view rendered by the embed route.
@@ -8343,7 +8350,9 @@ function ChatViewContent(props: ChatViewProps) {
               className="pointer-events-none fixed top-[var(--workspace-controls-top)] right-[var(--workspace-controls-right)] h-[var(--workspace-topbar-height)] w-28 [-webkit-app-region:no-drag]"
             />
           ) : null}
-          {!shellHostsChrome && !rightPanelControlsAtRoot && !rightPanelControlsInPanel ? panelLayoutControls : null}
+          {!shellHostsChrome && !rightPanelControlsAtRoot && !rightPanelControlsInPanel
+            ? panelLayoutControls
+            : null}
           <ChatHeader
             shellHosted={shellHostsChrome}
             shellMenuRequest={shellTitleMenuRequest}
