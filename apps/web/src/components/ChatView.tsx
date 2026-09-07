@@ -656,7 +656,7 @@ type ChatViewProps =
       threadSyncPhase?: ThreadSyncPhase | null;
       routeKind: "server";
       draftId?: never;
-      /** `rightPanel` and `terminal` render only that part of the thread (the shell's embed route). */
+      /** `rightPanel` renders only the thread's right panel for the shell's embed route. */
       presentation?: "full" | "rightPanel";
     }
   | {
@@ -6942,7 +6942,7 @@ export default function ChatView(props: ChatViewProps) {
           terminalOpen={terminalUiState.terminalOpen}
           terminalHeight={terminalUiState.terminalHeight}
           availableEditors={availableEditors}
-          scripts={activeProject?.scripts ?? []}
+          scripts={activeProjectScripts}
           preferredScriptId={
             activeProject ? (lastInvokedScriptByProjectId[activeProject.id] ?? null) : null
           }
