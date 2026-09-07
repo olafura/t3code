@@ -74,7 +74,7 @@ import { useEnvironmentQuery } from "~/state/query";
 import { sourceControlEnvironment } from "~/state/sourceControl";
 import { resolvePathLinkTarget } from "~/terminal-links";
 import { type DraftId } from "~/composerDraftStore";
-import { readLocalApi } from "~/localApi";
+import { useOpenLink } from "~/browser/useOpenLink";
 import { getSourceControlPresentation } from "~/sourceControlPresentation";
 
 interface GitActionsControlProps {
@@ -903,6 +903,7 @@ export default function GitActionsControl({
         <PublishRepositoryDialog
           open={isPublishDialogOpen}
           onOpenChange={setIsPublishDialogOpen}
+          threadRef={activeThreadRef}
           environmentId={activeEnvironmentId}
           gitCwd={gitCwd}
         />

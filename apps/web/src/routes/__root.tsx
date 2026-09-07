@@ -210,7 +210,7 @@ function RootRouteView() {
           <GlassAppearanceSync />
           <FontAppearanceSync />
           <ConfirmDialogHost />
-          {primaryEnvironmentAuthenticated ? <EventRouter /> : null}
+          {primaryEnvironmentAuthenticated ? <EventRouter skipInitialBootstrapNavigation /> : null}
           <Outlet />
         </AnchoredToastProvider>
       </ToastProvider>
