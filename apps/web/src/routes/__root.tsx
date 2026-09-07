@@ -209,6 +209,7 @@ function RootRouteView() {
           <ContrastAppearanceSync />
           <GlassAppearanceSync />
           <FontAppearanceSync />
+          <ShellThemeBridge publishToShell={false} />
           <ConfirmDialogHost />
           {primaryEnvironmentAuthenticated ? <EventRouter skipInitialBootstrapNavigation /> : null}
           <Outlet />
