@@ -8,6 +8,8 @@ qt_add_qml_module(t3bricks
   NO_GENERATE_QMLDIR
   NO_PLUGIN_OPTIONAL
   QML_FILES
+    AppView.qml
+    AppWindow.qml
     Composer.qml
     ComposerVimKeys.qml
     ProjectFolderDrop.qml

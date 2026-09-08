@@ -10,6 +10,7 @@ import { type ScopedThreadRef } from "@t3tools/contracts";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 import { resolveStorage } from "./lib/storage";
+import { appViewStorageKey } from "./shell/appViewStorage";
 import {
   DEFAULT_THREAD_TERMINAL_HEIGHT,
   DEFAULT_THREAD_TERMINAL_ID,
@@ -27,7 +28,7 @@ export interface ThreadTerminalUiState {
 }
 
 // Keep the old storage key so existing drawer layout preferences migrate.
-export const TERMINAL_UI_STATE_STORAGE_KEY = "t3code:terminal-state:v1";
+export const TERMINAL_UI_STATE_STORAGE_KEY = appViewStorageKey("t3code:terminal-state:v1");
 
 interface PersistedTerminalUiStateStoreState {
   terminalUiStateByThreadKey?: Record<string, ThreadTerminalUiState>;

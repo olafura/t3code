@@ -27,5 +27,6 @@ declare global {
     desktopBridge?: DesktopBridge;
     t3Shell?: T3Shell;
     __t3ShellTheme?: ShellThemeBootstrap;
+    __t3AppViewStorageId?: string;
   }
 }

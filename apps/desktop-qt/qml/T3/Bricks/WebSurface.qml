@@ -18,6 +18,11 @@ WebEngineView {
     // opens come back to this view.
     property string surfaceId: "primary"
 
+    // Choose at construction. Independent app views keep the web UI and must
+    // never publish into the primary page's native state or receive its actions.
+    property bool shellIntegration: true
+    property string independentStorageId: ""
+
     // Freeze the page (no timers, no rendering) while the surface is hidden.
     // Its state stays in memory and it resumes where it was; a document that
     // must keep running out of view (the primary page) leaves this off.
@@ -40,7 +45,9 @@ WebEngineView {
     settings.javascriptCanAccessClipboard: false
     settings.javascriptCanPaste: false
 
-    webChannel: WebChannel {
+    webChannel: view.shellIntegration ? channel : null
+
+    WebChannel {
         id: channel
     }
 
@@ -108,11 +115,21 @@ WebEngineView {
     onRadiusChanged: view.syncRadiusScript()
 
     Component.onCompleted: {
-        channel.registerObject("shell", Shell.channel);
         view.syncThemeScript();
         if (view.radius > 0) {
             view.syncRadiusScript();
         }
+
+        if (!view.shellIntegration) {
+            const identity = WebEngine.script();
+            identity.name = "t3-app-view-storage";
+            identity.sourceCode = "window.__t3AppViewStorageId = " + JSON.stringify(view.independentStorageId) + ";";
+            identity.injectionPoint = WebEngineScript.DocumentCreation;
+            identity.worldId = WebEngineScript.MainWorld;
+            view.userScripts.insert(identity);
+            return;
+        }
+        channel.registerObject("shell", Shell.channel);
 
         const tag = WebEngine.script();
         tag.name = "t3-surface-id";
@@ -145,7 +162,9 @@ WebEngineView {
         if (ok) {
             view.runJavaScript(Theme.injectionScript);
         }
-        Shell.notifyPageLoaded(ok, info.url);
+        if (view.shellIntegration) {
+            Shell.notifyPageLoaded(ok, info.url);
+        }
     }
 
     onNewWindowRequested: function (request) {
@@ -173,7 +192,12 @@ WebEngineView {
         }
     }
 
-    ContextMenuHost {
-        surfaceId: view.surfaceId
+    Loader {
+        active: view.shellIntegration
+        sourceComponent: Component {
+            ContextMenuHost {
+                surfaceId: view.surfaceId
+            }
+        }
     }
 }
