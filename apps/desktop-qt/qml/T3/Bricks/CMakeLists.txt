@@ -9,6 +9,7 @@ qt_add_qml_module(t3bricks
   NO_PLUGIN_OPTIONAL
   QML_FILES
     Composer.qml
+    ComposerVimKeys.qml
     ContextMenuHost.qml
     DefaultShell.qml
     GitActions.qml

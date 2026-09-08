@@ -32,6 +32,24 @@ Item {
     // back; -1 when the page's height is the one shown.
     property int localHeight: -1
 
+    property bool focusPending: false
+
+    function focusTerminal() {
+        if (!drawer.available) return;
+        drawer.focusPending = true;
+        if (!drawer.open) Shell.dispatch("terminal.toggle");
+        drawer.applyPendingFocus();
+    }
+
+    function applyPendingFocus() {
+        if (drawer.focusPending && drawer.open && body.status === Loader.Ready && !body.item.loading) {
+            body.item.forceActiveFocus();
+            drawer.focusPending = false;
+        }
+    }
+
+    onOpenChanged: if (drawer.open) Qt.callLater(drawer.applyPendingFocus)
+
     // The page clamps the same way: never shorter than a few rows, never
     // more than three quarters of the window.
     function clampHeight(height) {
@@ -62,6 +80,8 @@ Item {
     Loader {
         id: body
 
+        onLoaded: drawer.applyPendingFocus()
+
         readonly property bool wanted: drawer.open && drawer.embedUrl.toString().length > 0
 
         anchors.top: edgeLine.bottom
@@ -86,6 +106,7 @@ Item {
             sleepsWhenHidden: true
             radius: drawer.radius
             Component.onCompleted: url = drawer.embedUrl
+            onLoadingChanged: if (!loading) drawer.applyPendingFocus()
         }
     }
 

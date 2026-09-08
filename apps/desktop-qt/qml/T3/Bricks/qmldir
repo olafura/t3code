@@ -1,5 +1,6 @@
 module T3.Bricks
 Composer 1.0 Composer.qml
+ComposerVimKeys 1.0 ComposerVimKeys.qml
 ContextMenuHost 1.0 ContextMenuHost.qml
 DefaultShell 1.0 DefaultShell.qml
 GitActions 1.0 GitActions.qml

@@ -32,6 +32,34 @@ Rectangle {
     readonly property int maximumCardWidth: 768
     readonly property int gutter: 20
 
+    // Opt-in input plugins share the same draft synchronization as typing.
+    property alias editor: input
+    signal editorKeyPressed(var event)
+
+    function focusInput() {
+        if (input.enabled) input.forceActiveFocus();
+    }
+
+    function toggleCheckoutPicker() {
+        if (!envModePicker.enabled || !envModePicker.visible) return;
+        envModePicker.forceActiveFocus();
+        if (envModePicker.popup.visible) envModePicker.popup.close();
+        else envModePicker.popup.open();
+    }
+
+    function insertText(text, target) {
+        if (!ready || model.editorDisabled || (target !== undefined && target !== publishedTarget) || typeof text !== "string" || text.length === 0) {
+            return false;
+        }
+        const start = input.selectionStart;
+        const end = input.selectionEnd;
+        input.remove(start, end);
+        input.insert(start, text);
+        input.cursorPosition = start + text.length;
+        flushText();
+        return true;
+    }
+
     // The last text this brick sent; an echo of it from the page is not an edit.
     property string lastSentText: ""
     property int lastSentCursor: -1
@@ -389,6 +417,9 @@ Rectangle {
                             }
                         }
                         Keys.onPressed: event => {
+                            event.accepted = false;
+                            composer.editorKeyPressed(event);
+                            if (event.accepted) return;
                             if (composer.suggesting && !(event.modifiers & (Qt.ControlModifier | Qt.MetaModifier | Qt.AltModifier))) {
                                 if (event.key === Qt.Key_Escape) {
                                     event.accepted = true;
@@ -668,6 +699,8 @@ Rectangle {
                     chevronSize: 12
                     font.pixelSize: 12
                     iconName: contextStrip.envModeIcon
+                    id: envModePicker
+                    objectName: "envModePicker"
                     model: [qsTr("Current checkout"), qsTr("New worktree")]
                     currentIndex: contextStrip.wsReady && contextStrip.ws.envMode === "worktree" ? 1 : 0
                     Accessible.name: qsTr("Checkout mode")
