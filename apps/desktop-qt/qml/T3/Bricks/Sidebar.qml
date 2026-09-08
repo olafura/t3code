@@ -9,7 +9,8 @@ import T3.Shell
 Rectangle {
     id: sidebar
 
-    readonly property var model: Shell.state.sidebar ?? null
+    // Local extensions may filter or order rows without replacing the row controls.
+    property var model: Shell.state.sidebar ?? null
     // A rice that puts project scope and the app's places elsewhere (an icon
     // rail, say) turns these off so the brick is just the thread list.
     property bool showScope: true
