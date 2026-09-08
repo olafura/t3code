@@ -79,6 +79,33 @@ Item {
             tryCompare(row, "showActions", true);
         }
 
+        function test_customModelFiltersRowsAndKeepsNavigation() {
+            let sidebar = createTemporaryObject(sidebarComponent, root);
+            verify(!!sidebar, "Component exists");
+            const source = JSON.parse(JSON.stringify(Shell.state.sidebar));
+            source.active.push(Object.assign({}, source.active[0], {
+                key: "other", title: qsTr("Other"), projectKey: "other-project"
+            }));
+            Shell.state = { sidebar: source };
+            sidebar.model = Qt.binding(() => Shell.state.sidebar ? Object.assign({}, Shell.state.sidebar, {
+                active: Shell.state.sidebar.active.filter(item => item.projectKey === "project")
+            }) : null);
+            let list = findChild(sidebar, "list");
+            verify(!!list, "Object exists");
+            tryCompare(list, "count", 1);
+            let row = findChild(sidebar, "threadRow:thread");
+            verify(!!row, "Object exists");
+            mouseClick(row, 100, 40);
+            tryCompare(Shell, "dispatchCount", 1);
+            compare(Shell.dispatchedActions[0].action, "thread.open");
+            compare(Shell.dispatchedActions[0].payload.key, "thread");
+            const updated = JSON.parse(JSON.stringify(source));
+            updated.active[0].title = qsTr("Filtered publication");
+            Shell.state = { sidebar: updated };
+            tryCompare(row.item, "title", qsTr("Filtered publication"));
+            compare(Shell.state.sidebar.active.length, 2);
+        }
+
         function test_reorderParkFoldAndRemove() {
             let sidebar = createTemporaryObject(sidebarComponent, root);
             verify(!!sidebar, "Component exists");

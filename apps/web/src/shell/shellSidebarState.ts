@@ -104,6 +104,8 @@ function toShellThread(
     statusLabel: resolveThreadStatusPill({ thread: statusInput })?.label ?? null,
     unread: hasUnseenCompletion(statusInput),
     branch: thread.branch,
+    createdAt: thread.createdAt,
+    latestUserMessageAt: thread.latestUserMessageAt,
     updatedAt: thread.updatedAt,
     pinned: thread.pinnedAt != null,
     snoozedUntil: thread.snoozedUntil ?? null,

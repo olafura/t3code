@@ -33,6 +33,9 @@ export const ShellSidebarThread = Schema.Struct({
   statusLabel: Schema.NullOr(Schema.String),
   unread: Schema.Boolean,
   branch: Schema.NullOr(Schema.String),
+  createdAt: Schema.String,
+  /** User activity, unlike updatedAt, does not move a row for an agent response or rename. */
+  latestUserMessageAt: Schema.NullOr(Schema.String),
   updatedAt: Schema.String,
   pinned: Schema.Boolean,
   snoozedUntil: Schema.NullOr(Schema.String),
@@ -445,6 +448,7 @@ export type ShellKeybindingsState = typeof ShellKeybindingsState.Type;
 /** Actions the shell's chrome dispatches; `type` is the action name on the wire. */
 export const ShellAction = Schema.Union([
   Schema.Struct({ type: Schema.Literal("thread.open"), key: Schema.String }),
+  Schema.Struct({ type: Schema.Literal("thread.markUnread"), key: Schema.String }),
   /** Row actions; the page runs the same mutations as its sidebar and toasts failures. */
   Schema.Struct({ type: Schema.Literal("thread.settle"), key: Schema.String }),
   Schema.Struct({ type: Schema.Literal("thread.unsettle"), key: Schema.String }),

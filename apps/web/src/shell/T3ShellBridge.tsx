@@ -304,6 +304,16 @@ export function T3ShellBridge() {
       case "thread.settle":
         rowActions.settle(action.key);
         return;
+      case "thread.markUnread": {
+        const thread = threads.find(
+          (candidate) =>
+            scopedThreadKey(scopeThreadRef(candidate.environmentId, candidate.id)) === action.key,
+        );
+        if (thread) {
+          useUiStateStore.getState().markThreadUnread(action.key, thread.latestTurn?.completedAt);
+        }
+        return;
+      }
       case "thread.unsettle":
         rowActions.unsettle(action.key);
         return;
