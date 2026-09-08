@@ -18,6 +18,7 @@ ShellWindow {
     property alias webView: primaryView
     property alias terminalDrawer: terminalView
     property alias rightPanel: panelView
+    property alias toolbar: toolbarLoader.sourceComponent
 
     ColumnLayout {
         anchors.fill: parent
@@ -59,6 +60,16 @@ ShellWindow {
                     sidebarToggle: root.sidebarCollapsed
                     panelToggle: panelView.available ? panelView.open : null
                     window: root
+                }
+
+                Loader {
+                    id: toolbarLoader
+                    objectName: "extensionToolbar"
+
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: status === Loader.Ready && item ? item.implicitHeight : 0
+                    active: sourceComponent !== null
+                    visible: active
                 }
 
                 WebSurface {
