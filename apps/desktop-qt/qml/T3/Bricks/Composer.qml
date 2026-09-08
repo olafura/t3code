@@ -34,6 +34,7 @@ Rectangle {
 
     // Opt-in input plugins share the same draft synchronization as typing.
     property alias editor: input
+    property alias editorActions: editorActions.data
     signal editorKeyPressed(var event)
 
     function focusInput() {
@@ -630,6 +631,19 @@ Rectangle {
                             }
                         }
                     }
+                }
+
+                // Optional plugin controls wrap without squeezing the model
+                // picker or overlapping the send button.
+                Flow {
+                    id: editorActions
+                    objectName: "editorActions"
+                    Layout.fillWidth: true
+                    Layout.leftMargin: 16
+                    Layout.rightMargin: 16
+                    Layout.bottomMargin: visible ? 16 : 0
+                    visible: children.length > 0
+                    spacing: 6
                 }
             }
         }
