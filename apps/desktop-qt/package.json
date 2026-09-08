@@ -10,7 +10,7 @@
     "test": "vp test run --passWithNoTests",
     "test:qml": "node scripts/test-qml.mjs",
     "theme:terminal": "node scripts/theme-from-terminal.mjs",
-    "typecheck": "tsgo --noEmit"
+    "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
     "@types/node": "catalog:"

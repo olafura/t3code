@@ -81,6 +81,7 @@ import {
   useState,
 } from "react";
 import { flushSync } from "react-dom";
+import { useShallow } from "zustand/react/shallow";
 import { useLocation, useNavigate } from "@tanstack/react-router";
 import { assistantCitationsToPlainText } from "@t3tools/shared/assistantCitations";
 import { assistantCitationFromLocation } from "../lib/assistantCitationNavigation";
