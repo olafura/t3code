@@ -4,7 +4,7 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_AUTOMOC ON)
 find_package(Qt6 6.9 REQUIRED COMPONENTS Core Gui GuiPrivate Quick Test WebEngineQuick WebChannel)
 enable_testing()
-foreach(test_name IN ITEMS ShellRuntime ShellExamples)
+foreach(test_name IN ITEMS ShellRuntime ShellExamples AppViews)
   add_executable(tst_${test_name}
     tst_${test_name}.cpp
     ../../src/ShellRuntime.cpp

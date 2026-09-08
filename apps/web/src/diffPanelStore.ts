@@ -4,8 +4,9 @@ import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 
 import { resolveStorage } from "./lib/storage";
+import { appViewStorageKey } from "./shell/appViewStorage";
 
-export const DIFF_PANEL_STORAGE_KEY = "t3code:diff-panel-state:v1";
+export const DIFF_PANEL_STORAGE_KEY = appViewStorageKey("t3code:diff-panel-state:v1");
 
 export type DiffPanelSelection =
   | { kind: "branch"; baseRef: string | null }
