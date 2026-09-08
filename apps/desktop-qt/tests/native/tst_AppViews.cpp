@@ -2,6 +2,7 @@
 #include <QGuiApplication>
 #include <QQmlComponent>
 #include <QQmlEngine>
+#include <QPointer>
 #include <QQuickItem>
 #include <QQuickWebEngineProfile>
 #include <QQuickWindow>
@@ -113,6 +114,32 @@ private slots:
     QVERIFY(!firstWindow->isVisible());
     QVERIFY(secondWindow->isVisible());
     QCOMPARE(evaluate(second.get(), "document.querySelector('input').value").toString(), QString("draft b"));
+  }
+
+  void ownedWindowsRemainIndependentTopLevels() {
+    QQmlComponent fixture(engine.get());
+    fixture.setData(R"(
+      import QtQuick
+      import T3.Bricks
+      Window {
+        id: root
+        width: 320; height: 240; visible: true
+        function openWindow() { return childWindow.createObject(root); }
+        Component { id: childWindow; AppWindow {} }
+      }
+    )", QUrl::fromLocalFile(directory.filePath("owned.qml")));
+    QVERIFY2(fixture.isReady(), qPrintable(fixture.errorString()));
+    std::unique_ptr<QObject> owner(fixture.create());
+    QVERIFY2(owner, qPrintable(fixture.errorString()));
+    QVariant result;
+    QVERIFY(QMetaObject::invokeMethod(owner.get(), "openWindow", Q_RETURN_ARG(QVariant, result)));
+    QPointer<QQuickWindow> child = qobject_cast<QQuickWindow*>(result.value<QObject*>());
+    QVERIFY(child);
+    QCOMPARE(child->parent(), nullptr);
+    QCOMPARE(child->transientParent(), nullptr);
+    QVERIFY(child->isVisible());
+    owner.reset();
+    QVERIFY(child.isNull());
   }
 
   void transparentCanvasClearsOnlyBackdropsAndRestoresThem_data() {
