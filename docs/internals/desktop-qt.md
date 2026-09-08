@@ -61,9 +61,9 @@ running dev server; this is what `vp run dev:qt` uses.
   only re-evaluates bindings on that key. Keys are declared up front in
   `ShellBridge.cpp`; a rice can read any of them, but a new key must be added
   there before a binding will follow it.
-- **Permissions and downloads.** Pages get the async clipboard; every other
-  permission is denied (there is no notification presenter yet). Downloads
-  are accepted into the user's download folder.
+- **Permissions and downloads.** Pages get the async clipboard; other browser
+  permissions are denied. Opt-in QML extensions can use the native notification
+  presenter described below. Downloads go to the user's download folder.
 - **No width animation on the surfaces' neighbours.** Animating the sidebar
   or panel width resizes the web view every frame, which is a Chromium
   relayout and a new GPU surface each time; both snap instead.
@@ -200,7 +200,7 @@ the Settings → Theme editor exports it) plus a shell-only `window` section:
   Embedded documents claim their own override without publishing native colors.
   Older pages retain the DOM-observer fallback. Supply the full role set
   (the files under `examples/*/` do) for consistent colors during startup.
-- QML reads the same roles: `Theme.colors`, `Theme.color("chrome", fallback)`,
+- QML reads the same roles: `Theme.colors`, `Theme.palette.color("chrome", fallback)`,
   `Theme.appearance`, `Theme.id`.
 - `window.*` is shell-only: `opacity` (whole-window), `transparent` (window and
   web view background cleared; compositor rules do the blur on Wayland),
@@ -225,6 +225,90 @@ built-in `DefaultShell.qml`. It composes bricks from `T3.Bricks` and reads the
 Extra QML modules can live under `~/.t3/shell/qml/` (it is on the import
 path). If `shell.qml` fails to load, the default shell takes over with
 `ShellErrorOverlay` showing the error; a broken rice never locks the app.
+
+### Local extensions
+
+Extensions are trusted QML components instantiated by `shell.qml`, not a plugin
+registry or a sandbox. `DefaultShell` exposes `sidebar`, `composer`, `workspace`,
+`webView`, `terminalDrawer`, and `rightPanel` so extensions do not need to copy
+the layout. Removing a component removes its controls and signal subscriptions.
+`DefaultShell.toolbar` accepts a component above the timeline. Give it an
+`implicitHeight`; the empty slot takes no space. Use it for extension controls
+rather than positioning buttons over web content.
+
+`Composer.editorActions` accepts toolbar controls. `editorKeyPressed(event)`
+allows opt-in input handling, and `insertText(text, capturedTarget)` replaces the
+selection only while that draft remains selected and editable. Capture
+`publishedTarget` before asynchronous work; insertion does not submit a turn.
+`ComposerVimKeys` implements a deliberately limited, disabled-by-default modal
+editor. Focus and rename entry points are `Composer.focusInput()`,
+`Composer.toggleCheckoutPicker()`, `Workspace.beginRename()`, and
+`TerminalDrawer.focusTerminal()`.
+
+`Sidebar.model` can be overridden to filter or reorder the published rows.
+The source includes `createdAt` and `latestUserMessageAt`; the latter excludes
+agent replies and renames. Local filtering cannot recover rows omitted by the
+page's 50-row Settled limit. `thread.markUnread {key}` uses the existing client
+unread state.
+
+`ProjectFolderDrop` imports one existing directory through the page's project
+registration flow. It does not create, rename, move, or delete directories.
+Native dispatch canonicalizes the path and requires the shell's own backend,
+or explicit `--allow-local-folder-import` for an attached loopback URL. Do not
+enable that flag for an SSH-forwarded backend with a different filesystem.
+
+### Independent views and windows
+
+Use `AppView` for another complete web client and `AppWindow` for an independent
+window. They share `WebProfile` authentication but have no primary shell bridge,
+so navigation and actions cannot overwrite the primary native chrome.
+Composer, right-panel, terminal, and diff snapshots use a per-view storage
+namespace. Ordinary web, Electron, and coordinated primary/embed clients retain
+their existing storage keys.
+
+Assign a unique, stable `storageId` before creating a view to restore its drafts
+and panels after restart. The generated default lasts for that view's lifetime.
+Do not give two simultaneous views the same ID. Passing a thread URL opens the
+same conversation, not a copy of another view's unsent draft. Window geometry,
+open-window lists, and route restoration belong to the QML layout.
+
+### Notification delivery
+
+The primary page publishes live `desktopNotifications` batches independently
+of sidebar filtering. Each event contains an ID, scoped thread key, kind,
+thread title, and runtime mode. Initial observations baseline existing threads
+without replaying their old completions or approvals. A QML policy should
+consume `Shell.stateEntryChanged`, not replay the retained batch on startup.
+
+`NativeNotifications` is a creatable `T3.Shell` type, disabled by default.
+QML chooses event filters, foreground behavior, titles, message text, sound,
+and timeout, then calls `show(key, title, body, silent, timeoutMs)`. Its
+`activated(key)` signal identifies the originating thread. QML decides whether
+to raise a window and dispatch `thread.open`. Disabling delivery closes its
+outstanding notifications.
+
+Delivery currently uses Linux's desktop notification D-Bus service.
+`supported` is false without that service and on macOS or Windows. The desktop
+may ignore requested sound or timeout behavior. No durable missed-event inbox
+is maintained.
+
+### Local dictation helpers
+
+`LocalTranscriber` runs an explicitly configured absolute executable with an
+argument vector, never a shell command. It is available to trusted local QML,
+not to the hosted page. It starts only when the extension calls `start()`.
+Helpers emit newline-delimited JSON status and transcript messages;
+`finishRecording()` writes `stop` to stdin. A transcript is delivered only
+after a successful exit. Cancellation discards pending output and terminates
+the owned helper and, on Unix, its process group. Output is bounded.
+
+The optional Linux example uses PipeWire capture and a separately installed
+faster-whisper interpreter/model. It downloads nothing. Recording directories
+are explicitly configured and temporary audio is removed after use. An
+extension captures the draft target before recording and uses checked composer
+insertion afterward. If the target changed, it should retain the transcript
+for manual recovery instead of putting it into another thread. No microphone
+capture or speech model is included in the Qt binary.
 
 ### Hot reload
 
@@ -460,8 +544,10 @@ native chrome instead of freezing it on the last thread.
 `ShellThemeBridge` (root route, when hosted) resolves every theme role from
 the page's semantic CSS variables — painting each through a canvas so
 `oklch()`/`color-mix()` become sRGB hex — plus `--radius` and the font lists,
-and republishes on theme, appearance or custom-theme changes. `Theme.color()`
-resolves theme.json first, then this page theme, then the brick's fallback;
+and republishes on theme, appearance or custom-theme changes. `Theme.palette.color()`
+resolves theme.json first, then this page theme, then the brick's fallback.
+The notified `palette` receiver makes QML bindings follow theme changes;
+direct calls to the C++ `Theme.color()` method do not create that dependency.
 `Theme.radius`, `Theme.fontUi`, `Theme.fontMono` follow the same order (the
 shell-only `radius` / `fonts` keys in theme.json override the page). The
 themed controls (`ShellButton` etc.) take radius, surfaces, borders and fonts
