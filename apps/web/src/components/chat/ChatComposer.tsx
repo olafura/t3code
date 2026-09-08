@@ -6780,7 +6780,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   isConnecting ||
                   isComposerApprovalState ||
                   projectSelectionRequired ||
-                  isChoiceOnlyPendingQuestion
+                  isChoiceOnlyPendingQuestion ||
+                  activePendingIsResponding
                 }
                 hasSendableContent={composerSendState.hasSendableContent}
                 sendDisabledReason={sendDisabledReason}
