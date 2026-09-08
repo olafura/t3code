@@ -19,6 +19,7 @@ ShellWindow {
     property alias terminalDrawer: terminalView
     property alias rightPanel: panelView
     property alias toolbar: toolbarLoader.sourceComponent
+    property alias navigationPanel: sidebarExtension.sourceComponent
 
     ColumnLayout {
         anchors.fill: parent
@@ -29,16 +30,37 @@ ShellWindow {
             Layout.fillHeight: true
             spacing: 0
 
-            Sidebar {
-                id: sidebarView
-
+            GridLayout {
+                id: navigation
                 Layout.fillHeight: true
-                // Not animated: see RightPanel.
-                Layout.preferredWidth: root.sidebarCollapsed ? 0 : 256
+                Layout.fillWidth: false
+                Layout.preferredWidth: columns === 2 ? 256 + sidebarExtension.implicitWidth : sidebarExtension.active ? 300 : 256
+                Layout.maximumWidth: Layout.preferredWidth
                 Layout.minimumWidth: 0
+                columns: sidebarExtension.active && root.width >= 1100 ? 2 : 1
+                rowSpacing: 0
+                columnSpacing: 0
                 visible: !root.settingsActive && !root.sidebarCollapsed
-                showBrand: true
-                window: root
+
+                Sidebar {
+                    id: sidebarView
+                    objectName: "threadSidebar"
+                    Layout.fillHeight: true
+                    Layout.fillWidth: true
+                    Layout.preferredWidth: 256
+                    Layout.minimumWidth: 0
+                    showBrand: true
+                    window: root
+                }
+
+                Loader {
+                    id: sidebarExtension
+                    Layout.fillHeight: true
+                    Layout.fillWidth: true
+                    Layout.preferredWidth: status === Loader.Ready && item ? item.implicitWidth : 0
+                    active: sourceComponent !== null
+                    visible: active
+                }
             }
 
             SettingsNav {

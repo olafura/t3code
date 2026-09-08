@@ -15,6 +15,7 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } fro
 
 import { useComposerDraftStore } from "../../composerDraftStore";
 import { releaseProjectDraftUploads } from "../../lib/composerDraftUploads";
+import { subscribeShellProjectRemovalRequests } from "../../shell/shellProjectRemovalRequest";
 import { readLocalApi } from "../../localApi";
 import {
   type SidebarProjectGroupMember,
@@ -401,6 +402,24 @@ function ProjectDetail({
         />
       ))}
     </SettingsSection>
+  );
+
+  const shellRemovalPending = useRef(false);
+  useEffect(
+    () =>
+      subscribeShellProjectRemovalRequests(
+        group.memberProjects.map((member) => ({
+          projectKey: memberKey(member),
+          confirm: () => {
+            if (shellRemovalPending.current) return;
+            shellRemovalPending.current = true;
+            void removeMembers([member]).finally(() => {
+              shellRemovalPending.current = false;
+            });
+          },
+        })),
+      ),
+    [group.memberProjects, removeMembers],
   );
 
   return (

@@ -1,4 +1,6 @@
 module T3.Bricks
+FolderExplorer 1.0 FolderExplorer.qml
+FolderOperationDialog 1.0 FolderOperationDialog.qml
 AppView 1.0 AppView.qml
 AppWindow 1.0 AppWindow.qml
 Composer 1.0 Composer.qml
