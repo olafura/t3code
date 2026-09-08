@@ -37,3 +37,13 @@ qt_add_resources(tst_ShellExamples "shell_connector"
   BASE "../../qml/T3/Bricks"
   FILES "../../qml/T3/Bricks/js/shell-connect.js"
 )
+
+if(UNIX AND NOT APPLE)
+  find_package(Qt6 6.9 REQUIRED COMPONENTS DBus)
+  find_program(T3_DBUS_RUN_SESSION dbus-run-session REQUIRED)
+  add_executable(tst_NativeNotifications tst_NativeNotifications.cpp ../../src/NativeNotifications.cpp)
+  target_include_directories(tst_NativeNotifications PRIVATE ../../src)
+  target_compile_definitions(tst_NativeNotifications PRIVATE T3_HAS_DBUS)
+  target_link_libraries(tst_NativeNotifications PRIVATE Qt6::Core Qt6::Test Qt6::DBus)
+  add_test(NAME NativeNotifications COMMAND "${T3_DBUS_RUN_SESSION}" -- $<TARGET_FILE:tst_NativeNotifications>)
+endif()
