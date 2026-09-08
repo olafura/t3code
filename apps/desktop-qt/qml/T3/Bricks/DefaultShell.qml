@@ -11,6 +11,14 @@ import T3.Bricks
 ShellWindow {
     id: root
 
+    // Local QML extensions can customize one brick without copying the layout.
+    property alias sidebar: sidebarView
+    property alias composer: composerView
+    property alias workspace: workspaceView
+    property alias webView: primaryView
+    property alias terminalDrawer: terminalView
+    property alias rightPanel: panelView
+
     ColumnLayout {
         anchors.fill: parent
         spacing: 0
@@ -21,7 +29,7 @@ ShellWindow {
             spacing: 0
 
             Sidebar {
-                id: sidebar
+                id: sidebarView
 
                 Layout.fillHeight: true
                 // Not animated: see RightPanel.
@@ -44,31 +52,39 @@ ShellWindow {
                 spacing: 0
 
                 Workspace {
+                    id: workspaceView
+
                     Layout.fillWidth: true
                     visible: ready
                     sidebarToggle: root.sidebarCollapsed
-                    panelToggle: rightPanel.available ? rightPanel.open : null
+                    panelToggle: panelView.available ? panelView.open : null
                     window: root
                 }
 
                 WebSurface {
+                    id: primaryView
+
                     Layout.fillWidth: true
                     Layout.fillHeight: true
                     url: Shell.pageUrl
                 }
 
                 Composer {
+                    id: composerView
+
                     Layout.fillWidth: true
                     visible: ready
                 }
 
                 TerminalDrawer {
+                    id: terminalView
+
                     Layout.fillWidth: true
                 }
             }
 
             RightPanel {
-                id: rightPanel
+                id: panelView
 
                 Layout.fillHeight: true
                 ownToggle: false
