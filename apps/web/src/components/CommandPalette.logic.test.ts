@@ -56,6 +56,26 @@ describe("linked pull request thread navigation", () => {
 });
 
 describe("reduceCommandPaletteUiState", () => {
+  it("opens the lazy palette for a folder drop and keeps the first pending import", () => {
+    const first = reduceCommandPaletteUiState(
+      { open: false, mode: "files", openIntent: null },
+      { _tag: "OpenFolder", path: "/repo" },
+    );
+    expect(first).toEqual({
+      open: true,
+      mode: "command",
+      openIntent: { kind: "open-folder", path: "/repo" },
+    });
+    expect(reduceCommandPaletteUiState(first, { _tag: "OpenFolder", path: "/second" })).toBe(first);
+    const completed = reduceCommandPaletteUiState(first, { _tag: "ClearOpenIntent" });
+    expect(
+      reduceCommandPaletteUiState(completed, { _tag: "OpenFolder", path: "/second" }).openIntent,
+    ).toEqual({
+      kind: "open-folder",
+      path: "/second",
+    });
+  });
+
   const closedState = { open: false, mode: "command", openIntent: null } as const;
 
   it("toggles each overlay mode open and closed", () => {

@@ -1,4 +1,5 @@
 #include <QFile>
+#include <QFileInfo>
 #include <QPointer>
 #include <QSignalSpy>
 #include <QQuickWebEngineProfile>
@@ -20,6 +21,38 @@ signals:
   void scriptFinished(const QVariant& result);
 
 private slots:
+  void folderDropsResolveOnlyExistingLocalDirectories() {
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    ShellBridge bridge;
+    const auto url = QUrl::fromLocalFile(directory.path());
+    QVERIFY(bridge.localDirectoryPath(url).isEmpty());
+    bridge.setPageUrl(QUrl("https://remote.example/thread"));
+    QVERIFY(bridge.localDirectoryPath(url).isEmpty());
+    bridge.setPageUrl(QUrl("http://127.0.0.1:6182/thread"));
+    QVERIFY(bridge.localDirectoryPath(url).isEmpty());
+    QSignalSpy dispatched(&bridge, &ShellBridge::actionRequested);
+    const QVariantMap request{{QStringLiteral("path"), directory.path()}};
+    bridge.dispatch(QStringLiteral("project.folder.open"), request);
+    QCOMPARE(dispatched.count(), 0);
+    bridge.setLocalFolderImportEnabled(true);
+    QCOMPARE(bridge.localDirectoryPath(url), QFileInfo(directory.path()).canonicalFilePath());
+    bridge.dispatch(QStringLiteral("project.folder.open"), request);
+    QCOMPARE(dispatched.count(), 1);
+    QCOMPARE(dispatched.first().at(1).toMap().value(QStringLiteral("path")).toString(), QFileInfo(directory.path()).canonicalFilePath());
+    QVERIFY(bridge.localDirectoryPath(QUrl("https://example.com/folder")).isEmpty());
+    QVERIFY(bridge.localDirectoryPath(QUrl("file://server/share")).isEmpty());
+    QVERIFY(bridge.localDirectoryPath(QUrl::fromLocalFile(directory.filePath("missing"))).isEmpty());
+    QFile file(directory.filePath("file.txt"));
+    QVERIFY(file.open(QIODevice::WriteOnly));
+    file.close();
+    QVERIFY(bridge.localDirectoryPath(QUrl::fromLocalFile(file.fileName())).isEmpty());
+    bridge.setPageUrl(QUrl("https://remote.example/thread"));
+    QVERIFY(bridge.localDirectoryPath(url).isEmpty());
+    bridge.dispatch(QStringLiteral("project.folder.open"), request);
+    QCOMPARE(dispatched.count(), 1);
+  }
+
   void appPermissionsRequireMatchingHttpOrigin() {
     ShellBridge bridge;
     bridge.setPageUrl(QUrl("https://EXAMPLE.com/thread?id=1"));

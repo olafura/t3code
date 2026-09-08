@@ -65,7 +65,8 @@ export type CommandPaletteOpenIntent =
       readonly kind: "search";
       readonly query: string;
       readonly linkedThreads?: CommandPaletteLinkedThreads;
-    };
+    }
+  | { readonly kind: "open-folder"; readonly path: string };
 
 export interface CommandPaletteUiState {
   readonly open: boolean;
@@ -82,6 +83,7 @@ export type CommandPaletteUiAction =
       readonly linkedThreads?: CommandPaletteLinkedThreads;
     }
   | { readonly _tag: "OpenAddProject" }
+  | { readonly _tag: "OpenFolder"; readonly path: string }
   | { readonly _tag: "OpenNewThreadIn" }
   | { readonly _tag: "ClearOpenIntent" };
 
@@ -110,6 +112,10 @@ export function reduceCommandPaletteUiState(
       };
     case "OpenAddProject":
       return { open: true, mode: "command", openIntent: { kind: "add-project" } };
+    case "OpenFolder":
+      return state.openIntent?.kind === "open-folder"
+        ? state
+        : { open: true, mode: "command", openIntent: { kind: "open-folder", path: action.path } };
     case "OpenNewThreadIn":
       return { open: true, mode: "command", openIntent: { kind: "new-thread-in" } };
     case "ClearOpenIntent":

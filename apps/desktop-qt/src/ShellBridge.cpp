@@ -102,11 +102,30 @@ void ShellBridge::windowCommand(const QString& command) {
 }
 
 void ShellBridge::dispatch(const QString& action, const QVariant& payload) {
+  if (action == QStringLiteral("project.folder.open")) {
+    auto request = payload.toMap();
+    const auto path = localDirectoryPath(QUrl::fromLocalFile(request.value(QStringLiteral("path")).toString()));
+    if (path.isEmpty()) return;
+    request.insert(QStringLiteral("path"), path);
+    emit actionRequested(action, request);
+    return;
+  }
   emit actionRequested(action, payload);
 }
 
 void ShellBridge::notifyPageLoaded(bool ok, const QUrl& url) {
   emit pageLoaded(ok, url);
+}
+
+QString ShellBridge::localDirectoryPath(const QUrl& url) const {
+  const auto host = m_pageUrl.host().toLower();
+  if (!m_localFolderImportEnabled || !isAppOrigin(m_pageUrl) ||
+      (host != QStringLiteral("localhost") && host != QStringLiteral("127.0.0.1") &&
+       host != QStringLiteral("::1")) || !url.isLocalFile() || !url.host().isEmpty()) {
+    return {};
+  }
+  const QFileInfo directory(url.toLocalFile());
+  return directory.isDir() ? directory.canonicalFilePath() : QString();
 }
 
 QVariantList ShellBridge::readImageFiles(const QList<QUrl>& urls) const {
