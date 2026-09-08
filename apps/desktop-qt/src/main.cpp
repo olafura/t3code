@@ -103,6 +103,9 @@ int main(int argc, char* argv[]) {
       QStringLiteral("config-dir"),
       QStringLiteral("Directory holding shell.qml, theme.json and qml/ (default $T3CODE_HOME/shell, i.e. ~/.t3/shell)."),
       QStringLiteral("dir"));
+  const QCommandLineOption localFolderImportOption(
+      QStringLiteral("allow-local-folder-import"),
+      QStringLiteral("Allow local folder import for an attached URL known to use this machine's filesystem."));
   const QCommandLineOption homeDirOption(
       QStringLiteral("home-dir"),
       QStringLiteral("T3 Code data directory for the shell profile, rice and server."),
@@ -132,7 +135,7 @@ int main(int argc, char* argv[]) {
                      "names). Repeatable; runs in command-line order together with --action."),
       QStringLiteral("chord"));
   parser.addOptions({urlOption, configDirOption, homeDirOption, qmlDirOption, hostEntryOption,
-                     nodeOption, screenshotOption, actionOption, keyOption});
+                     nodeOption, screenshotOption, actionOption, keyOption, localFolderImportOption});
   parser.process(app);
 
   const QString homeDir = resolveHomeDir(parser.value(homeDirOption));
@@ -149,6 +152,7 @@ int main(int argc, char* argv[]) {
   qmlRegisterSingletonInstance("T3.Shell", 1, 0, "WebProfile", webProfile.profile());
 
   ShellBridge bridge;
+  bridge.setLocalFolderImportEnabled(!parser.isSet(urlOption) || parser.isSet(localFolderImportOption));
   ThemeStore theme(configDir);
   ShellRuntime runtime({configDir, qmlSourceDir}, &bridge, &theme);
   // The page publishes its resolved theme; without a theme.json it is the
