@@ -11,6 +11,7 @@
 #include <QtWebEngineQuick/qtwebenginequickglobal.h>
 
 #include "BackendProcess.h"
+#include "LocalTranscriber.h"
 #include "NativeNotifications.h"
 #include "ShellBridge.h"
 #include "ShellRuntime.h"
@@ -155,6 +156,7 @@ int main(int argc, char* argv[]) {
   ShellBridge bridge;
   bridge.setLocalFolderImportEnabled(!parser.isSet(urlOption) || parser.isSet(localFolderImportOption));
   qmlRegisterType<NativeNotifications>("T3.Shell", 1, 0, "NativeNotifications");
+  qmlRegisterType<LocalTranscriber>("T3.Shell", 1, 0, "LocalTranscriber");
   ThemeStore theme(configDir);
   ShellRuntime runtime({configDir, qmlSourceDir}, &bridge, &theme);
   // The page publishes its resolved theme; without a theme.json it is the
