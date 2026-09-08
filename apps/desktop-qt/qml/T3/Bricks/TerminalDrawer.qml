@@ -74,7 +74,7 @@ Item {
         anchors.right: parent.right
         height: drawer.radius > 0 ? 0 : 1
         visible: height > 0
-        color: Theme.color("border", "#27272a")
+        color: Theme.palette.color("border", "#27272a")
     }
 
     Loader {

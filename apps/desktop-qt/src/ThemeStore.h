@@ -21,6 +21,9 @@ class ThemeStore : public QObject {
   Q_PROPERTY(QString name READ name NOTIFY themeChanged)
   Q_PROPERTY(QString appearance READ appearance NOTIFY themeChanged)
   Q_PROPERTY(QVariantMap colors READ colors NOTIFY themeChanged)
+  // Reading this notified receiver makes palette.color(...) reactive in QML.
+  // A direct call to a C++ invokable does not record a binding dependency.
+  Q_PROPERTY(QObject* palette READ palette NOTIFY themeChanged)
   Q_PROPERTY(qreal radius READ radius NOTIFY themeChanged)
   Q_PROPERTY(QString fontUi READ fontUi NOTIFY themeChanged)
   Q_PROPERTY(QString fontMono READ fontMono NOTIFY themeChanged)
@@ -41,6 +44,7 @@ public:
   QString name() const { return m_name; }
   QString appearance() const { return m_loaded ? m_appearance : m_pageAppearance; }
   QVariantMap colors() const { return m_colors; }
+  QObject* palette() { return this; }
   qreal radius() const;
   QString fontUi() const;
   QString fontMono() const;

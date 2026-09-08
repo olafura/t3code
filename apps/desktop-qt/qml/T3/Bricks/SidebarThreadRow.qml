@@ -30,14 +30,14 @@ Item {
     signal unsnoozeRequested
     signal wokeDismissed
 
-    readonly property color textColor: Theme.color("sidebarForeground", "#e4e4e7")
-    readonly property color secondaryColor: Theme.color("secondaryLabel", "#8b8b93")
+    readonly property color textColor: Theme.palette.color("sidebarForeground", "#e4e4e7")
+    readonly property color secondaryColor: Theme.palette.color("secondaryLabel", "#8b8b93")
     // Themes may colour the project and branch lines and mark the active
     // row with a bar; without those roles the row stays monochrome.
-    readonly property color projectColor: Theme.color("projectForeground", secondaryColor)
-    readonly property color branchColor: Theme.color("branchForeground", secondaryColor)
-    readonly property color indicatorColor: Theme.color("sidebarActiveIndicator", "transparent")
-    readonly property color focusColor: Theme.color("focus", "#3b82f6")
+    readonly property color projectColor: Theme.palette.color("projectForeground", secondaryColor)
+    readonly property color branchColor: Theme.palette.color("branchForeground", secondaryColor)
+    readonly property color indicatorColor: Theme.palette.color("sidebarActiveIndicator", "transparent")
+    readonly property color focusColor: Theme.palette.color("focus", "#3b82f6")
     readonly property bool draft: section === "draft"
     readonly property bool woke: item.wokeAt !== null && item.wokeAt !== undefined
     readonly property bool parked: section === "snoozed" || section === "settled"
@@ -86,20 +86,20 @@ Item {
     readonly property color statusColor: {
         switch (item.status) {
         case "approval":
-            return Theme.color("warning", "#f59e0b");
+            return Theme.palette.color("warning", "#f59e0b");
         case "input":
-            return Theme.color("accent", "#818cf8");
+            return Theme.palette.color("accent", "#818cf8");
         case "working":
         case "monitoring":
-            return Theme.color("info", "#38bdf8");
+            return Theme.palette.color("info", "#38bdf8");
         case "failed":
-            return Theme.color("error", "#f87171");
+            return Theme.palette.color("error", "#f87171");
         }
         if (row.woke) {
-            return Theme.color("warning", "#f59e0b");
+            return Theme.palette.color("warning", "#f59e0b");
         }
         if (item.unread === true) {
-            return Theme.color("success", "#34d399");
+            return Theme.palette.color("success", "#34d399");
         }
         return row.secondaryColor;
     }
@@ -156,8 +156,8 @@ Item {
         anchors.fill: parent
         radius: 8
         // Fade alpha without interpolating through black on light themes.
-        readonly property color hoverColor: Theme.color("sidebarRowHover", "#1c1c21")
-        color: row.active ? Theme.color("sidebarRowActive", "#2a2a30") : Qt.alpha(hoverColor, hover.hovered ? hoverColor.a : 0)
+        readonly property color hoverColor: Theme.palette.color("sidebarRowHover", "#1c1c21")
+        color: row.active ? Theme.palette.color("sidebarRowActive", "#2a2a30") : Qt.alpha(hoverColor, hover.hovered ? hoverColor.a : 0)
         border.width: row.focused ? 1 : 0
         border.color: row.focusColor
 

@@ -12,10 +12,10 @@ Rectangle {
     required property Window window
 
     readonly property bool controlsOnLeft: Qt.platform.os === "osx"
-    readonly property color foreground: Theme.color("text", "#e4e4e7")
+    readonly property color foreground: Theme.palette.color("text", "#e4e4e7")
 
     implicitHeight: 38
-    color: Theme.color("chrome", "#141416")
+    color: Theme.palette.color("chrome", "#141416")
 
     DragHandler {
         target: null
