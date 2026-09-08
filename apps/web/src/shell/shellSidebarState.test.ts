@@ -79,6 +79,8 @@ describe("buildShellSidebarState", () => {
         id: ThreadId.make("working"),
         title: "Working thread",
         branch: "feat/x",
+        latestUserMessageAt: "2026-03-09T11:30:00.000Z",
+        updatedAt: "2026-03-09T12:00:00.000Z",
         session: { status: "running" } as never,
         latestTurn: { completedAt: "2026-03-09T12:00:00.000Z" } as never,
       }),
@@ -137,6 +139,9 @@ describe("buildShellSidebarState", () => {
       status: "working",
       statusLabel: "Working",
       unread: true,
+      createdAt: "2026-03-09T10:00:00.000Z",
+      latestUserMessageAt: "2026-03-09T11:30:00.000Z",
+      updatedAt: "2026-03-09T12:00:00.000Z",
     });
     expect(state.activeThreadKey).toBe(`${environmentId}:pinned`);
   });
