@@ -35,6 +35,12 @@ Rectangle {
     // Narrow strips (a wide right panel) drop the pill labels.
     readonly property bool compact: width < 720
 
+    function beginRename() {
+        if (strip.ready && !strip.model.isDraft) {
+            titleSlot.startEditing();
+        }
+    }
+
     implicitHeight: 52
     color: Theme.color("canvas", "#0f0f12")
 
