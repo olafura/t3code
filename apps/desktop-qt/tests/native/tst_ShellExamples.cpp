@@ -3,6 +3,7 @@
 #include <QImage>
 #include <QQmlApplicationEngine>
 #include <QQuickItem>
+#include <QPointer>
 #include <QSignalSpy>
 #include <QQuickWebEngineProfile>
 #include <QTemporaryDir>
@@ -175,6 +176,58 @@ private slots:
     QCOMPARE(actions.last().at(0).toString(), QString("rightPanel.close"));
     QCOMPARE(actions.last().at(1).toMap().value("id").toString(), QString("files"));
     bridge.publish("rightPanel", QVariant());
+  }
+
+  void extensionToolbarReservesSpaceAndReleasesIt_data() {
+    QTest::addColumn<int>("width");
+    QTest::newRow("narrow") << 640;
+    QTest::newRow("wide") << 1280;
+  }
+
+  void extensionToolbarReservesSpaceAndReleasesIt() {
+    QFETCH(int, width);
+    QFile source(directory.filePath("shell.qml"));
+    QVERIFY(source.open(QIODevice::WriteOnly | QIODevice::Truncate));
+    source.write(R"(
+      import QtQuick
+      import T3.Bricks
+      DefaultShell {
+        property bool toolbarEnabled: true
+        toolbar: toolbarEnabled ? extension : null
+        Component {
+          id: extension
+          Item { implicitHeight: 48; objectName: "toolbarContent" }
+        }
+      }
+    )");
+    source.close();
+    runtime->reload();
+    QVERIFY2(runtime->lastError().isEmpty(), qPrintable(runtime->lastError()));
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    auto* engine = runtime->findChild<QQmlApplicationEngine*>();
+    QVERIFY(engine);
+    auto* window = qobject_cast<QQuickWindow*>(engine->rootObjects().last());
+    QVERIFY(window);
+    window->resize(width, 820);
+    QVERIFY(QTest::qWaitForWindowExposed(window));
+    auto* workspace = window->property("workspace").value<QQuickItem*>();
+    auto* webView = window->property("webView").value<QQuickItem*>();
+    auto* toolbar = window->findChild<QQuickItem*>("extensionToolbar");
+    QVERIFY(workspace);
+    QVERIFY(webView);
+    QVERIFY(toolbar);
+    QTRY_COMPARE(toolbar->height(), 48);
+    QTRY_COMPARE(toolbar->mapToScene(QPointF()).y(), workspace->mapToScene(QPointF(0, workspace->height())).y());
+    QTRY_COMPARE(webView->mapToScene(QPointF()).y(), toolbar->mapToScene(QPointF(0, toolbar->height())).y());
+    QPointer<QQuickItem> content = toolbar->property("item").value<QQuickItem*>();
+    QVERIFY(content);
+    QCOMPARE(content->width(), toolbar->width());
+
+    QVERIFY(window->setProperty("toolbarEnabled", false));
+    QTRY_VERIFY(!toolbar->property("active").toBool());
+    QTRY_VERIFY(!toolbar->isVisible());
+    QTRY_VERIFY(content.isNull());
+    QTRY_COMPARE(webView->mapToScene(QPointF()).y(), workspace->mapToScene(QPointF(0, workspace->height())).y());
   }
 
   void cleanupTestCase() {
