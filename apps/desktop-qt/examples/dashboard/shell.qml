@@ -534,6 +534,7 @@ ShellWindow {
                     // The page dims under the drawer; clicking it closes the drawer.
                     Rectangle {
                         anchors.fill: parent
+                        radius: surfaceCard.radius - surfaceCard.border.width
                         visible: opacity > 0
                         opacity: root.drawerOpen ? 1 : 0
                         color: Qt.rgba(root.canvas.r, root.canvas.g, root.canvas.b, 0.5)
@@ -938,7 +939,7 @@ ShellWindow {
                                             id: mascot
 
                                             Layout.fillWidth: true
-                                            Layout.preferredHeight: cat.status === Loader.Ready ? cat.item.implicitHeight : 84
+                                            Layout.preferredHeight: cat.status === Loader.Ready && cat.item ? cat.item.implicitHeight : 84
 
                                             Loader {
                                                 id: cat
