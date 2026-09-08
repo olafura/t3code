@@ -59,6 +59,8 @@ find_file(T3_QWEBCHANNEL_JS qwebchannel.js
 
 qt_add_executable(t3code-qt
   src/main.cpp
+  src/NativeNotifications.cpp
+  src/NativeNotifications.h
   src/BackendProcess.cpp
   src/BackendProcess.h
   src/ShellBridge.cpp
@@ -71,6 +73,12 @@ qt_add_executable(t3code-qt
   src/WebProfile.h
   src/PlatformWindow.h
 )
+
+if(UNIX AND NOT APPLE)
+  find_package(Qt6 6.9 REQUIRED COMPONENTS DBus)
+  target_link_libraries(t3code-qt PRIVATE Qt6::DBus)
+  target_compile_definitions(t3code-qt PRIVATE T3_HAS_DBUS)
+endif()
 
 if(T3_QWEBCHANNEL_JS)
   set_source_files_properties("${T3_QWEBCHANNEL_JS}" PROPERTIES QT_RESOURCE_ALIAS "qwebchannel.js")

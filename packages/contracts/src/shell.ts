@@ -1,4 +1,5 @@
 import * as Schema from "effect/Schema";
+import { RuntimeMode } from "./orchestration";
 
 /**
  * Contract between the web app and a native shell hosting it (the Qt shell
@@ -345,6 +346,16 @@ export const ShellNotification = Schema.Struct({
   ),
 });
 export type ShellNotification = typeof ShellNotification.Type;
+
+/** Live turn transitions for opt-in OS notifications, independent of sidebar filtering. */
+export const ShellDesktopNotification = Schema.Struct({
+  id: Schema.String,
+  threadKey: Schema.String,
+  kind: Schema.Literals(["started", "completed", "error", "approval", "input"]),
+  threadTitle: Schema.String,
+  runtimeMode: RuntimeMode,
+});
+export type ShellDesktopNotification = typeof ShellDesktopNotification.Type;
 
 /** Published under the `notifications` key: the page's stacked toasts, newest first. */
 export const ShellNotificationsState = Schema.Struct({

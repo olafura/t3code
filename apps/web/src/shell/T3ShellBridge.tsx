@@ -34,6 +34,7 @@ import { buildShellKeybindings } from "./shellKeybindings";
 import { buildLogicalProjectKeyMap, buildShellSidebarState } from "./shellSidebarState";
 import { useShellActions } from "./useShellActions";
 import { useShellPublish } from "./useShellPublish";
+import { useShellDesktopNotifications } from "./useShellDesktopNotifications";
 import { useShellThreadRowActions } from "./useShellThreadRowActions";
 
 /**
@@ -46,6 +47,7 @@ import { useShellThreadRowActions } from "./useShellThreadRowActions";
 export function T3ShellBridge() {
   const router = useRouter();
   const threads = useThreadShells();
+  useShellDesktopNotifications(threads);
   const { projectGroups } = useSidebarProjectGroups(threads);
   const serverConfigs = useAtomValue(environmentServerConfigsAtom);
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
