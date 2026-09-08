@@ -4,6 +4,10 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_AUTOMOC ON)
 find_package(Qt6 6.9 REQUIRED COMPONENTS Core Gui GuiPrivate Quick Test WebEngineQuick WebChannel)
 enable_testing()
+add_executable(tst_LocalTranscriber tst_LocalTranscriber.cpp ../../src/LocalTranscriber.cpp)
+target_include_directories(tst_LocalTranscriber PRIVATE ../../src)
+target_link_libraries(tst_LocalTranscriber PRIVATE Qt6::Core Qt6::Qml Qt6::Test)
+add_test(NAME LocalTranscriber COMMAND tst_LocalTranscriber)
 foreach(test_name IN ITEMS ShellRuntime ShellExamples AppViews)
   add_executable(tst_${test_name}
     tst_${test_name}.cpp
