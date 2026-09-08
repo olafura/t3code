@@ -2,6 +2,8 @@
 
 import { threadPullRequestLinkMode } from "@t3tools/client-runtime/thread-pull-request-compatibility";
 import { visibleThreadPullRequests } from "@t3tools/shared/threadPullRequests";
+import { useShellFolderDrop } from "../shell/useShellFolderDrop";
+import { useShellActions } from "../shell/useShellActions";
 
 import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environment";
 import {
@@ -452,6 +454,11 @@ export function CommandPalette({ children }: { children: ReactNode }) {
   const openAddProject = useCallback(() => dispatch({ _tag: "OpenAddProject" }), []);
   const openNewThreadIn = useCallback(() => dispatch({ _tag: "OpenNewThreadIn" }), []);
   const clearOpenIntent = useCallback(() => dispatch({ _tag: "ClearOpenIntent" }), []);
+  useShellActions((action) => {
+    if (action.type === "project.folder.open") {
+      dispatch({ _tag: "OpenFolder", path: action.path });
+    }
+  });
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const { theme, themeHalves, resolvedTheme } = useTheme();
   const composerHandleRef = useRef<ChatComposerHandle | null>(null);
@@ -1923,6 +1930,7 @@ function OpenCommandPaletteDialog(props: {
       readonly rawCwd: string;
       readonly platform: string;
       readonly currentProjectCwd: string | null;
+      readonly createWorkspaceRootIfMissing?: boolean;
     }) => {
       const environment = environments.find(
         (candidate) => candidate.environmentId === input.environmentId,
@@ -2008,7 +2016,7 @@ function OpenCommandPaletteDialog(props: {
           projectId,
           title: inferProjectTitleFromPath(cwd),
           workspaceRoot: cwd,
-          createWorkspaceRootIfMissing: true,
+          createWorkspaceRootIfMissing: input.createWorkspaceRootIfMissing ?? true,
           defaultModelSelection: null,
         },
       });
@@ -2055,6 +2063,34 @@ function OpenCommandPaletteDialog(props: {
       threads,
     ],
   );
+
+  const folderDropEnvironment = environments.find(
+    (environment) => environment.environmentId === primaryEnvironmentId,
+  );
+  const openDroppedFolder = useShellFolderDrop({
+    primaryEnvironmentId,
+    platform: getEnvironmentBrowsePlatform(
+      folderDropEnvironment?.serverConfig?.environment.platform.os,
+    ),
+    connected: canCreateProjectInEnvironment(folderDropEnvironment?.connection.phase),
+    open: handleAddProjectForEnvironment,
+    onError: (error) => {
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: "Failed to open folder",
+          description: error instanceof Error ? error.message : "An error occurred.",
+        }),
+      );
+    },
+  });
+
+  const handledFolderIntent = useRef<CommandPaletteOpenIntent | null>(null);
+  useEffect(() => {
+    if (openIntent?.kind !== "open-folder" || handledFolderIntent.current === openIntent) return;
+    handledFolderIntent.current = openIntent;
+    void openDroppedFolder(openIntent.path).finally(clearOpenIntent);
+  }, [clearOpenIntent, openDroppedFolder, openIntent]);
 
   const handleAddProject = useCallback(
     async (rawCwd: string) => {

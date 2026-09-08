@@ -10,6 +10,7 @@ qt_add_qml_module(t3bricks
   QML_FILES
     Composer.qml
     ComposerVimKeys.qml
+    ProjectFolderDrop.qml
     ContextMenuHost.qml
     DefaultShell.qml
     GitActions.qml

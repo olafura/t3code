@@ -24,6 +24,7 @@ class ShellBridge : public QObject {
   Q_PROPERTY(QUrl pageUrl READ pageUrl WRITE setPageUrl NOTIFY pageUrlChanged)
   Q_PROPERTY(QUrl webChannelScriptUrl READ webChannelScriptUrl CONSTANT)
   Q_PROPERTY(QString colorScheme READ colorScheme NOTIFY colorSchemeChanged)
+  Q_PROPERTY(bool localFolderImportEnabled READ localFolderImportEnabled CONSTANT)
 
 public:
   explicit ShellBridge(QObject* parent = nullptr);
@@ -36,6 +37,8 @@ public:
   void setPageUrl(const QUrl& url);
   QUrl webChannelScriptUrl() const;
   QString colorScheme() const { return m_colorScheme; }
+  bool localFolderImportEnabled() const { return m_localFolderImportEnabled; }
+  void setLocalFolderImportEnabled(bool enabled) { m_localFolderImportEnabled = enabled; }
 
   // Called by the web app (via the channel) with its view models.
   Q_INVOKABLE void publish(const QString& key, const QVariant& value);
@@ -48,6 +51,8 @@ public:
   // Reads image files for the composer: [{name, mimeType, base64}], skipping
   // anything that is not an image or is over the page's size limit.
   Q_INVOKABLE QVariantList readImageFiles(const QList<QUrl>& urls) const;
+  // A drop imports an existing local directory, never creates or deletes it.
+  Q_INVOKABLE QString localDirectoryPath(const QUrl& url) const;
   // Called by WebSurface when a top-level navigation finishes.
   Q_INVOKABLE void notifyPageLoaded(bool ok, const QUrl& url);
   // Permissions belong only to the configured app origin, including its port.
@@ -66,6 +71,7 @@ private:
   ShellChannel* m_channel;
   QUrl m_pageUrl;
   QString m_colorScheme = QStringLiteral("system");
+  bool m_localFolderImportEnabled = false;
 };
 
 // The one object registered on every surface's WebChannel. It has no

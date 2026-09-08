@@ -481,6 +481,7 @@ export const ShellAction = Schema.Union([
   }),
   Schema.Struct({ type: Schema.Literal("sidebar.toggle") }),
   Schema.Struct({ type: Schema.Literal("project.add") }),
+  Schema.Struct({ type: Schema.Literal("project.folder.open"), path: Schema.String }),
   Schema.Struct({ type: Schema.Literal("settings.open") }),
   Schema.Struct({ type: Schema.Literal("pullRequests.open") }),
   Schema.Struct({ type: Schema.Literal("usage.open") }),
