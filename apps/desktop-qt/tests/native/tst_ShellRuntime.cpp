@@ -82,6 +82,18 @@ private slots:
     QCOMPARE(dispatched.count(), 1);
   }
 
+  void projectRemovalRequiresExplicitLocalAccess() {
+    ShellBridge bridge;
+    QSignalSpy actions(&bridge, &ShellBridge::actionRequested);
+    const QVariantMap request{{QStringLiteral("projectKey"), QStringLiteral("local:project")}};
+    bridge.dispatch(QStringLiteral("project.remove"), request);
+    QCOMPARE(actions.count(), 0);
+    bridge.setLocalFolderImportEnabled(true);
+    bridge.dispatch(QStringLiteral("project.remove"), request);
+    QCOMPARE(actions.count(), 1);
+    QCOMPARE(actions.first().at(1).toMap(), request);
+  }
+
   void appPermissionsRequireMatchingHttpOrigin() {
     ShellBridge bridge;
     bridge.setPageUrl(QUrl("https://EXAMPLE.com/thread?id=1"));

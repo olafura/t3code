@@ -59,6 +59,7 @@ import {
   nextProjectScriptId,
 } from "../../projectScripts";
 import { releaseProjectDraftUploads } from "../../lib/composerDraftUploads";
+import { subscribeShellProjectRemovalRequests } from "../../shell/shellProjectRemovalRequest";
 import { readLocalApi } from "../../localApi";
 import {
   applyProviderInstanceSettings,
@@ -901,6 +902,24 @@ function ProjectDetail({
       reportFailure,
       threads,
     ],
+  );
+
+  const shellRemovalPending = useRef(false);
+  useEffect(
+    () =>
+      subscribeShellProjectRemovalRequests(
+        group.memberProjects.map((member) => ({
+          projectKey: memberKey(member),
+          confirm: () => {
+            if (shellRemovalPending.current) return;
+            shellRemovalPending.current = true;
+            void removeMembers([member]).finally(() => {
+              shellRemovalPending.current = false;
+            });
+          },
+        })),
+      ),
+    [group.memberProjects, removeMembers],
   );
 
   const selectedCheckoutGrouping =

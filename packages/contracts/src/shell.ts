@@ -61,6 +61,16 @@ export const ShellSidebarProject = Schema.Struct({
 });
 export type ShellSidebarProject = typeof ShellSidebarProject.Type;
 
+export const ShellLocalProject = Schema.Struct({
+  key: Schema.String,
+  logicalProjectKey: Schema.String,
+  displayName: Schema.String,
+  environmentId: Schema.String,
+  projectId: Schema.String,
+  workspaceRoot: Schema.String,
+});
+export type ShellLocalProject = typeof ShellLocalProject.Type;
+
 export const ShellSidebarDraft = Schema.Struct({
   draftId: Schema.String,
   projectKey: Schema.String,
@@ -71,6 +81,9 @@ export type ShellSidebarDraft = typeof ShellSidebarDraft.Type;
 /** Published under the `sidebar` key: the thread list already bucketed and sorted. */
 export const ShellSidebarState = Schema.Struct({
   projects: Schema.Array(ShellSidebarProject),
+  /** Native clients must also require their explicit local-folder permission. */
+  localEnvironmentId: Schema.NullOr(Schema.String),
+  localProjects: Schema.Array(ShellLocalProject),
   scopeProjectKey: Schema.NullOr(Schema.String),
   pinned: Schema.Array(ShellSidebarThread),
   active: Schema.Array(ShellSidebarThread),
@@ -492,6 +505,7 @@ export const ShellAction = Schema.Union([
   }),
   Schema.Struct({ type: Schema.Literal("sidebar.toggle") }),
   Schema.Struct({ type: Schema.Literal("project.add") }),
+  Schema.Struct({ type: Schema.Literal("project.remove"), projectKey: Schema.String }),
   Schema.Struct({ type: Schema.Literal("project.folder.open"), path: Schema.String }),
   Schema.Struct({ type: Schema.Literal("settings.open") }),
   Schema.Struct({ type: Schema.Literal("pullRequests.open") }),
