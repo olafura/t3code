@@ -261,6 +261,31 @@ Native dispatch canonicalizes the path and requires the shell's own backend,
 or explicit `--allow-local-folder-import` for an attached loopback URL. Do not
 enable that flag for an SSH-forwarded backend with a different filesystem.
 
+`examples/folders` adds a native folder explorer using Qt's `TreeView` and
+asynchronous `QFileSystemModel` through `DefaultShell.navigationPanel`. The
+thread sidebar stays visible beside the file browser, or above it on narrow
+windows; the browser does not replace thread navigation. Files are listed
+read-only. The `FolderExplorer` brick provides create,
+rename, move and confirmed system-Trash actions through `LocalFolderModel`.
+It never falls back to permanent deletion. Operations are limited to plain
+folders inside the chosen root, not files or remote directories. Existing
+destinations cannot be overwritten. The chosen root, symlinks, home and
+filesystem roots, registered project roots, and their containing directories
+are protected from rename, move and Trash. Moving a live project root would
+leave thread paths stale, so that is not offered here. The model is enabled
+only while the explorer is visible, the primary loopback environment is
+connected, and native local-folder permission allows access. No native
+filesystem methods are exposed to the web page.
+
+The page publishes every primary-local checkout in `sidebar.localProjects`,
+independently of grouped sidebar representatives, and clears the list on
+disconnect or a non-loopback connection. "Remove from T3" sends
+`project.remove {projectKey}` for one physical checkout and opens the existing
+project-settings confirmation. Confirming permanently deletes that entry's
+conversation history, including archived threads, and cleans up its drafts;
+it leaves files on disk. This is separate from Trash, not a safe workaround
+for renaming or moving a registered project root.
+
 ### Independent views and windows
 
 Use `AppView` for another complete web client and `AppWindow` for an independent
@@ -275,6 +300,10 @@ and panels after restart. The generated default lasts for that view's lifetime.
 Do not give two simultaneous views the same ID. Passing a thread URL opens the
 same conversation, not a copy of another view's unsent draft. Window geometry,
 open-window lists, and route restoration belong to the QML layout.
+`AppWindow` explicitly clears its transient parent so an owned extra window
+is a normal top-level window, not a dialog. Layouts must close owned extras
+when their primary window closes. `--app-id` sets the native desktop identity
+before any window is created, allowing launch-profile-specific window rules.
 
 ### Notification delivery
 

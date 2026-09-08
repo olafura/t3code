@@ -1,4 +1,5 @@
 import { useAtomValue } from "@effect/atom-react";
+import { canCreateProjectInEnvironment } from "@t3tools/client-runtime/operations/projects";
 import {
   parseScopedThreadKey,
   scopeProjectRef,
@@ -28,6 +29,7 @@ import { isTerminalFocused } from "../lib/terminalFocus";
 import { requestShellRename } from "./shellRenameRequest";
 import { environmentServerConfigsAtom, primaryServerKeybindingsAtom } from "../state/server";
 import { useThreadShells } from "../state/entities";
+import { usePrimaryEnvironment } from "../state/environments";
 import { buildThreadRouteParams, resolveThreadRouteTarget } from "../threadRoutes";
 import { useUiStateStore } from "../uiStateStore";
 import { buildShellKeybindings } from "./shellKeybindings";
@@ -36,6 +38,8 @@ import { useShellActions } from "./useShellActions";
 import { useShellPublish } from "./useShellPublish";
 import { useShellDesktopNotifications } from "./useShellDesktopNotifications";
 import { useShellThreadRowActions } from "./useShellThreadRowActions";
+import { resolveShellLocalEnvironmentId } from "./shellLocalProjects";
+import { requestShellProjectRemoval } from "./shellProjectRemovalRequest";
 
 /**
  * Feeds the native shell (window.t3Shell) the sidebar view model and turns
@@ -46,6 +50,12 @@ import { useShellThreadRowActions } from "./useShellThreadRowActions";
  */
 export function T3ShellBridge() {
   const router = useRouter();
+  const primaryEnvironment = usePrimaryEnvironment();
+  const localEnvironmentId = resolveShellLocalEnvironmentId({
+    primaryEnvironmentId: primaryEnvironment?.environmentId ?? null,
+    connected: canCreateProjectInEnvironment(primaryEnvironment?.connection.phase),
+    hostname: window.location.hostname,
+  });
   const threads = useThreadShells();
   useShellDesktopNotifications(threads);
   const { projectGroups } = useSidebarProjectGroups(threads);
@@ -186,6 +196,7 @@ export function T3ShellBridge() {
   const state = useMemo(
     (): ShellSidebarState =>
       buildShellSidebarState({
+        localEnvironmentId,
         projectGroups,
         scopeProjectKey,
         partition,
@@ -201,6 +212,7 @@ export function T3ShellBridge() {
       capabilitiesFor,
       drafts,
       lastVisitedAtByKey,
+      localEnvironmentId,
       partition,
       projectGroups,
       routeTarget,
@@ -349,6 +361,18 @@ export function T3ShellBridge() {
       case "project.add":
         openCommandPalette({ open: "add-project" });
         return;
+      case "project.remove": {
+        const project = state.localProjects.find((entry) => entry.key === action.projectKey);
+        if (!project || localEnvironmentId === null) return;
+        const cancel = requestShellProjectRemoval(project.key);
+        void router
+          .navigate({
+            to: "/settings/projects",
+            search: { project: project.logicalProjectKey, machine: localEnvironmentId },
+          })
+          .catch(cancel);
+        return;
+      }
       case "palette.open":
         openCommandPalette({});
         return;

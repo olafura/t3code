@@ -12,6 +12,7 @@
 #include <memory>
 
 #include "ShellBridge.h"
+#include "LocalFolderModel.h"
 #include "ShellRuntime.h"
 #include "ThemeStore.h"
 #include "WebProfile.h"
@@ -37,6 +38,7 @@ class ShellExamplesTest : public QObject {
 private slots:
   void initTestCase() {
     QVERIFY(directory.isValid());
+    qmlRegisterType<LocalFolderModel>("T3.Shell", 1, 0, "LocalFolderModel");
     theme = std::make_unique<ThemeStore>(directory.path());
     profile = std::make_unique<WebProfile>(directory.filePath("web"));
     qmlRegisterSingletonInstance("T3.Shell", 1, 0, "WebProfile", profile->profile());
@@ -69,7 +71,7 @@ private slots:
   void layoutsFit_data() {
     QTest::addColumn<QString>("example");
     QTest::addColumn<int>("width");
-    for (const auto& example : {"minimal", "glass", "terminal", "dashboard"}) {
+    for (const auto& example : {"minimal", "glass", "terminal", "dashboard", "folders"}) {
       for (const int width : {1400, 1000, 640}) {
         QTest::newRow(qPrintable(QString("%1-%2").arg(example).arg(width))) << QString(example) << width;
       }
@@ -101,6 +103,24 @@ private slots:
     if (width == 1400) QTRY_VERIFY(!title->property("truncated").toBool());
     QTRY_VERIFY(title->mapToScene(QPointF(title->width(), 0)).x() <= window->width());
 
+    if (example == "folders") {
+      auto* explorer = window->findChild<QQuickItem*>("folderExplorer");
+      QVERIFY(explorer);
+      auto* page = window->findChild<QQuickItem*>("T3WebSurface");
+      QVERIFY(page);
+      auto* threads = window->findChild<QQuickItem*>("threadSidebar");
+      QVERIFY(threads);
+      QVERIFY(threads->isVisible());
+      QVERIFY(explorer->isVisible());
+      QTRY_VERIFY(explorer->width() > 0);
+      QTRY_VERIFY(page->mapToScene(QPointF()).x() >= explorer->mapToScene(QPointF(explorer->width(), 0)).x());
+      QTRY_VERIFY(page->width() >= 300);
+      if (width >= 1100) {
+        QTRY_VERIFY(explorer->mapToScene(QPointF()).x() >= threads->mapToScene(QPointF(threads->width(), 0)).x());
+      } else {
+        QTRY_VERIFY(explorer->mapToScene(QPointF()).y() >= threads->mapToScene(QPointF(0, threads->height())).y());
+      }
+    }
     if (example != "dashboard") return;
     QVERIFY(window->setProperty("drawerOpen", true));
     auto* drawer = window->findChild<QQuickItem*>("drawer");

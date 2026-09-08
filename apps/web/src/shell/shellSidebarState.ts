@@ -25,6 +25,7 @@ import {
   type SidebarThreadPartition,
 } from "../components/Sidebar.logic";
 import type { SidebarProjectSnapshot } from "../sidebarProjectGrouping";
+import { buildShellLocalProjects } from "./shellLocalProjects";
 
 /** Settled rows beyond this are summarised by `settledTotal`. */
 export const SHELL_SIDEBAR_SETTLED_LIMIT = 50;
@@ -39,6 +40,7 @@ export interface ShellSidebarStateInput {
   readonly drafts: ReadonlyArray<ShellSidebarDraft>;
   readonly activeThreadKey: string | null;
   readonly activeDraftId: string | null;
+  readonly localEnvironmentId?: EnvironmentId | null;
 }
 
 /** `<environmentId>:<projectId>` → logical project key, from the grouped snapshots. */
@@ -132,6 +134,8 @@ export function buildShellSidebarState(input: ShellSidebarStateInput): ShellSide
       }),
     );
   return {
+    localEnvironmentId: input.localEnvironmentId ?? null,
+    localProjects: buildShellLocalProjects(input.projectGroups, input.localEnvironmentId ?? null),
     projects: input.projectGroups.map((group) => ({
       key: group.projectKey,
       displayName: group.displayName,

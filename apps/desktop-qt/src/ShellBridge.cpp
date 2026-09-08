@@ -103,6 +103,7 @@ void ShellBridge::windowCommand(const QString& command) {
 }
 
 void ShellBridge::dispatch(const QString& action, const QVariant& payload) {
+  if (action == QStringLiteral("project.remove") && !m_localFolderImportEnabled) return;
   if (action == QStringLiteral("project.folder.open")) {
     auto request = payload.toMap();
     const auto path = localDirectoryPath(QUrl::fromLocalFile(request.value(QStringLiteral("path")).toString()));
