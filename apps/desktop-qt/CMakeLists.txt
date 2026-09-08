@@ -59,6 +59,8 @@ find_file(T3_QWEBCHANNEL_JS qwebchannel.js
 
 qt_add_executable(t3code-qt
   src/main.cpp
+  src/LocalTranscriber.cpp
+  src/LocalTranscriber.h
   src/NativeNotifications.cpp
   src/NativeNotifications.h
   src/BackendProcess.cpp
