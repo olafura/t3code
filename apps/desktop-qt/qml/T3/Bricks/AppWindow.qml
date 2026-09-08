@@ -13,6 +13,8 @@ Window {
     height: 780
     minimumHeight: 400
     minimumWidth: 640
+    // QObject ownership handles cleanup without making this a transient dialog.
+    transientParent: null
     title: view.title || qsTr("T3 Code")
     visible: true
     width: 1100
