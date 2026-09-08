@@ -105,6 +105,10 @@ int main(int argc, char* argv[]) {
       QStringLiteral("config-dir"),
       QStringLiteral("Directory holding shell.qml, theme.json and qml/ (default $T3CODE_HOME/shell, i.e. ~/.t3/shell)."),
       QStringLiteral("dir"));
+  const QCommandLineOption appIdOption(
+      QStringLiteral("app-id"),
+      QStringLiteral("Desktop application identity for this launch profile (default: t3code)."),
+      QStringLiteral("id"));
   const QCommandLineOption localFolderImportOption(
       QStringLiteral("allow-local-folder-import"),
       QStringLiteral("Allow local folder import for an attached URL known to use this machine's filesystem."));
@@ -137,8 +141,12 @@ int main(int argc, char* argv[]) {
                      "names). Repeatable; runs in command-line order together with --action."),
       QStringLiteral("chord"));
   parser.addOptions({urlOption, configDirOption, homeDirOption, qmlDirOption, hostEntryOption,
-                     nodeOption, screenshotOption, actionOption, keyOption, localFolderImportOption});
+                     nodeOption, screenshotOption, actionOption, keyOption, localFolderImportOption,
+                     appIdOption});
   parser.process(app);
+  if (parser.isSet(appIdOption) && !parser.value(appIdOption).trimmed().isEmpty()) {
+    QGuiApplication::setDesktopFileName(parser.value(appIdOption).trimmed());
+  }
 
   const QString homeDir = resolveHomeDir(parser.value(homeDirOption));
   const QString configDir = resolveConfigDir(parser.value(configDirOption), homeDir);
