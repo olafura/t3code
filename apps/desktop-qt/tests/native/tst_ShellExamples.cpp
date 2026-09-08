@@ -178,6 +178,47 @@ private slots:
     bridge.publish("rightPanel", QVariant());
   }
 
+  void dashboardDimmerPreservesRoundedCorners() {
+    const QDir source(QStringLiteral(T3_TEST_SOURCE_DIR "/examples/dashboard"));
+    for (const auto& file : source.entryList(QDir::Files)) {
+      const QString target = directory.filePath(file);
+      if (QFile::exists(target)) QVERIFY(QFile::remove(target));
+      QVERIFY(QFile::copy(source.filePath(file), target));
+    }
+    theme->reload();
+    runtime->reload();
+    QVERIFY2(runtime->usingUserShell(), qPrintable(runtime->lastError()));
+    auto* engine = runtime->findChild<QQmlApplicationEngine*>();
+    QVERIFY(engine);
+    auto* window = qobject_cast<QQuickWindow*>(engine->rootObjects().last());
+    QVERIFY(window);
+    window->resize(1400, 880);
+    QVERIFY(QTest::qWaitForWindowExposed(window));
+    auto* page = findVisualItem(window->contentItem(), "T3WebSurface");
+    auto* drawer = findVisualItem(window->contentItem(), "drawer");
+    QVERIFY(page);
+    QVERIFY(drawer);
+    QTRY_VERIFY(page->width() > 400);
+    QTRY_VERIFY(page->height() > 400);
+    // about:blank lacks the app's CSS corner mask; isolate the native dimmer.
+    page->setVisible(false);
+    const QRect bounds = page->mapRectToScene(QRectF(0, 0, page->width(), page->height())).toAlignedRect();
+    const QPoint corner = bounds.topLeft() + QPoint(1, 1);
+    const QPoint center = QPoint(bounds.center().x(), bounds.bottom() - 30);
+    const QImage closed = window->grabWindow();
+    QVERIFY(!closed.isNull());
+    QVERIFY(window->setProperty("drawerOpen", true));
+    QTRY_VERIFY(drawer->opacity() > 0.99);
+    QTRY_VERIFY(window->grabWindow().pixelColor(center) != closed.pixelColor(center));
+    QCOMPARE(window->grabWindow().pixelColor(corner), closed.pixelColor(corner));
+    QSignalSpy unloadWarnings(engine, &QQmlEngine::warnings);
+    QVERIFY(unloadWarnings.isValid());
+    QVERIFY(window->setProperty("drawerOpen", false));
+    QTRY_VERIFY(drawer->opacity() < 0.01);
+    QTRY_COMPARE(window->grabWindow().pixelColor(center), closed.pixelColor(center));
+    QCOMPARE(unloadWarnings.count(), 0);
+  }
+
   void extensionToolbarReservesSpaceAndReleasesIt_data() {
     QTest::addColumn<int>("width");
     QTest::newRow("narrow") << 640;
