@@ -1596,6 +1596,20 @@ html[data-shell-surface-radius] #root {
   background-size: var(--surface-grain-size);
 }
 
+/* The native host can put wallpaper behind this document. Clear only the
+   chat's backdrop layers; message, code, menu and settings surfaces keep
+   their theme colors. */
+html[data-shell-surface-transparent],
+html[data-shell-surface-transparent] body {
+  background: transparent !important;
+}
+
+html[data-shell-surface-transparent] #root,
+html[data-shell-surface-transparent] [data-slot="sidebar-inset"]:has([data-shell-chat-canvas]),
+html[data-shell-surface-transparent] [data-shell-chat-canvas] {
+  background-color: transparent;
+}
+
 pre,
 code {
   font-family: var(--font-mono);

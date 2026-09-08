@@ -38,7 +38,11 @@ WebEngineView {
     // view's backdrop goes transparent, so the card shows through the corners.
     property real radius: 0
 
-    backgroundColor: Theme.windowTransparent || view.radius > 0 ? "transparent" : Theme.palette.color("chrome", "#0b0b0d")
+    // Clears the chat canvas, not message, code or menu backgrounds. The QML
+    // parent still decides what is painted beneath this document.
+    property bool transparentCanvas: false
+
+    backgroundColor: Theme.windowTransparent || view.radius > 0 || view.transparentCanvas ? "transparent" : Theme.palette.color("chrome", "#0b0b0d")
 
     profile: WebProfile
     lifecycleState: sleepsWhenHidden && !visible && !loading ? WebEngineView.LifecycleState.Frozen : WebEngineView.LifecycleState.Active
@@ -77,6 +81,8 @@ WebEngineView {
         return `(() => {
             const run = () => {
                 const root = document.documentElement;
+                if (${view.transparentCanvas}) root.dataset.shellSurfaceTransparent = '';
+                else delete root.dataset.shellSurfaceTransparent;
                 if (${pixels} > 0) {
                     root.style.setProperty('--app-shell-surface-radius', '${pixels}px');
                     root.dataset.shellSurfaceRadius = '${pixels}';
@@ -92,14 +98,14 @@ WebEngineView {
         })();`;
     }
 
-    // Installed at document creation so the first paint is already clipped,
-    // and run live when the radius changes under a loaded page.
+    // Installed at document creation and updated live when the radius or
+    // canvas changes under a loaded page.
     function syncRadiusScript() {
         for (const stale of view.userScripts.find("t3-surface-radius")) {
             view.userScripts.remove(stale);
         }
         const source = view.radiusScript();
-        if (view.radius > 0) {
+        if (view.radius > 0 || view.transparentCanvas) {
             const script = WebEngine.script();
             script.name = "t3-surface-radius";
             script.sourceCode = source;
@@ -113,10 +119,11 @@ WebEngineView {
     }
 
     onRadiusChanged: view.syncRadiusScript()
+    onTransparentCanvasChanged: view.syncRadiusScript()
 
     Component.onCompleted: {
         view.syncThemeScript();
-        if (view.radius > 0) {
+        if (view.radius > 0 || view.transparentCanvas) {
             view.syncRadiusScript();
         }
 
@@ -160,7 +167,9 @@ WebEngineView {
         const ok = info.status === WebEngineView.LoadSucceededStatus;
         console.info("[web]", ok ? "loaded" : "load failed", info.url, ok ? "" : info.errorString);
         if (ok) {
-            view.runJavaScript(Theme.injectionScript);
+            // Reapply the current flags if they changed during navigation,
+            // after this document's creation scripts had already run.
+            view.runJavaScript(Theme.injectionScript + ";" + view.radiusScript());
         }
         if (view.shellIntegration) {
             Shell.notifyPageLoaded(ok, info.url);

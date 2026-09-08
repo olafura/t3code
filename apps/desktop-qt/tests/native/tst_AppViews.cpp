@@ -115,6 +115,83 @@ private slots:
     QCOMPARE(evaluate(second.get(), "document.querySelector('input').value").toString(), QString("draft b"));
   }
 
+  void transparentCanvasClearsOnlyBackdropsAndRestoresThem_data() {
+    QTest::addColumn<bool>("initiallyTransparent");
+    QTest::newRow("opaque-default") << false;
+    QTest::newRow("transparent-at-startup") << true;
+  }
+
+  void transparentCanvasClearsOnlyBackdropsAndRestoresThem() {
+    QFETCH(bool, initiallyTransparent);
+    QFile stylesheet(QStringLiteral(T3_TEST_SOURCE_DIR "/../web/src/index.css"));
+    QVERIFY(stylesheet.open(QIODevice::ReadOnly));
+    const QByteArray css = stylesheet.readAll();
+    const auto start = css.indexOf("html[data-shell-surface-transparent]");
+    QVERIFY(start >= 0);
+    const auto end = css.indexOf("\npre,", start);
+    QVERIFY(end > start);
+    QFile page(directory.filePath("transparent.html"));
+    QVERIFY(page.open(QIODevice::WriteOnly));
+    page.write("<!doctype html><title>Canvas fixture</title><script>"
+               "window.transparentAtStartup = 'shellSurfaceTransparent' in document.documentElement.dataset;"
+               "</script><style>html,body,#root,main,[data-shell-chat-canvas]{background:#fbf1ed}"
+               "#message,#code,#menu{background:#fff7f4}");
+    page.write(css.mid(start, end - start));
+    page.write("</style><div id='root'><main data-slot='sidebar-inset'>"
+               "<div id='canvas' data-shell-chat-canvas><div id='message'>Message</div>"
+               "<pre id='code'>Code</pre><div id='menu' role='menu'>Menu</div></div>"
+               "</main></div><main id='settings' data-slot='sidebar-inset'>Settings</main>");
+    page.close();
+    QQmlComponent fixture(engine.get());
+    fixture.setData(R"(
+      import QtQuick
+      import T3.Bricks
+      Window {
+        id: root
+        width: 320; height: 240; visible: true
+        property bool initiallyTransparent: false
+        property url pageUrl
+        property alias transparentCanvas: view.transparentCanvas
+        property var scriptResult: null
+        signal scriptCompleted()
+        function evaluate(script) {
+          view.runJavaScript(script, result => {
+            root.scriptResult = result;
+            root.scriptCompleted();
+          });
+        }
+        WebSurface {
+          id: view
+          objectName: "canvasView"
+          anchors.fill: parent
+          shellIntegration: false
+          transparentCanvas: root.initiallyTransparent
+          url: root.pageUrl
+        }
+      }
+    )", QUrl::fromLocalFile(directory.filePath("canvas.qml")));
+    QVERIFY2(fixture.isReady(), qPrintable(fixture.errorString()));
+    std::unique_ptr<QObject> window(fixture.createWithInitialProperties({
+        {"initiallyTransparent", initiallyTransparent}, {"pageUrl", QUrl::fromLocalFile(page.fileName())}}));
+    QVERIFY2(window, qPrintable(fixture.errorString()));
+    auto* view = window->findChild<QQuickItem*>("canvasView");
+    QVERIFY(view);
+    QTRY_COMPARE(view->property("title").toString(), QString("Canvas fixture"));
+    QCOMPARE(evaluate(window.get(), "window.transparentAtStartup").toBool(), initiallyTransparent);
+
+    const QString colors = QStringLiteral(
+        "['root','canvas','message','code','menu','settings'].map(id => getComputedStyle(document.getElementById(id)).backgroundColor).join('|')");
+    const QString opaque = QStringLiteral("rgb(251, 241, 237)|rgb(251, 241, 237)|rgb(255, 247, 244)|rgb(255, 247, 244)|rgb(255, 247, 244)|rgb(251, 241, 237)");
+    const QString transparent = QStringLiteral("rgba(0, 0, 0, 0)|rgba(0, 0, 0, 0)|rgb(255, 247, 244)|rgb(255, 247, 244)|rgb(255, 247, 244)|rgb(251, 241, 237)");
+    QCOMPARE(evaluate(window.get(), colors).toString(), initiallyTransparent ? transparent : opaque);
+    for (const bool enabled : {true, false, true}) {
+      QVERIFY(window->setProperty("transparentCanvas", enabled));
+      QTRY_COMPARE(evaluate(window.get(), colors).toString(), enabled ? transparent : opaque);
+      QCOMPARE(evaluate(window.get(), "'shellSurfaceTransparent' in document.documentElement.dataset").toBool(), enabled);
+      QCOMPARE(view->property("backgroundColor").value<QColor>().alpha() == 0, enabled);
+    }
+  }
+
   void cleanupTestCase() {
     component.reset();
     engine.reset();
