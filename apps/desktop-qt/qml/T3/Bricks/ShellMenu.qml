@@ -30,8 +30,8 @@ Menu {
 
     background: Rectangle {
         radius: Math.min(Theme.radius, 10)
-        color: Theme.color("surfaceOverlay", "#18181b")
-        border.color: Qt.alpha(Theme.color("text", "#e4e4e7"), 0.1)
+        color: Theme.palette.color("surfaceOverlay", "#18181b")
+        border.color: Qt.alpha(Theme.palette.color("text", "#e4e4e7"), 0.1)
         border.width: 1
     }
 }

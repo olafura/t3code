@@ -9,8 +9,8 @@ Rectangle {
     default property alias content: inner.data
 
     radius: Theme.radius
-    color: Theme.color("surface", "#141416")
-    border.color: Theme.color("border", "#27272a")
+    color: Theme.palette.color("surface", "#141416")
+    border.color: Theme.palette.color("border", "#27272a")
     border.width: 1
 
     Item {

@@ -33,7 +33,7 @@ commands built in), the bricks (`TitleBar`, `Sidebar`, `SettingsNav`,
 `ShellComboBox`, `ShellTextField`, `ShellMenu`, `ShellMenuItem`, `ShellIcon`,
 `WindowControls`), and the `T3.Shell` singletons: `Shell.state.<key>` for
 everything the page publishes, `Shell.dispatch(action, payload)` to act,
-`Theme.color(role, fallback)` / `Theme.radius` / `Theme.fontUi` /
+`Theme.palette.color(role, fallback)` / `Theme.radius` / `Theme.fontUi` /
 `Theme.fontMono`, and `Runtime.reload()`.
 
 A broken `shell.qml` never locks you out: the built-in shell takes over with

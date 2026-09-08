@@ -15,13 +15,13 @@ Button {
     property string iconName: ""
     property real iconSize: 14
     property real chevronSize: 14
-    property color tint: primary ? Theme.color("accentForeground", "#ffffff") : Theme.color("text", "#e4e4e7")
+    property color tint: primary ? Theme.palette.color("accentForeground", "#ffffff") : Theme.palette.color("text", "#e4e4e7")
     property color iconTint: tint
     property real radius: Math.min(Theme.radius, 8)
     readonly property bool iconOnly: text.length === 0 && iconName.length > 0 && !chevron
     readonly property bool chevronOnly: text.length === 0 && iconName.length === 0 && chevron
-    readonly property color hoverFill: Qt.alpha(Theme.color("accentSurface", "#27272a"), control.subtle ? 1 : 0.5)
-    readonly property color focusRing: Theme.color("focus", "#3b82f6")
+    readonly property color hoverFill: Qt.alpha(Theme.palette.color("accentSurface", "#27272a"), control.subtle ? 1 : 0.5)
+    readonly property color focusRing: Theme.palette.color("focus", "#3b82f6")
     // A lone glyph sits on the button's centre: the padding is what is left
     // of the height, so a 24px chevron half stays square and centred.
     readonly property real glyphPadding: iconOnly ? (height - iconSize) / 2 : (height - chevronSize) / 2
@@ -47,9 +47,9 @@ Button {
 
     background: Rectangle {
         radius: control.radius
-        color: control.primary ? (control.down ? Qt.darker(Theme.color("accent", "#2563eb"), 1.15) : control.hovered ? Qt.lighter(Theme.color("accent", "#2563eb"), 1.08) : Theme.color("accent", "#2563eb")) : control.hovered || control.down || control.checked ? control.hoverFill : control.subtle ? Qt.alpha(control.hoverFill, 0) : Qt.alpha(Theme.color("input", "#27272a"), 0.32)
+        color: control.primary ? (control.down ? Qt.darker(Theme.palette.color("accent", "#2563eb"), 1.15) : control.hovered ? Qt.lighter(Theme.palette.color("accent", "#2563eb"), 1.08) : Theme.palette.color("accent", "#2563eb")) : control.hovered || control.down || control.checked ? control.hoverFill : control.subtle ? Qt.alpha(control.hoverFill, 0) : Qt.alpha(Theme.palette.color("input", "#27272a"), 0.32)
         // Keyboard focus draws the page's ring; pointer focus stays quiet.
-        border.color: control.visualFocus ? control.focusRing : control.primary || control.subtle ? "transparent" : Theme.color("input", "#27272a")
+        border.color: control.visualFocus ? control.focusRing : control.primary || control.subtle ? "transparent" : Theme.palette.color("input", "#27272a")
         border.width: control.visualFocus || !(control.primary || control.subtle) ? 1 : 0
 
         Behavior on color {
@@ -94,7 +94,7 @@ Button {
                 visible: control.chevron
                 name: "chevron-down"
                 size: control.chevronSize
-                color: control.text.length > 0 || control.iconName.length > 0 ? Theme.color("iconMuted", "#8b8b93") : control.tint
+                color: control.text.length > 0 || control.iconName.length > 0 ? Theme.palette.color("iconMuted", "#8b8b93") : control.tint
                 Layout.alignment: Qt.AlignVCenter
             }
         }

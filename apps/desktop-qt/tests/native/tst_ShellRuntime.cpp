@@ -1,6 +1,8 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QPointer>
+#include <QQmlComponent>
+#include <QQmlContext>
 #include <QSignalSpy>
 #include <QQuickWebEngineProfile>
 #include <QTemporaryDir>
@@ -21,6 +23,33 @@ signals:
   void scriptFinished(const QVariant& result);
 
 private slots:
+  void qmlPaletteFollowsPublishedPageTheme() {
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    ThemeStore theme(directory.path());
+    QQmlEngine engine;
+    engine.rootContext()->setContextProperty("Theme", &theme);
+    QQmlComponent component(&engine);
+    component.setData("import QtQuick\nRectangle { color: Theme.palette.color(\"canvas\", \"#111111\") }", QUrl());
+    QScopedPointer<QObject> item(component.create());
+    QVERIFY2(item, qPrintable(component.errorString()));
+    QCOMPARE(item->property("color").value<QColor>(), QColor("#111111"));
+    theme.applyPageTheme(QVariantMap{{"appearance", "light"}, {"colors", QVariantMap{{"canvas", "#ffffff"}}}});
+    QCOMPARE(theme.color("canvas", Qt::black), QColor("#ffffff"));
+    QCOMPARE(item->property("color").value<QColor>(), QColor("#ffffff"));
+    theme.applyPageTheme(QVariantMap{{"appearance", "dark"}, {"colors", QVariantMap{{"canvas", "#0c2238cc"}}}});
+    QCOMPARE(item->property("color").value<QColor>(), QColor(12, 34, 56, 204));
+    QFile overrideFile(directory.filePath("theme.json"));
+    QVERIFY(overrideFile.open(QIODevice::WriteOnly));
+    overrideFile.write("{\"colors\":{\"canvas\":\"#abcdef\"}}");
+    overrideFile.close();
+    theme.reload();
+    QCOMPARE(item->property("color").value<QColor>(), QColor("#abcdef"));
+    QVERIFY(overrideFile.remove());
+    theme.reload();
+    QCOMPARE(item->property("color").value<QColor>(), QColor(12, 34, 56, 204));
+  }
+
   void folderDropsResolveOnlyExistingLocalDirectories() {
     QTemporaryDir directory;
     QVERIFY(directory.isValid());

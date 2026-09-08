@@ -28,8 +28,8 @@ DropArea {
         anchors.fill: parent
         anchors.margins: 12
         visible: root.containsDrag && root.directoryPath.length > 0
-        color: Qt.alpha(Theme.color("canvas", "#0f0f12"), 0.95)
-        border.color: Theme.color("accent", "#3b82f6")
+        color: Qt.alpha(Theme.palette.color("canvas", "#0f0f12"), 0.95)
+        border.color: Theme.palette.color("accent", "#3b82f6")
         border.width: 2
         radius: 14
         Accessible.ignored: true
@@ -39,7 +39,7 @@ DropArea {
             horizontalAlignment: Text.AlignHCenter
             wrapMode: Text.Wrap
             text: qsTr("Open folder as a project\n%1\nNo files will be moved or deleted.").arg(root.directoryPath)
-            color: Theme.color("text", "#e4e4e7")
+            color: Theme.palette.color("text", "#e4e4e7")
             font.pixelSize: 18
         }
     }
