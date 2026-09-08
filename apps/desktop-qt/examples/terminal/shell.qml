@@ -20,19 +20,19 @@ ShellWindow {
 
     readonly property var sidebarState: Shell.state.sidebar ?? null
     readonly property var composerState: Shell.state.composer ?? null
-    readonly property color canvas: Theme.color("canvas", "#1a1b26")
-    readonly property color chrome: Theme.color("chrome", "#14151e")
-    readonly property color ink: Theme.color("text", "#c0caf5")
-    readonly property color dim: Theme.color("secondaryLabel", "#a9b1d6")
-    readonly property color line: Theme.color("border", "#3d4461")
+    readonly property color canvas: Theme.palette.color("canvas", "#1a1b26")
+    readonly property color chrome: Theme.palette.color("chrome", "#14151e")
+    readonly property color ink: Theme.palette.color("text", "#c0caf5")
+    readonly property color dim: Theme.palette.color("secondaryLabel", "#a9b1d6")
+    readonly property color line: Theme.palette.color("border", "#3d4461")
     // The ANSI slots land in the theme when it came from a terminal; a hand-
     // written theme falls back to its semantic colours.
-    readonly property color blue: Theme.color("ansiBlue", Theme.color("accent", "#7aa2f7"))
-    readonly property color cyan: Theme.color("ansiCyan", Theme.color("info", "#7dcfff"))
-    readonly property color green: Theme.color("ansiGreen", Theme.color("update", "#9ece6a"))
-    readonly property color yellow: Theme.color("ansiYellow", Theme.color("warning", "#e0af68"))
-    readonly property color magenta: Theme.color("ansiMagenta", Theme.color("accent", "#bb9af7"))
-    readonly property var swatches: [Theme.color("ansiBlack", Theme.color("surfaceRaised", "#2e3247")), Theme.color("ansiRed", Theme.color("error", "#f7768e")), Theme.color("ansiGreen", Theme.color("update", "#9ece6a")), Theme.color("ansiYellow", Theme.color("warning", "#e0af68")), Theme.color("ansiBlue", Theme.color("accent", "#7aa2f7")), Theme.color("ansiMagenta", Theme.color("accentSurface", "#374465")), Theme.color("ansiCyan", Theme.color("info", "#7dcfff")), Theme.color("ansiWhite", Theme.color("textMuted", "#757b98")), Theme.color("ansiBrightBlack", Theme.color("border", "#31364e")), Theme.color("ansiBrightRed", Theme.color("errorForeground", "#f7768e")), Theme.color("ansiBrightGreen", Theme.color("updateForeground", "#9ece6a")), Theme.color("ansiBrightYellow", Theme.color("warningForeground", "#e0af68")), Theme.color("ansiBrightBlue", Theme.color("focus", "#7aa2f7")), Theme.color("ansiBrightMagenta", Theme.color("accent", "#bb9af7")), Theme.color("ansiBrightCyan", Theme.color("info", "#7dcfff")), Theme.color("ansiBrightWhite", Theme.color("text", "#c0caf5"))]
+    readonly property color blue: Theme.palette.color("ansiBlue", Theme.palette.color("accent", "#7aa2f7"))
+    readonly property color cyan: Theme.palette.color("ansiCyan", Theme.palette.color("info", "#7dcfff"))
+    readonly property color green: Theme.palette.color("ansiGreen", Theme.palette.color("update", "#9ece6a"))
+    readonly property color yellow: Theme.palette.color("ansiYellow", Theme.palette.color("warning", "#e0af68"))
+    readonly property color magenta: Theme.palette.color("ansiMagenta", Theme.palette.color("accent", "#bb9af7"))
+    readonly property var swatches: [Theme.palette.color("ansiBlack", Theme.palette.color("surfaceRaised", "#2e3247")), Theme.palette.color("ansiRed", Theme.palette.color("error", "#f7768e")), Theme.palette.color("ansiGreen", Theme.palette.color("update", "#9ece6a")), Theme.palette.color("ansiYellow", Theme.palette.color("warning", "#e0af68")), Theme.palette.color("ansiBlue", Theme.palette.color("accent", "#7aa2f7")), Theme.palette.color("ansiMagenta", Theme.palette.color("accentSurface", "#374465")), Theme.palette.color("ansiCyan", Theme.palette.color("info", "#7dcfff")), Theme.palette.color("ansiWhite", Theme.palette.color("textMuted", "#757b98")), Theme.palette.color("ansiBrightBlack", Theme.palette.color("border", "#31364e")), Theme.palette.color("ansiBrightRed", Theme.palette.color("errorForeground", "#f7768e")), Theme.palette.color("ansiBrightGreen", Theme.palette.color("updateForeground", "#9ece6a")), Theme.palette.color("ansiBrightYellow", Theme.palette.color("warningForeground", "#e0af68")), Theme.palette.color("ansiBrightBlue", Theme.palette.color("focus", "#7aa2f7")), Theme.palette.color("ansiBrightMagenta", Theme.palette.color("accent", "#bb9af7")), Theme.palette.color("ansiBrightCyan", Theme.palette.color("info", "#7dcfff")), Theme.palette.color("ansiBrightWhite", Theme.palette.color("text", "#c0caf5"))]
 
     property date now: new Date()
 

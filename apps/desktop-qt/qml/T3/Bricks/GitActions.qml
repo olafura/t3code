@@ -11,8 +11,8 @@ RowLayout {
 
     readonly property var model: Shell.state.git ?? null
     readonly property bool ready: model !== null && model.available
-    readonly property color muted: Theme.color("textMuted", "#8b8b93")
-    readonly property color foreground: Theme.color("text", "#e4e4e7")
+    readonly property color muted: Theme.palette.color("textMuted", "#8b8b93")
+    readonly property color foreground: Theme.palette.color("text", "#e4e4e7")
 
     // Icon-only pill, for narrow header strips.
     property bool compact: false
@@ -154,8 +154,8 @@ RowLayout {
 
         background: Rectangle {
             radius: Theme.radius
-            color: Theme.color("surfaceOverlay", "#18181b")
-            border.color: Theme.color("border", "#27272a")
+            color: Theme.palette.color("surfaceOverlay", "#18181b")
+            border.color: Theme.palette.color("border", "#27272a")
             border.width: 1
         }
 
@@ -180,7 +180,7 @@ RowLayout {
             Text {
                 visible: git.ready && git.model.isDefaultRef
                 text: qsTr("Warning: committing on the default branch %1").arg(git.ready ? (git.model.branch ?? "") : "")
-                color: Theme.color("warning", "#e0af68")
+                color: Theme.palette.color("warning", "#e0af68")
                 font.pixelSize: 12
             }
 
@@ -224,13 +224,13 @@ RowLayout {
 
                     Text {
                         text: "+" + modelData.insertions
-                        color: Theme.color("update", "#22c55e")
+                        color: Theme.palette.color("update", "#22c55e")
                         font.pixelSize: 11
                     }
 
                     Text {
                         text: "−" + modelData.deletions
-                        color: Theme.color("error", "#ef4444")
+                        color: Theme.palette.color("error", "#ef4444")
                         font.pixelSize: 11
                     }
                 }
@@ -240,8 +240,8 @@ RowLayout {
                 Layout.fillWidth: true
                 implicitHeight: 84
                 radius: Theme.radius
-                color: Theme.color("input", "#141416")
-                border.color: message.activeFocus ? Theme.color("focus", "#3b82f6") : Theme.color("border", "#27272a")
+                color: Theme.palette.color("input", "#141416")
+                border.color: message.activeFocus ? Theme.palette.color("focus", "#3b82f6") : Theme.palette.color("border", "#27272a")
 
                 ScrollView {
                     anchors.fill: parent
@@ -308,8 +308,8 @@ RowLayout {
 
         background: Rectangle {
             radius: Theme.radius
-            color: Theme.color("surfaceOverlay", "#18181b")
-            border.color: Theme.color("border", "#27272a")
+            color: Theme.palette.color("surfaceOverlay", "#18181b")
+            border.color: Theme.palette.color("border", "#27272a")
             border.width: 1
         }
 

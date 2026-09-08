@@ -19,15 +19,15 @@ Item {
     function typeColor(type) {
         switch (type) {
         case "error":
-            return Theme.color("error", "#ef4444");
+            return Theme.palette.color("error", "#ef4444");
         case "warning":
-            return Theme.color("warning", "#e0af68");
+            return Theme.palette.color("warning", "#e0af68");
         case "success":
-            return Theme.color("update", "#22c55e");
+            return Theme.palette.color("update", "#22c55e");
         case "loading":
-            return Theme.color("textMuted", "#8b8b93");
+            return Theme.palette.color("textMuted", "#8b8b93");
         default:
-            return Theme.color("accent", "#3b82f6");
+            return Theme.palette.color("accent", "#3b82f6");
         }
     }
 
@@ -50,8 +50,8 @@ Item {
                 Layout.fillWidth: true
                 implicitHeight: body.implicitHeight + 28
                 radius: Theme.radius
-                color: Theme.color("surfaceOverlay", "#18181b")
-                border.color: Theme.color("border", "#27272a")
+                color: Theme.palette.color("surfaceOverlay", "#18181b")
+                border.color: Theme.palette.color("border", "#27272a")
                 border.width: 1
                 transform: Translate {
                     id: slide
@@ -108,7 +108,7 @@ Item {
                         Text {
                             Layout.fillWidth: true
                             text: card.modelData.title
-                            color: Theme.color("text", "#e4e4e7")
+                            color: Theme.palette.color("text", "#e4e4e7")
                             font.pixelSize: 13
                             font.bold: true
                             font.family: Theme.fontUi.length > 0 ? Theme.fontUi : Qt.application.font.family
@@ -125,7 +125,7 @@ Item {
                             leftPadding: 0
                             rightPadding: 0
                             text: "✕"
-                            tint: Theme.color("textMuted", "#8b8b93")
+                            tint: Theme.palette.color("textMuted", "#8b8b93")
                             font.pixelSize: 11
                             Accessible.name: qsTr("Dismiss")
                             onClicked: Shell.dispatch("notification.dismiss", {
@@ -138,7 +138,7 @@ Item {
                         Layout.fillWidth: true
                         visible: card.modelData.description !== null && card.modelData.description.length > 0
                         text: card.modelData.description ?? ""
-                        color: Theme.color("textMuted", "#8b8b93")
+                        color: Theme.palette.color("textMuted", "#8b8b93")
                         font.pixelSize: 12
                         font.family: Theme.fontUi.length > 0 ? Theme.fontUi : Qt.application.font.family
                         lineHeight: 1.2

@@ -11,8 +11,8 @@ ComboBox {
     property string iconName: ""
     property real iconSize: 16
     property real chevronSize: 14
-    readonly property color hoverFill: Qt.alpha(Theme.color("accentSurface", "#27272a"), outline ? 0.5 : 1)
-    readonly property color labelColor: control.hovered || control.down || control.popup.visible ? Theme.color("text", "#e4e4e7") : Theme.color("secondaryLabel", "#a1a1aa")
+    readonly property color hoverFill: Qt.alpha(Theme.palette.color("accentSurface", "#27272a"), outline ? 0.5 : 1)
+    readonly property color labelColor: control.hovered || control.down || control.popup.visible ? Theme.palette.color("text", "#e4e4e7") : Theme.palette.color("secondaryLabel", "#a1a1aa")
 
     implicitHeight: 28
     leftPadding: iconName.length > 0 ? 10 + iconSize + 6 : 10
@@ -25,8 +25,8 @@ ComboBox {
 
     background: Rectangle {
         radius: Math.min(Theme.radius, 8)
-        color: control.down || control.hovered || control.popup.visible ? control.hoverFill : control.outline ? Qt.alpha(Theme.color("input", "#27272a"), 0.32) : Qt.alpha(control.hoverFill, 0)
-        border.color: control.outline ? (control.activeFocus ? Theme.color("focus", "#3b82f6") : Theme.color("input", "#27272a")) : "transparent"
+        color: control.down || control.hovered || control.popup.visible ? control.hoverFill : control.outline ? Qt.alpha(Theme.palette.color("input", "#27272a"), 0.32) : Qt.alpha(control.hoverFill, 0)
+        border.color: control.outline ? (control.activeFocus ? Theme.palette.color("focus", "#3b82f6") : Theme.palette.color("input", "#27272a")) : "transparent"
         border.width: control.outline ? 1 : 0
 
         Behavior on color {
@@ -59,7 +59,7 @@ ComboBox {
         name: "chevron-down"
         size: control.chevronSize
         strokeWidth: 2.25
-        color: Theme.color("iconMuted", "#8b8b93")
+        color: Theme.palette.color("iconMuted", "#8b8b93")
     }
 
     delegate: ItemDelegate {
@@ -77,14 +77,14 @@ ComboBox {
         contentItem: Text {
             text: item.model[control.textRole] ?? item.model.modelData ?? item.model.display ?? ""
             font: control.font
-            color: Theme.color("text", "#e4e4e7")
+            color: Theme.palette.color("text", "#e4e4e7")
             verticalAlignment: Text.AlignVCenter
             elide: Text.ElideRight
         }
 
         background: Rectangle {
             radius: 6
-            color: item.highlighted || item.hovered ? Theme.color("accentSurface", "#27272a") : "transparent"
+            color: item.highlighted || item.hovered ? Theme.palette.color("accentSurface", "#27272a") : "transparent"
         }
     }
 
@@ -123,8 +123,8 @@ ComboBox {
 
         background: Rectangle {
             radius: Math.min(Theme.radius, 10)
-            color: Theme.color("surfaceOverlay", "#18181b")
-            border.color: Qt.alpha(Theme.color("text", "#e4e4e7"), 0.1)
+            color: Theme.palette.color("surfaceOverlay", "#18181b")
+            border.color: Qt.alpha(Theme.palette.color("text", "#e4e4e7"), 0.1)
             border.width: 1
         }
     }

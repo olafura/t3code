@@ -20,13 +20,13 @@ Rectangle {
     readonly property int publishedCursor: ready ? model.cursor : 0
     readonly property var suggestions: ready ? model.suggestions : []
     readonly property bool suggesting: ready && model.triggerKind !== null && (suggestions.length > 0 || model.suggestionsEmptyText !== null)
-    readonly property color canvas: Theme.color("canvas", "#0f0f12")
-    readonly property color outline: Qt.alpha(Theme.color("text", "#e4e4e7"), 0.05)
-    readonly property color foreground: Theme.color("text", "#e4e4e7")
-    readonly property color muted: Theme.color("textMuted", "#8b8b93")
-    readonly property color secondary: Theme.color("secondaryLabel", "#a1a1aa")
-    readonly property color iconMuted: Theme.color("iconMuted", "#8b8b93")
-    readonly property color branchColor: Theme.color("branchForeground", Qt.alpha(muted, 0.7))
+    readonly property color canvas: Theme.palette.color("canvas", "#0f0f12")
+    readonly property color outline: Qt.alpha(Theme.palette.color("text", "#e4e4e7"), 0.05)
+    readonly property color foreground: Theme.palette.color("text", "#e4e4e7")
+    readonly property color muted: Theme.palette.color("textMuted", "#8b8b93")
+    readonly property color secondary: Theme.palette.color("secondaryLabel", "#a1a1aa")
+    readonly property color iconMuted: Theme.palette.color("iconMuted", "#8b8b93")
+    readonly property color branchColor: Theme.palette.color("branchForeground", Qt.alpha(muted, 0.7))
     readonly property var modelChoices: buildModelChoices(ready ? model.instances : [])
     readonly property var effortOption: ready ? (model.options.find(option => option.type === "select") ?? null) : null
     readonly property int maximumCardWidth: 768
@@ -238,7 +238,7 @@ Rectangle {
             implicitHeight: visible ? Math.min(suggestionList.contentHeight, 240) + 8 : 0
             topLeftRadius: 16
             topRightRadius: 16
-            color: Theme.color("surfaceOverlay", "#18181b")
+            color: Theme.palette.color("surfaceOverlay", "#18181b")
             border.color: composer.outline
             border.width: 1
 
@@ -262,7 +262,7 @@ Rectangle {
                     width: ListView.view.width
                     height: 34
                     radius: 10
-                    color: ListView.isCurrentItem ? Theme.color("accentSurface", "#2a2a30") : suggestionHover.hovered ? Theme.color("sidebarRowHover", "#1c1c21") : "transparent"
+                    color: ListView.isCurrentItem ? Theme.palette.color("accentSurface", "#2a2a30") : suggestionHover.hovered ? Theme.palette.color("sidebarRowHover", "#1c1c21") : "transparent"
 
                     HoverHandler {
                         id: suggestionHover
@@ -320,7 +320,7 @@ Rectangle {
             implicitHeight: cardColumn.implicitHeight
             z: 1
             radius: 22
-            color: Theme.color("surface", "#141416")
+            color: Theme.palette.color("surface", "#141416")
             border.color: composer.outline
             border.width: 1
 
@@ -564,7 +564,7 @@ Rectangle {
                     Text {
                         visible: composer.ready && composer.model.pendingApprovalCount > 0
                         text: composer.ready ? qsTr("%1 approval(s) waiting in the timeline").arg(composer.model.pendingApprovalCount) : ""
-                        color: Theme.color("warning", "#e0af68")
+                        color: Theme.palette.color("warning", "#e0af68")
                         font.pixelSize: 12
                         font.family: Theme.fontUi.length > 0 ? Theme.fontUi : Qt.application.font.family
                     }
@@ -601,7 +601,7 @@ Rectangle {
 
                         background: Rectangle {
                             radius: 16
-                            color: primaryAction.stopMode ? Qt.alpha(Theme.color("error", "#ef4444"), 0.9) : Theme.color("messageAction", "#2563eb")
+                            color: primaryAction.stopMode ? Qt.alpha(Theme.palette.color("error", "#ef4444"), 0.9) : Theme.palette.color("messageAction", "#2563eb")
 
                             Behavior on color {
                                 ColorAnimation {
@@ -617,7 +617,7 @@ Rectangle {
                                 name: "arrow-up"
                                 size: 16
                                 strokeWidth: 2.5
-                                color: Theme.color("messageActionForeground", "#ffffff")
+                                color: Theme.palette.color("messageActionForeground", "#ffffff")
                             }
 
                             Rectangle {
@@ -626,7 +626,7 @@ Rectangle {
                                 width: 11
                                 height: 11
                                 radius: 2
-                                color: Theme.color("errorForeground", "#ffffff")
+                                color: Theme.palette.color("errorForeground", "#ffffff")
                             }
                         }
                     }
@@ -737,7 +737,7 @@ Rectangle {
                 // PR badge.
                 Rectangle {
                     readonly property var pr: contextStrip.wsReady && contextStrip.ws.git ? contextStrip.ws.git.pullRequest : null
-                    readonly property color prColor: pr === null ? "transparent" : pr.state === "merged" ? Theme.color("info", "#a78bfa") : pr.state === "closed" ? Theme.color("error", "#f87171") : Theme.color("success", "#34d399")
+                    readonly property color prColor: pr === null ? "transparent" : pr.state === "merged" ? Theme.palette.color("info", "#a78bfa") : pr.state === "closed" ? Theme.palette.color("error", "#f87171") : Theme.palette.color("success", "#34d399")
 
                     visible: pr !== null && contextStrip.ws.canOpenPullRequest
                     implicitWidth: prLabel.implicitWidth + 8
@@ -822,7 +822,7 @@ Rectangle {
                         }
 
                         background: Rectangle {
-                            color: Theme.color("surfaceOverlay", "#18181b")
+                            color: Theme.palette.color("surfaceOverlay", "#18181b")
                             border.color: Qt.alpha(composer.foreground, 0.1)
                             radius: 10
                         }
@@ -883,7 +883,7 @@ Rectangle {
                                     width: ListView.view.width
                                     height: 28
                                     radius: 6
-                                    color: rowHover.hovered ? Theme.color("accentSurface", "#1c1c21") : "transparent"
+                                    color: rowHover.hovered ? Theme.palette.color("accentSurface", "#1c1c21") : "transparent"
 
                                     HoverHandler {
                                         id: rowHover
@@ -954,6 +954,6 @@ Rectangle {
         Layout.alignment: Qt.AlignVCenter
         Layout.leftMargin: 2
         Layout.rightMargin: 2
-        color: Theme.color("border", "#27272a")
+        color: Theme.palette.color("border", "#27272a")
     }
 }

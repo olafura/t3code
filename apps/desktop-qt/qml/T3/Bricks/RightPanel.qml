@@ -14,8 +14,8 @@ Rectangle {
     readonly property bool available: model !== null
     readonly property bool open: available && model.isOpen
     readonly property int openWidth: 520
-    readonly property color foreground: Theme.color("text", "#e4e4e7")
-    readonly property color muted: Theme.color("textMuted", "#8b8b93")
+    readonly property color foreground: Theme.palette.color("text", "#e4e4e7")
+    readonly property color muted: Theme.palette.color("textMuted", "#8b8b93")
     readonly property url embedUrl: {
         if (!available) {
             return "";
@@ -33,7 +33,7 @@ Rectangle {
     // Not animated: the web surface between the panels would be resized (a
     // Chromium relayout and a new GPU surface) on every frame of it.
     implicitWidth: open ? openWidth : ownToggle ? 36 : 0
-    color: Theme.color("chrome", "#0b0b0d")
+    color: Theme.palette.color("chrome", "#0b0b0d")
     clip: true
 
     ColumnLayout {
@@ -99,7 +99,7 @@ Rectangle {
                     Keys.onEnterPressed: clicked()
                     onClicked: Shell.dispatch("rightPanel.activate", { id: tab.modelData.id })
                     background: Rectangle {
-                        color: tab.active ? Theme.color("surfaceRaised", "#1f1f24") : tab.hovered || tab.visualFocus ? Theme.color("surface", "#141416") : "transparent"
+                        color: tab.active ? Theme.palette.color("surfaceRaised", "#1f1f24") : tab.hovered || tab.visualFocus ? Theme.palette.color("surface", "#141416") : "transparent"
                         radius: 6
                     }
 

@@ -9,8 +9,8 @@ import T3.Bricks
 ShellWindow {
     id: root
 
-    readonly property color canvas: Theme.color("canvas", "#1e1e1e")
-    readonly property color line: Theme.color("border", "#ffffff14")
+    readonly property color canvas: Theme.palette.color("canvas", "#1e1e1e")
+    readonly property color line: Theme.palette.color("border", "#ffffff14")
     readonly property real corner: Theme.radius
     // How far the toolbar's leading edge stays clear of the traffic lights
     // once the sidebar folds away and they end up over the content column.
@@ -43,7 +43,7 @@ ShellWindow {
                 Layout.preferredWidth: root.sidebarCollapsed && !root.settingsActive ? 0 : 248
                 Layout.minimumWidth: 0
                 visible: !(root.sidebarCollapsed && !root.settingsActive) || width > 0
-                color: Theme.color("sidebar", "#202020b8")
+                color: Theme.palette.color("sidebar", "#202020b8")
                 topLeftRadius: root.corner - 1
                 bottomLeftRadius: root.corner - 1
                 clip: true
@@ -174,7 +174,7 @@ ShellWindow {
                 Layout.preferredWidth: rightPanel.implicitWidth
                 visible: rightPanel.available && rightPanel.implicitWidth > 0
                 clip: true
-                color: Theme.color("chrome", "#262626")
+                color: Theme.palette.color("chrome", "#262626")
                 topRightRadius: root.corner - 1
                 bottomRightRadius: root.corner - 1
 

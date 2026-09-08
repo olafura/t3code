@@ -35,7 +35,7 @@ Window {
     minimumHeight: 400
     visible: true
     title: qsTr("T3 Code")
-    color: Theme.windowTransparent ? "transparent" : Theme.color("chrome", "#0b0b0d")
+    color: Theme.windowTransparent ? "transparent" : Theme.palette.color("chrome", "#0b0b0d")
     opacity: Theme.windowOpacity
     flags: Theme.frameless ? Qt.Window | Qt.FramelessWindowHint : Qt.Window
 

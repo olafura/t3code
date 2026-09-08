@@ -35,18 +35,18 @@ ShellWindow {
     // The floor under the cards is the theme's chrome; its canvas is the
     // page's own background and matches the cards, so the page sits flush in
     // its card.
-    readonly property color canvas: Theme.color("chrome", "#ecd6cc")
-    readonly property color card: Theme.color("surface", "#fbf1ed")
-    readonly property color raised: Theme.color("surfaceRaised", "#f2dcd5")
-    readonly property color line: Theme.color("border", "#dfc2b7")
-    readonly property color ink: Theme.color("text", "#4a3733")
-    readonly property color muted: Theme.color("textMuted", "#86655d")
-    readonly property color accent: Theme.color("accent", "#9a3e33")
-    readonly property color accentInk: Theme.color("accentForeground", "#fff4f0")
-    readonly property color accentSoft: Theme.color("accentSurface", "#ecc9c1")
-    readonly property color accentDeep: Theme.color("accentSurfaceForeground", "#7c2f27")
-    readonly property color warm: Theme.color("warning", "#c48a3f")
-    readonly property color leaf: Theme.color("update", "#6f9a6a")
+    readonly property color canvas: Theme.palette.color("chrome", "#ecd6cc")
+    readonly property color card: Theme.palette.color("surface", "#fbf1ed")
+    readonly property color raised: Theme.palette.color("surfaceRaised", "#f2dcd5")
+    readonly property color line: Theme.palette.color("border", "#dfc2b7")
+    readonly property color ink: Theme.palette.color("text", "#4a3733")
+    readonly property color muted: Theme.palette.color("textMuted", "#86655d")
+    readonly property color accent: Theme.palette.color("accent", "#9a3e33")
+    readonly property color accentInk: Theme.palette.color("accentForeground", "#fff4f0")
+    readonly property color accentSoft: Theme.palette.color("accentSurface", "#ecc9c1")
+    readonly property color accentDeep: Theme.palette.color("accentSurfaceForeground", "#7c2f27")
+    readonly property color warm: Theme.palette.color("warning", "#c48a3f")
+    readonly property color leaf: Theme.palette.color("update", "#6f9a6a")
 
     // Sheet-style deceleration for surfaces that slide into place.
     readonly property var sheetCurve: [0.32, 0.72, 0, 1, 1, 1]

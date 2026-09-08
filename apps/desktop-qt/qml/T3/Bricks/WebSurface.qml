@@ -33,7 +33,7 @@ WebEngineView {
     // view's backdrop goes transparent, so the card shows through the corners.
     property real radius: 0
 
-    backgroundColor: Theme.windowTransparent || view.radius > 0 ? "transparent" : Theme.color("chrome", "#0b0b0d")
+    backgroundColor: Theme.windowTransparent || view.radius > 0 ? "transparent" : Theme.palette.color("chrome", "#0b0b0d")
 
     profile: WebProfile
     lifecycleState: sleepsWhenHidden && !visible && !loading ? WebEngineView.LifecycleState.Frozen : WebEngineView.LifecycleState.Active

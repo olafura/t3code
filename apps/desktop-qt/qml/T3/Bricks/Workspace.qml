@@ -11,10 +11,10 @@ Rectangle {
 
     readonly property var model: Shell.state.workspace ?? null
     readonly property bool ready: model !== null
-    readonly property color foreground: Theme.color("text", "#e4e4e7")
-    readonly property color muted: Theme.color("textMuted", "#8b8b93")
-    readonly property color projectColor: Theme.color("projectForeground", muted)
-    readonly property color iconMuted: Theme.color("iconMuted", "#8b8b93")
+    readonly property color foreground: Theme.palette.color("text", "#e4e4e7")
+    readonly property color muted: Theme.palette.color("textMuted", "#8b8b93")
+    readonly property color projectColor: Theme.palette.color("projectForeground", muted)
+    readonly property color iconMuted: Theme.palette.color("iconMuted", "#8b8b93")
     readonly property var preferredScript: {
         if (!ready || model.scripts.length === 0) {
             return null;
@@ -42,7 +42,7 @@ Rectangle {
     }
 
     implicitHeight: 52
-    color: Theme.color("canvas", "#0f0f12")
+    color: Theme.palette.color("canvas", "#0f0f12")
 
     DragHandler {
         enabled: strip.framelessChrome

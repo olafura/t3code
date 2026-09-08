@@ -36,10 +36,10 @@ Rectangle {
     }
     property var collapsed: ({})
     readonly property var rows: buildRows(model, collapsed)
-    readonly property color foreground: Theme.color("sidebarForeground", "#e4e4e7")
-    readonly property color muted: Theme.color("sidebarMutedForeground", "#8b8b93")
-    readonly property color iconColor: Theme.color("iconMuted", "#8b8b93")
-    readonly property color hairline: Theme.color("sidebarBorder", "#27272a")
+    readonly property color foreground: Theme.palette.color("sidebarForeground", "#e4e4e7")
+    readonly property color muted: Theme.palette.color("sidebarMutedForeground", "#8b8b93")
+    readonly property color iconColor: Theme.palette.color("iconMuted", "#8b8b93")
+    readonly property color hairline: Theme.palette.color("sidebarBorder", "#27272a")
 
     // Update rows in place so live publications keep hover, focus and scroll.
     ListModel {
@@ -76,7 +76,7 @@ Rectangle {
     Component.onCompleted: syncRows()
 
     implicitWidth: 256
-    color: Theme.color("sidebar", "#0a0a0a")
+    color: Theme.palette.color("sidebar", "#0a0a0a")
     // Content keeps its width while the shell animates ours.
     clip: true
 
@@ -234,7 +234,7 @@ Rectangle {
 
                     background: Rectangle {
                         radius: 8
-                        color: parent.hovered || parent.down ? Theme.color("sidebarRowHover", "#1c1c21") : Theme.color("sidebarControlSurface", "#141416")
+                        color: parent.hovered || parent.down ? Theme.palette.color("sidebarRowHover", "#1c1c21") : Theme.palette.color("sidebarControlSurface", "#141416")
 
                         Behavior on color {
                             ColorAnimation {
@@ -474,7 +474,7 @@ Rectangle {
                         radius: 8
                         color: "transparent"
                         border.width: 1
-                        border.color: Theme.color("focus", "#3b82f6")
+                        border.color: Theme.palette.color("focus", "#3b82f6")
                         visible: entry.focused
                     }
 
@@ -498,7 +498,7 @@ Rectangle {
 
                         Text {
                             text: entry.kind === "header" ? entry.modelData.label : ""
-                            color: entry.kind === "header" && entry.modelData.key === "snoozed" ? Theme.color("info", "#60a5fa") : Qt.alpha(sidebar.muted, headerHover.hovered ? 0.8 : 0.5)
+                            color: entry.kind === "header" && entry.modelData.key === "snoozed" ? Theme.palette.color("info", "#60a5fa") : Qt.alpha(sidebar.muted, headerHover.hovered ? 0.8 : 0.5)
                             font.pixelSize: 12
                             font.weight: Font.Medium
                             font.family: Theme.fontUi.length > 0 ? Theme.fontUi : Qt.application.font.family

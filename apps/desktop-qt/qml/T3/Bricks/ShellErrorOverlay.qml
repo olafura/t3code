@@ -20,8 +20,8 @@ Item {
         width: Math.min(overlay.width - 32, 520)
         height: content.implicitHeight + 24
         radius: 8
-        color: Theme.color("surfaceOverlay", "#18181b")
-        border.color: Theme.color("error", "#ef4444")
+        color: Theme.palette.color("surfaceOverlay", "#18181b")
+        border.color: Theme.palette.color("error", "#ef4444")
         border.width: 1
 
         ColumnLayout {
@@ -37,7 +37,7 @@ Item {
                     ? (Runtime.usingUserShell ? qsTr("Shell warning") : qsTr("shell.qml failed — using the built-in shell"))
                     : qsTr("Desktop host stopped")
                 font.bold: true
-                color: Theme.color("text", "#e4e4e7")
+                color: Theme.palette.color("text", "#e4e4e7")
             }
 
             Label {
@@ -46,7 +46,7 @@ Item {
                 wrapMode: Text.Wrap
                 font.family: "monospace"
                 font.pixelSize: 12
-                color: Theme.color("textMuted", "#a1a1aa")
+                color: Theme.palette.color("textMuted", "#a1a1aa")
             }
 
             RowLayout {
@@ -57,7 +57,7 @@ Item {
                     text: Runtime.userShellPath
                     elide: Text.ElideMiddle
                     font.pixelSize: 11
-                    color: Theme.color("textMuted", "#a1a1aa")
+                    color: Theme.palette.color("textMuted", "#a1a1aa")
                 }
 
                 ShellButton {

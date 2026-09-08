@@ -10,11 +10,11 @@ Rectangle {
 
     readonly property var model: Shell.state.settings ?? null
     readonly property bool active: model !== null && model.active
-    readonly property color foreground: Theme.color("sidebarForeground", "#e4e4e7")
-    readonly property color muted: Theme.color("sidebarMutedForeground", "#8b8b93")
+    readonly property color foreground: Theme.palette.color("sidebarForeground", "#e4e4e7")
+    readonly property color muted: Theme.palette.color("sidebarMutedForeground", "#8b8b93")
 
     implicitWidth: 260
-    color: Theme.color("sidebar", "#0a0a0a")
+    color: Theme.palette.color("sidebar", "#0a0a0a")
 
     function focusRow(index) {
         list.currentIndex = Math.max(0, Math.min(index, list.count - 1));
@@ -107,7 +107,7 @@ Rectangle {
                     anchors.leftMargin: 6
                     anchors.rightMargin: 6
                     radius: 6
-                    color: row.current ? Theme.color("sidebarRowSelected", "#2a2a30") : row.hovered || row.visualFocus ? Theme.color("sidebarRowHover", "#1c1c21") : "transparent"
+                    color: row.current ? Theme.palette.color("sidebarRowSelected", "#2a2a30") : row.hovered || row.visualFocus ? Theme.palette.color("sidebarRowHover", "#1c1c21") : "transparent"
                 }
 
                 contentItem: ColumnLayout {

@@ -27,8 +27,8 @@ Item {
     Rectangle {
         anchors.fill: parent
         radius: Math.min(Theme.radius, 8)
-        color: Qt.alpha(Theme.color("input", "#27272a"), 0.32)
-        border.color: Theme.color("input", "#27272a")
+        color: Qt.alpha(Theme.palette.color("input", "#27272a"), 0.32)
+        border.color: Theme.palette.color("input", "#27272a")
         border.width: 1
     }
 
@@ -63,7 +63,7 @@ Item {
             Layout.topMargin: 1
             Layout.bottomMargin: 1
             implicitWidth: 1
-            color: Theme.color("input", "#27272a")
+            color: Theme.palette.color("input", "#27272a")
         }
 
         ShellButton {

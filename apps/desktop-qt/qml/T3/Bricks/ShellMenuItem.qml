@@ -25,14 +25,14 @@ MenuItem {
             visible: control.iconName.length > 0
             name: control.iconName
             size: 16
-            color: Qt.alpha(Theme.color("textMuted", "#8b8b93"), 0.8)
+            color: Qt.alpha(Theme.palette.color("textMuted", "#8b8b93"), 0.8)
             Layout.alignment: Qt.AlignVCenter
         }
 
         Text {
             text: control.text
             font: control.font
-            color: control.destructive ? Theme.color("error", "#ef4444") : Theme.color("text", "#e4e4e7")
+            color: control.destructive ? Theme.palette.color("error", "#ef4444") : Theme.palette.color("text", "#e4e4e7")
             opacity: control.enabled ? 1 : 0.5
             verticalAlignment: Text.AlignVCenter
             elide: Text.ElideRight
@@ -43,13 +43,13 @@ MenuItem {
             visible: control.current
             name: "check"
             size: 14
-            color: Theme.color("text", "#e4e4e7")
+            color: Theme.palette.color("text", "#e4e4e7")
             Layout.alignment: Qt.AlignVCenter
         }
     }
 
     background: Rectangle {
         radius: 6
-        color: control.highlighted || control.hovered ? Theme.color("accentSurface", "#27272a") : "transparent"
+        color: control.highlighted || control.hovered ? Theme.palette.color("accentSurface", "#27272a") : "transparent"
     }
 }

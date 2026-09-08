@@ -14,7 +14,7 @@ Row {
     property bool trafficLights: false
     property real buttonWidth: trafficLights ? 12 : 40
     property real buttonHeight: trafficLights ? 12 : 36
-    readonly property color foreground: Theme.color("text", "#e4e4e7")
+    readonly property color foreground: Theme.palette.color("text", "#e4e4e7")
     readonly property var lightColors: ({
             "close": "#ff5f57",
             "minimize": "#febc2e",
@@ -38,7 +38,7 @@ Row {
             required property string modelData
 
             readonly property bool isClose: modelData === "close"
-            readonly property color light: controls.window === null || controls.window.active ? controls.lightColors[modelData] : Theme.color("mutedForeground", "#5b5b60")
+            readonly property color light: controls.window === null || controls.window.active ? controls.lightColors[modelData] : Theme.palette.color("mutedForeground", "#5b5b60")
 
             width: controls.buttonWidth
             height: controls.buttonHeight
@@ -58,7 +58,7 @@ Row {
 
             background: Rectangle {
                 radius: controls.trafficLights ? height / 2 : 6
-                readonly property color hoverColor: button.isClose ? Theme.color("error", "#ef4444") : Theme.color("accentSurface", "#27272a")
+                readonly property color hoverColor: button.isClose ? Theme.palette.color("error", "#ef4444") : Theme.palette.color("accentSurface", "#27272a")
                 color: controls.trafficLights ? button.light : Qt.alpha(hoverColor, button.hovered ? hoverColor.a : 0)
                 border.width: controls.trafficLights ? 1 : 0
                 border.color: Qt.darker(button.light, 1.25)
@@ -76,7 +76,7 @@ Row {
                     name: button.isClose ? "x" : button.modelData === "minimize" ? "minus" : controls.trafficLights ? "plus" : controls.window !== null && controls.window.visibility === Window.Maximized ? "copy" : "square"
                     size: controls.trafficLights ? 8 : button.isClose ? 14 : 12
                     strokeWidth: controls.trafficLights ? 2.5 : 2
-                    color: controls.trafficLights ? Qt.darker(button.light, 2.4) : button.isClose && button.hovered ? Theme.color("errorForeground", "#ffffff") : controls.foreground
+                    color: controls.trafficLights ? Qt.darker(button.light, 2.4) : button.isClose && button.hovered ? Theme.palette.color("errorForeground", "#ffffff") : controls.foreground
                     visible: !controls.trafficLights || hover.hovered
                 }
             }
