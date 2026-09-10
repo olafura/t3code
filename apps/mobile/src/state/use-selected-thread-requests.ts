@@ -104,7 +104,7 @@ export function useSelectedThreadRequests() {
     [selectedThread],
   );
   const activePendingApprovals = pendingRequests.approvals;
-  const activePendingApproval = activePendingApprovals[0] ?? null;
+  const activePendingApproval = activePendingApprovals.at(-1) ?? null;
   const activePendingUserInputs = pendingRequests.userInputs;
   const activePendingUserInput = activePendingUserInputs.at(-1) ?? null;
   const questionServerConfigs = useServerConfigs();

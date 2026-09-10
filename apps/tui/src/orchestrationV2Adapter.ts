@@ -173,6 +173,7 @@ export function presentTuiShell(
 
 function itemStatus(item: OrchestrationV2TurnItem): string {
   switch (item.status) {
+    case "idle":
     case "pending":
     case "running":
     case "waiting":
@@ -206,6 +207,8 @@ function itemSummary(item: OrchestrationV2TurnItem): string {
       return "Input requested";
     case "error":
       return item.failure.message;
+    case "system_notice":
+      return item.message;
     case "subagent":
       return item.progress ?? item.result ?? "Subagent work";
     case "dynamic_tool":

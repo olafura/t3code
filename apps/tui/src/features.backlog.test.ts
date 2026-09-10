@@ -72,10 +72,7 @@ const CLIENT_UI_GAPS = [
     area: "Project lifecycle",
     serverCapabilities: ["project.meta.update", "project.delete"],
     serverSources: ["apps/server/src/orchestration/decider.ts"],
-    clientSources: [
-      { client: "web", path: "apps/web/src/components/Sidebar.tsx" },
-      { client: "mobile", path: "apps/mobile/src/features/threads/use-project-actions.ts" },
-    ],
+    clientSources: [{ client: "web", path: "apps/web/src/components/Sidebar.tsx" }],
     scenarios: [
       "Given a project is registered, when project actions are opened, then the TUI can rename it or change its default model without altering its workspace identity.",
       "Given logical projects span multiple environments, when grouping is changed, then the TUI presents the same grouping and active member predictably.",

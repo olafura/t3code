@@ -67,7 +67,7 @@ import {
 } from "@t3tools/client-runtime/operations";
 import {
   request,
-  rpcSessionFactoryLayer,
+  layerWithOptions,
   RpcSessionFactory,
   runStream,
   subscribe,
@@ -402,9 +402,7 @@ export function buildTuiRuntime(options: TuiOptions): TuiRuntime {
     fileLoggerLayer(options.logPath),
   );
 
-  const rpcLayer = layerWithOptions({}).pipe(
-    Layer.provide(Socket.layerWebSocketConstructorGlobal),
-  );
+  const rpcLayer = layerWithOptions({}).pipe(Layer.provide(Socket.layerWebSocketConstructorGlobal));
 
   const supervisorLayer = Layer.effect(EnvironmentSupervisor, makeTuiSupervisor(options)).pipe(
     Layer.provideMerge(rpcLayer),
