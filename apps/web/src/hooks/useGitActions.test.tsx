@@ -17,7 +17,9 @@ vi.mock("@effect/atom-react", () => ({ useAtomValue: () => null }));
 vi.mock("../state/query", () => ({
   useEnvironmentQuery: () => ({ data: fixture.status, error: null }),
 }));
-vi.mock("../state/entities", () => ({ useThread: () => ({ branch: fixture.status?.refName }) }));
+vi.mock("../state/entities", () => ({
+  useThreadShell: () => ({ branch: fixture.status?.refName }),
+}));
 vi.mock("../state/server", () => ({ serverEnvironment: { configValueAtom: () => null } }));
 vi.mock("../state/threads", () => ({ threadEnvironment: {} }));
 vi.mock("../state/vcs", () => ({ vcsEnvironment: { status: () => null } }));
