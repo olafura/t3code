@@ -1,12 +1,17 @@
 import { describe, expect, it } from "vite-plus/test";
+import { ShellRightPanelState } from "@t3tools/contracts/shell";
+import * as Schema from "effect/Schema";
 
 import type { RightPanelSurface } from "../rightPanelStore";
 import { buildEmbedPath, buildShellRightPanelState } from "./shellRightPanelState";
+
+const decodeRightPanelState = Schema.decodeUnknownSync(ShellRightPanelState);
 
 describe("buildShellRightPanelState", () => {
   it("projects surfaces with titles and the embed path", () => {
     const surfaces: RightPanelSurface[] = [
       { id: "diff", kind: "diff" },
+      { id: "pull-requests", kind: "pull-requests" },
       {
         id: "terminal:1",
         kind: "terminal",
@@ -34,10 +39,12 @@ describe("buildShellRightPanelState", () => {
     });
     expect(state.surfaces).toEqual([
       { id: "diff", kind: "diff", title: "diff" },
+      { id: "pull-requests", kind: "pull-requests", title: "pull-requests" },
       { id: "terminal:1", kind: "terminal", title: "terminal" },
       { id: "file:src/a.ts", kind: "file", title: "src/a.ts" },
     ]);
     expect(state.activeSurfaceId).toBe("terminal:1");
+    expect(decodeRightPanelState(state)).toEqual(state);
     expect(state.embedPath).toBe("/embed/env/thread");
   });
 
