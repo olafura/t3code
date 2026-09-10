@@ -507,6 +507,7 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
       exitCode: version.code,
       stdoutLength: version.stdout.length,
       stderrLength: version.stderr.length,
+      stderrPreview: version.stderr.trim().slice(0, 240),
     });
     return buildServerProvider({
       presentation: CLAUDE_PRESENTATION,
