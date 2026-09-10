@@ -24,6 +24,7 @@ function makeThread(
     branch: null,
     worktreePath: null,
     latestTurn: null,
+    pullRequests: [],
     createdAt: "2026-03-09T10:00:00.000Z",
     updatedAt: "2026-03-09T10:00:00.000Z",
     archivedAt: null,

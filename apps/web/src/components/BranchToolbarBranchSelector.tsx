@@ -103,6 +103,7 @@ export function BranchToolbarBranchSelector({
   const [branchQuery, setBranchQuery] = useState("");
   const {
     threadRef,
+    serverThread,
     activeProjectCwd,
     activeThreadBranch,
     activeWorktreePath,
