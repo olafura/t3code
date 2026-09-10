@@ -7,6 +7,7 @@ import { useGitActions } from "./useGitActions";
 
 const fixture = vi.hoisted(() => ({
   status: null as VcsStatusResult | null,
+  serverThreadId: null as ThreadId | null,
   run: vi.fn(),
   addToast: vi.fn(() => "toast"),
   updateToast: vi.fn(),
@@ -18,7 +19,10 @@ vi.mock("../state/query", () => ({
   useEnvironmentQuery: () => ({ data: fixture.status, error: null }),
 }));
 vi.mock("../state/entities", () => ({
-  useThreadShell: () => ({ branch: fixture.status?.refName }),
+  useThreadShell: () =>
+    fixture.serverThreadId === null
+      ? null
+      : { id: fixture.serverThreadId, branch: fixture.status?.refName },
 }));
 vi.mock("../state/server", () => ({ serverEnvironment: { configValueAtom: () => null } }));
 vi.mock("../state/threads", () => ({ threadEnvironment: {} }));
@@ -58,6 +62,7 @@ function Probe() {
 }
 
 beforeEach(async () => {
+  fixture.serverThreadId = threadRef.threadId;
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal("window", {
     setInterval: () => 1,
@@ -100,6 +105,21 @@ afterEach(async () => {
 });
 
 describe("git result toast actions", () => {
+  it("links newly opened pull requests to the existing server thread", async () => {
+    await act(() => actions.runGitActionWithToast({ action: "create_pr" }));
+    expect(fixture.run).toHaveBeenCalledWith(
+      expect.objectContaining({ action: "create_pr", threadId: threadRef.threadId }),
+    );
+  });
+
+  it("does not link pull requests to an unpersisted draft", async () => {
+    fixture.serverThreadId = null;
+    await act(() => renderer.update(<Probe />));
+    await act(() => actions.runGitActionWithToast({ action: "create_pr" }));
+    expect(fixture.run).toHaveBeenCalledOnce();
+    expect(fixture.run.mock.calls[0]?.[0]).not.toHaveProperty("threadId");
+  });
+
   it("uses current branch state before retrying a retained toast action", async () => {
     await act(() => actions.runGitActionWithToast({ action: "commit" }));
     const retry = fixture.updateToast.mock.calls.at(-1)?.[1].actionProps.onClick;

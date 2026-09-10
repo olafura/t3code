@@ -162,6 +162,7 @@ function thread(ref: ScopedThreadRef): Thread {
     interactionMode: "default",
     session: null,
     messages: [],
+    pullRequests: [],
     proposedPlans: [],
     activities: [],
     checkpoints: [],
