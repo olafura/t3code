@@ -89,7 +89,6 @@ export function createStore(client: TuiClient, host: TuiHost = standaloneTuiHost
   // The worktree currently subscribed for git status, so we only resubscribe on change.
   let vcsCwd: string | null = null;
 
-
   const selectedThreadId = () => (state.selection?.kind === "thread" ? state.selection.id : null);
   const rowsNow = () =>
     buildRows(
@@ -161,11 +160,21 @@ export function createStore(client: TuiClient, host: TuiHost = standaloneTuiHost
     syncVcs();
   };
 
-  const ensureValidSelection = (rows: Row[]) => {
+  const ensureValidSelection = (rows: Row[], preserveSubthread = false) => {
+    if (preserveSubthread && state.selection?.kind === "thread") {
+      const selected = state.shell?.threads.find((thread) => thread.id === state.selection?.id);
+      if (
+        selected?.lineage.relationshipToParent === "subagent" &&
+        selected.archivedAt === null &&
+        (state.projectScopeId === null || selected.projectId === state.projectScopeId)
+      )
+        return;
+    }
     if (rows.length === 0) {
       const hasThreadInScope = (state.shell?.threads ?? []).some(
         (thread) =>
           thread.archivedAt == null &&
+          thread.lineage.relationshipToParent !== "subagent" &&
           (state.projectScopeId === null || thread.projectId === state.projectScopeId),
       );
       const fallbackProject =
@@ -195,7 +204,7 @@ export function createStore(client: TuiClient, host: TuiHost = standaloneTuiHost
       if (host.kind === "herdr") {
         unsubHost = host.subscribe(() => {
           state = { ...state, herdr: host.getState() };
-          ensureValidSelection(rowsNow());
+          ensureValidSelection(rowsNow(), true);
           emit();
         });
         host.start();
@@ -211,10 +220,10 @@ export function createStore(client: TuiClient, host: TuiHost = standaloneTuiHost
           ...state,
           shell: nextShell,
           projectScopeId: validProjectScope,
-          status: `${nextShell.projects.length} project(s) · ${nextShell.threads.length} thread(s)`,
+          status: `${nextShell.projects.length} project(s) · ${nextShell.threads.filter((thread) => thread.archivedAt == null && thread.lineage.relationshipToParent !== "subagent").length} thread(s)`,
           statusKind: "info",
         };
-        ensureValidSelection(rowsNow());
+        ensureValidSelection(rowsNow(), true);
         emit();
       });
     },

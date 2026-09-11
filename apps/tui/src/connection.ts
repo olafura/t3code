@@ -10,7 +10,6 @@ import {
   type ModelSelection,
   NonNegativeInt,
   ORCHESTRATION_V2_WS_METHODS,
-  type OrchestrationShellSnapshot,
   type OrchestrationThread,
   type OrchestrationV2ShellSnapshot,
   type OrchestrationV2ThreadDetailSnapshot,
@@ -109,7 +108,11 @@ import * as Socket from "effect/unstable/socket/Socket";
 
 import { createAttachmentImageCache } from "./attachmentImages.ts";
 import type { RgbaImage } from "@t3tools/opentui-image";
-import { presentTuiShell, presentTuiThread } from "./orchestrationV2Adapter.ts";
+import {
+  presentTuiShell,
+  presentTuiThread,
+  type TuiShellSnapshot as OrchestrationShellSnapshot,
+} from "./orchestrationV2Adapter.ts";
 
 /**
  * Connection inputs the host (the server CLI) provides. The TUI never talks to

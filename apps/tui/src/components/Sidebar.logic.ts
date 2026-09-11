@@ -1,4 +1,4 @@
-import type { OrchestrationThreadShell } from "@t3tools/contracts";
+import type { TuiThreadShell as OrchestrationThreadShell } from "../orchestrationV2Adapter.ts";
 import { effectiveSnoozed } from "@t3tools/client-runtime/state/thread-settled";
 
 import type { OrchestrationShellSnapshot } from "../connection.ts";
@@ -186,6 +186,7 @@ export function buildRows(
   const needle = filter.trim().toLowerCase();
   const visibleThreads = shell.threads.filter((thread) => {
     if (thread.archivedAt != null) return false;
+    if (thread.lineage.relationshipToParent === "subagent") return false;
     if (projectScopeId !== null && thread.projectId !== projectScopeId) return false;
     if (needle.length === 0) return true;
     const projectTitle = projectTitleById.get(thread.projectId as string) ?? thread.projectId;

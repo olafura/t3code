@@ -80,6 +80,7 @@ import {
 import { isWorking, revertableCheckpoints } from "../timeline.ts";
 import { buildUserInputAnswers, derivePendingUserInputs } from "../userInput.ts";
 import { buildRows, findProjectForHerdrSpace } from "./Sidebar.logic.ts";
+import { getSubthreadNavigation } from "../threadRelationships.ts";
 import { ChatComposer } from "./ChatComposer.tsx";
 import {
   CHAT_CONTENT_MAX_WIDTH,
@@ -276,7 +277,14 @@ export function ChatView({
   const settingsScrollRef = React.useRef<ScrollBoxRenderable | null>(null);
   // Shared popover picker for composer controls and new-thread checkout context.
   const [picker, setPicker] = React.useState<{
-    readonly kind: "model" | "runtime" | "reasoning" | "workspace" | "branch" | "project-scope";
+    readonly kind:
+      | "model"
+      | "runtime"
+      | "reasoning"
+      | "workspace"
+      | "branch"
+      | "project-scope"
+      | "subthreads";
     readonly target: "thread" | "new" | "sidebar";
     readonly title: string;
     readonly status: SelectStatus;
@@ -465,6 +473,10 @@ export function ChatView({
         ? ((selectedSpaceProject?.id as string | undefined) ?? null)
         : state.projectScopeId;
   const selectedThreadId = state.selection?.kind === "thread" ? state.selection.id : null;
+  const subthreadNavigation = React.useMemo(
+    () => getSubthreadNavigation(state.shell, selectedThreadId),
+    [state.shell, selectedThreadId],
+  );
   const selectedHerdrAgent =
     state.selection?.kind === "agent"
       ? (state.herdr?.snapshot?.agents.find((agent) => agent.pane_id === state.selection?.id) ??
@@ -938,18 +950,16 @@ export function ChatView({
         title: "Git URL",
         description: "Clone from a remote URL",
       },
-      ...sortAddProjectProviderSources(sourceReadiness).map(
-        (source): AddProjectPaletteRow => ({
-          id: `source:${source}`,
-          kind: "source",
-          source,
-          title: `${addProjectRemoteSourceLabel(source)} repository`,
-          description: sourceReadiness[source].ready
-            ? `Clone ${addProjectRemoteSourceLabel(source)} owner/repository`
-            : (sourceReadiness[source].hint ?? "Provider setup required"),
-          disabled: !sourceReadiness[source].ready,
-        }),
-      ),
+      ...sortAddProjectProviderSources(sourceReadiness).map((source): AddProjectPaletteRow => ({
+        id: `source:${source}`,
+        kind: "source",
+        source,
+        title: `${addProjectRemoteSourceLabel(source)} repository`,
+        description: sourceReadiness[source].ready
+          ? `Clone ${addProjectRemoteSourceLabel(source)} owner/repository`
+          : (sourceReadiness[source].hint ?? "Provider setup required"),
+        disabled: !sourceReadiness[source].ready,
+      })),
     ] satisfies ReadonlyArray<AddProjectPaletteRow>
   ).filter((row) => {
     const query = projectDraft.trim().toLowerCase();
@@ -970,15 +980,13 @@ export function ChatView({
           },
         ]
       : []),
-    ...visibleProjectBrowseEntries.map(
-      (entry): AddProjectPaletteRow => ({
-        id: `browse:${entry.fullPath}`,
-        kind: "directory",
-        name: entry.name,
-        title: entry.name,
-        description: entry.fullPath,
-      }),
-    ),
+    ...visibleProjectBrowseEntries.map((entry): AddProjectPaletteRow => ({
+      id: `browse:${entry.fullPath}`,
+      kind: "directory",
+      name: entry.name,
+      title: entry.name,
+      description: entry.fullPath,
+    })),
   ];
   const projectRows =
     projectFlow?.step === "source"
@@ -1439,6 +1447,21 @@ export function ChatView({
     });
   };
 
+  const openSubthreads = () => {
+    setPicker({
+      kind: "subthreads",
+      target: "thread",
+      title: "Subthreads",
+      status: "ready",
+      options: subthreadNavigation.children.map((thread) => ({
+        name: thread.title.replace(/^Subagent:\s*/i, ""),
+        description: thread.session?.status ?? "idle",
+        value: thread.id,
+      })),
+      selectedIndex: 0,
+    });
+  };
+
   const openBranchPicker = () => {
     if (focus !== "new") return;
     if (picker?.kind === "branch" && picker.target === "new") {
@@ -1646,7 +1669,10 @@ export function ChatView({
       return;
     }
     setPicker(null);
-    if (kind === "project-scope") {
+    if (kind === "subthreads") {
+      store.select({ kind: "thread", id: value });
+      focusComposer();
+    } else if (kind === "project-scope") {
       const projectScopeId = value === "__all__" ? null : value;
       store.setProjectScope(projectScopeId);
       if (projectScopeId !== null) {
@@ -2907,6 +2933,23 @@ export function ChatView({
       run: () => runCommand(openAddProject),
     });
     if (detail && focus !== "new") {
+      if (subthreadNavigation.children.length > 0) {
+        list.push({
+          id: "subthreads",
+          title: `Show subthreads (${subthreadNavigation.children.length})`,
+          keywords: "agents children related",
+          run: () => runCommand(openSubthreads),
+        });
+      }
+      const parent = subthreadNavigation.parent;
+      if (parent) {
+        list.push({
+          id: "parent-thread",
+          title: "Back to parent thread",
+          keywords: "subagent return",
+          run: () => runCommand(() => store.select({ kind: "thread", id: parent.id })),
+        });
+      }
       list.push({
         id: "plan",
         title: threadInteractionMode === "plan" ? "Switch to build mode" : "Switch to plan mode",
@@ -3190,6 +3233,7 @@ export function ChatView({
     detail,
     settlementSupported,
     state.shell,
+    subthreadNavigation,
     checkpoints.length,
     activeTerminal,
     detailTabs,

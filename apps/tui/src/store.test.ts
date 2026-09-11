@@ -33,14 +33,53 @@ function fakeClient(options?: { readonly immediateThread?: OrchestrationThread }
 const shell = (
   projects: ReadonlyArray<{ id: string; title: string; workspaceRoot?: string }>,
   threads: ReadonlyArray<{ id: string; projectId: string; updatedAt: string; title?: string }>,
-): OrchestrationShellSnapshot => ({ projects, threads }) as unknown as OrchestrationShellSnapshot;
+): OrchestrationShellSnapshot =>
+  ({
+    projects,
+    threads: threads.map((thread) => ({
+      archivedAt: null,
+      lineage: { rootThreadId: thread.id, parentThreadId: null, relationshipToParent: null },
+      ...thread,
+    })),
+  }) as unknown as OrchestrationShellSnapshot;
 
-const oneProjectTwoThreads = shell([{ id: "p1", title: "P1" }], [
-  { id: "t1", projectId: "p1", updatedAt: "2020-01-02T00:00:00.000Z" },
-  { id: "t2", projectId: "p1", updatedAt: "2020-01-01T00:00:00.000Z" },
-]);
+const oneProjectTwoThreads = shell(
+  [{ id: "p1", title: "P1" }],
+  [
+    { id: "t1", projectId: "p1", updatedAt: "2020-01-02T00:00:00.000Z" },
+    { id: "t2", projectId: "p1", updatedAt: "2020-01-01T00:00:00.000Z" },
+  ],
+);
 
 describe("createStore", () => {
+  it("keeps subthreads out of sidebar shortcuts but preserves an opened subthread across updates", () => {
+    const f = fakeClient();
+    const store = createStore(f.client);
+    const parent = oneProjectTwoThreads.threads[0]!;
+    const child = {
+      ...parent,
+      id: "child" as typeof parent.id,
+      lineage: {
+        rootThreadId: parent.id,
+        parentThreadId: parent.id,
+        relationshipToParent: "subagent" as const,
+      },
+    };
+    const snapshot = { ...oneProjectTwoThreads, threads: [child, ...oneProjectTwoThreads.threads] };
+    store.start();
+    f.pushShell(snapshot);
+    expect(store.getState().selection).toEqual({ kind: "thread", id: "t1" });
+    expect(store.getState().status).toBe("1 project(s) · 2 thread(s)");
+    store.selectThreadByIndex(2);
+    expect(store.getState().selection).toEqual({ kind: "thread", id: "t2" });
+    store.select({ kind: "thread", id: child.id });
+    f.pushShell({ ...snapshot, threads: [...snapshot.threads] });
+    expect(store.getState().selection).toEqual({ kind: "thread", id: child.id });
+    store.select({ kind: "thread", id: parent.id });
+    expect(store.getState().selection).toEqual({ kind: "thread", id: parent.id });
+    store.stop();
+  });
+
   it("Given a shell snapshot, when pushed, then it populates state and a project-count status", () => {
     const f = fakeClient();
     const store = createStore(f.client);
@@ -187,10 +226,13 @@ describe("createStore", () => {
     const store = createStore(f.client);
     store.start();
     f.pushShell(
-      shell([{ id: "p1", title: "P1" }], [
-        { id: "t1", projectId: "p1", updatedAt: "2020-01-02T00:00:00.000Z", title: "login" },
-        { id: "t2", projectId: "p1", updatedAt: "2020-01-01T00:00:00.000Z", title: "theme" },
-      ]),
+      shell(
+        [{ id: "p1", title: "P1" }],
+        [
+          { id: "t1", projectId: "p1", updatedAt: "2020-01-02T00:00:00.000Z", title: "login" },
+          { id: "t2", projectId: "p1", updatedAt: "2020-01-01T00:00:00.000Z", title: "theme" },
+        ],
+      ),
     );
     store.toggleProject("p1");
     store.select({ kind: "thread", id: "t1" });

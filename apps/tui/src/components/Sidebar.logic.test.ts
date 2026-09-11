@@ -1,7 +1,9 @@
 import { describe, expect, it } from "bun:test";
 
-import type { OrchestrationThreadShell } from "@t3tools/contracts";
+import { ThreadId } from "@t3tools/contracts";
+import type { TuiThreadShell as OrchestrationThreadShell } from "../orchestrationV2Adapter.ts";
 import type { OrchestrationShellSnapshot } from "../connection.ts";
+import { getSubthreadNavigation } from "../threadRelationships.ts";
 import {
   buildRows,
   type Row,
@@ -23,6 +25,7 @@ function thread(
     id,
     projectId,
     title: id,
+    lineage: { rootThreadId: ThreadId.make(id), parentThreadId: null, relationshipToParent: null },
     createdAt: "2026-07-28T10:00:00.000Z",
     updatedAt: "2026-07-28T10:00:00.000Z",
     archivedAt: null,
@@ -72,6 +75,38 @@ const build = (
   );
 
 describe("Sidebar V2 row model", () => {
+  it("hides subagents across sections and search while keeping forks visible", () => {
+    const parentId = ThreadId.make("parent");
+    const childLineage = {
+      rootThreadId: parentId,
+      parentThreadId: parentId,
+      relationshipToParent: "subagent" as const,
+    };
+    const snapshot = shell([
+      thread("parent", "p1"),
+      thread("fork", "p1", { lineage: { ...childLineage, relationshipToParent: "fork" } }),
+      thread("child-active", "p1", { lineage: childLineage }),
+      thread("child-settled", "p1", { lineage: childLineage, settledOverride: "settled" }),
+      thread("child-snoozed", "p1", {
+        lineage: childLineage,
+        snoozedAt: NOW,
+        snoozedUntil: "2026-07-29T12:00:00.000Z",
+      }),
+      thread("nested-child", "p1", {
+        lineage: { ...childLineage, parentThreadId: ThreadId.make("child-active") },
+      }),
+      thread("archived", "p1", { archivedAt: NOW }),
+    ]);
+    expect(build(snapshot).map((row) => row.id)).toEqual(["fork", "parent"]);
+    expect(build(snapshot, { filter: "child", selected: "child-settled" })).toEqual([]);
+    expect(
+      build(snapshot, {
+        project: "p1",
+        expanded: new Set([SIDEBAR_SETTLED_SECTION_ID, SIDEBAR_SNOOZED_SECTION_ID]),
+      }).map((row) => row.id),
+    ).toEqual(["fork", "parent"]);
+  });
+
   it("Given active threads, then it is flat and stable by creation time", () => {
     const rows = build(
       shell([
@@ -161,6 +196,33 @@ describe("Sidebar V2 row model", () => {
     expect(threadRows).toHaveLength(SIDEBAR_SETTLED_INITIAL_COUNT + 1);
     expect(threadRows.some((row) => row.id === "settled-12")).toBe(true);
     expect(rows.at(-1)).toMatchObject({ kind: "more", hiddenCount: 2 });
+  });
+});
+
+describe("subthread navigation", () => {
+  it("lists direct subagents and their parent while excluding forks, archived, and unrelated threads", () => {
+    const root = thread("root", "p1");
+    const child = thread("child", "p1", {
+      lineage: { rootThreadId: root.id, parentThreadId: root.id, relationshipToParent: "subagent" },
+    });
+    const nested = thread("nested", "p1", {
+      lineage: { ...child.lineage, parentThreadId: child.id },
+    });
+    const snapshot = shell([
+      root,
+      child,
+      nested,
+      thread("fork", "p1", { lineage: { ...child.lineage, relationshipToParent: "fork" } }),
+      thread("archived", "p1", { lineage: child.lineage, archivedAt: NOW }),
+      thread("unrelated", "p2"),
+    ]);
+    expect(getSubthreadNavigation(snapshot, root.id)).toEqual({ parent: null, children: [child] });
+    expect(getSubthreadNavigation(snapshot, child.id)).toEqual({
+      parent: root,
+      children: [nested],
+    });
+    expect(getSubthreadNavigation(snapshot, nested.id)).toEqual({ parent: child, children: [] });
+    expect(getSubthreadNavigation(snapshot, null)).toEqual({ parent: null, children: [] });
   });
 });
 

@@ -24,6 +24,11 @@ const iso = (value: DateTime.Utc): string => DateTime.formatIso(value);
 const nullableIso = (value: DateTime.Utc | null): string | null =>
   value === null ? null : iso(value);
 
+export type TuiThreadShell = OrchestrationThreadShell & Pick<OrchestrationV2ThreadShell, "lineage">;
+export type TuiShellSnapshot = Omit<OrchestrationShellSnapshot, "threads"> & {
+  readonly threads: ReadonlyArray<TuiThreadShell>;
+};
+
 function legacyRunState(
   status: OrchestrationV2Run["status"],
 ): NonNullable<OrchestrationThread["latestTurn"]>["state"] {
@@ -108,13 +113,12 @@ function shellSession(thread: OrchestrationV2ThreadShell): OrchestrationThreadSh
   };
 }
 
-export function presentTuiThreadShell(
-  thread: OrchestrationV2ThreadShell,
-): OrchestrationThreadShell {
+export function presentTuiThreadShell(thread: OrchestrationV2ThreadShell): TuiThreadShell {
   return {
     id: thread.id,
     projectId: thread.projectId,
     title: thread.title,
+    lineage: thread.lineage,
     modelSelection: thread.modelSelection,
     runtimeMode: thread.runtimeMode,
     interactionMode: thread.interactionMode,
@@ -149,9 +153,7 @@ export function presentTuiThreadShell(
   };
 }
 
-export function presentTuiShell(
-  snapshot: OrchestrationV2ShellSnapshot,
-): OrchestrationShellSnapshot {
+export function presentTuiShell(snapshot: OrchestrationV2ShellSnapshot): TuiShellSnapshot {
   const sourceThreads = [...snapshot.threads, ...snapshot.archivedThreads];
   const updatedAt = sourceThreads.reduce(
     (latest, thread) => {

@@ -120,7 +120,15 @@ function shell(
 ): OrchestrationShellSnapshot {
   return {
     projects,
-    threads,
+    threads: threads.map((thread) => ({
+      ...thread,
+      archivedAt: thread.archivedAt ?? null,
+      lineage: thread.lineage ?? {
+        rootThreadId: thread.id,
+        parentThreadId: null,
+        relationshipToParent: null,
+      },
+    })),
   } as unknown as OrchestrationShellSnapshot;
 }
 
@@ -304,6 +312,72 @@ async function selectThread(
 }
 
 describe("ChatView responsive shell", () => {
+  it("opens a hidden subthread through the floating picker and returns to its parent", async () => {
+    const parent = shell().threads[0]!;
+    const child = {
+      ...parent,
+      id: "child" as typeof parent.id,
+      title: "Subagent: Inspect sidebar",
+      archivedAt: null,
+      lineage: {
+        rootThreadId: parent.id,
+        parentThreadId: parent.id,
+        relationshipToParent: "subagent" as const,
+      },
+    };
+    const snapshot = shell([parent, child]);
+    const fake = fakeClient({ detail: thread(), shellSnapshot: snapshot });
+    const client: TuiClient = {
+      ...fake.client,
+      peekThread: (id) => ({
+        ...thread(),
+        id,
+        title: id === child.id ? child.title : parent.title,
+      }),
+    };
+    const setup = await testRender(<ChatView client={client} onExit={() => {}} />, {
+      width: 110,
+      height: 28,
+    });
+    const command = async (query: string, label: string) => {
+      await React.act(async () => {
+        setup.mockInput.pressKey("k", { ctrl: true });
+        await setup.renderOnce();
+      });
+      await setup.waitForFrame((frame) => frame.includes("Type a command"));
+      await React.act(async () => {
+        await setup.mockInput.typeText(query);
+        await setup.renderOnce();
+      });
+      await setup.waitForFrame((frame) => frame.includes(label));
+      await React.act(async () => {
+        setup.mockInput.pressEnter();
+        await setup.renderOnce();
+      });
+    };
+    try {
+      await selectThread(setup, fake.connect);
+      expect(setup.captureCharFrame()).not.toContain("Inspect sidebar");
+      await command("subthreads", "Show subthreads (1)");
+      await setup.waitForFrame(
+        (frame) => frame.includes("Subthreads ▸") && frame.includes("Inspect sidebar"),
+      );
+      await React.act(async () => {
+        setup.mockInput.pressEnter();
+        await setup.renderOnce();
+      });
+      expect(fake.subscribedThreadIds.at(-1)).toBe(child.id);
+      await React.act(async () => {
+        fake.emitShell({ ...snapshot, threads: [...snapshot.threads] });
+        await setup.renderOnce();
+      });
+      await command("parent", "Back to parent thread");
+      expect(fake.subscribedThreadIds.at(-1)).toBe(parent.id);
+    } finally {
+      setup.renderer.destroy();
+    }
+  });
+
   it("Given the desktop layout, the projects sidebar spans the full terminal height", async () => {
     const fake = fakeClient({ detail: thread() });
     const setup = await testRender(<ChatView client={fake.client} onExit={() => {}} />, {

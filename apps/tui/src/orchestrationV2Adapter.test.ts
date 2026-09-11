@@ -140,6 +140,33 @@ function projection(): OrchestrationV2ThreadProjection {
 }
 
 describe("orchestration V2 TUI presentation", () => {
+  it("preserves thread relationships for sidebar filtering and subthread navigation", () => {
+    const subagent = shell({
+      id: ThreadId.make("subagent"),
+      lineage: {
+        rootThreadId: threadId,
+        parentThreadId: threadId,
+        relationshipToParent: "subagent",
+      },
+    });
+    const fork = shell({
+      id: ThreadId.make("fork"),
+      lineage: { rootThreadId: threadId, parentThreadId: threadId, relationshipToParent: "fork" },
+    });
+    const result = presentTuiShell({
+      schemaVersion: 1,
+      snapshotSequence: 1,
+      projects: [project],
+      threads: [shell(), subagent, fork],
+      archivedThreads: [],
+    });
+    expect(result.threads).toMatchObject([
+      { id: threadId, lineage: shell().lineage },
+      { id: subagent.id, lineage: subagent.lineage },
+      { id: fork.id, lineage: fork.lineage },
+    ]);
+  });
+
   it("preserves active and archived threads in the legacy shell view", () => {
     const activeRunId = RunId.make("run-active");
     const result = presentTuiShell({
