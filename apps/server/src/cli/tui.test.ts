@@ -1,6 +1,25 @@
 import { describe, expect, it } from "bun:test";
 
-import { buildTuiChildEnvironment } from "./tui.ts";
+import { buildSocketUrl, buildTuiChildEnvironment } from "./tui.ts";
+import {
+  ORCHESTRATION_PROTOCOL_QUERY_PARAM,
+  ORCHESTRATION_PROTOCOL_VERSION,
+} from "@t3tools/contracts";
+
+describe("TUI WebSocket handshake", () => {
+  it.each([
+    ["http://127.0.0.1:13773", "ws:"],
+    ["https://host.example", "wss:"],
+  ])("announces the current protocol when connecting to %s", (origin, protocol) => {
+    const url = new URL(buildSocketUrl(origin, "ticket+with/special=characters"));
+    expect(url.protocol).toBe(protocol);
+    expect(url.pathname).toBe("/ws");
+    expect(url.searchParams.get("wsTicket")).toBe("ticket+with/special=characters");
+    expect(url.searchParams.get(ORCHESTRATION_PROTOCOL_QUERY_PARAM)).toBe(
+      String(ORCHESTRATION_PROTOCOL_VERSION),
+    );
+  });
+});
 
 describe("buildTuiChildEnvironment", () => {
   it("preserves the Herdr plugin context and selects Herdr host mode", () => {

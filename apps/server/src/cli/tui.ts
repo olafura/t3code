@@ -2,7 +2,11 @@
 import * as NodeChildProcess from "node:child_process";
 import * as NodeModule from "node:module";
 
-import { AuthStandardClientScopes } from "@t3tools/contracts";
+import {
+  AuthStandardClientScopes,
+  ORCHESTRATION_PROTOCOL_QUERY_PARAM,
+  ORCHESTRATION_PROTOCOL_VERSION,
+} from "@t3tools/contracts";
 import * as Console from "effect/Console";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -21,11 +25,14 @@ import { authLocationFlags, resolveCliAuthConfig } from "./config.ts";
 const WEBSOCKET_TICKET_QUERY_PARAM = "wsTicket";
 
 /** Build the `ws(s)://host:port/ws?wsTicket=…` URL from the server origin. */
-function buildSocketUrl(origin: string, ticket: string): string {
+export function buildSocketUrl(origin: string, ticket: string): string {
   const url = new URL(origin);
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
   url.pathname = "/ws";
-  url.search = new URLSearchParams([[WEBSOCKET_TICKET_QUERY_PARAM, ticket]]).toString();
+  url.search = new URLSearchParams([
+    [WEBSOCKET_TICKET_QUERY_PARAM, ticket],
+    [ORCHESTRATION_PROTOCOL_QUERY_PARAM, String(ORCHESTRATION_PROTOCOL_VERSION)],
+  ]).toString();
   return url.toString();
 }
 
