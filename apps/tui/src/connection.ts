@@ -91,6 +91,7 @@ import {
   makeEnvironmentThreadState,
 } from "@t3tools/client-runtime/state/threads";
 import * as Crypto from "effect/Crypto";
+import * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -280,7 +281,17 @@ const makeTuiSupervisor = (options: TuiOptions) =>
 
     const loop = Effect.gen(function* () {
       for (;;) {
-        yield* Effect.scoped(runConnection).pipe(Effect.ignore);
+        yield* Effect.scoped(runConnection).pipe(
+          Effect.tapCause((cause) =>
+            Effect.logError(
+              "TUI connection failed",
+              Cause.pretty(cause)
+                .replaceAll(options.bearerToken, "<REDACTED>")
+                .replace(/([?&]wsTicket=)[^\s&#]+/g, "$1<REDACTED>"),
+            ),
+          ),
+          Effect.ignore,
+        );
         yield* SubscriptionRef.set(sessionRef, Option.none());
         yield* SubscriptionRef.set(stateRef, CONNECTING_STATE);
         yield* Effect.sleep(RECONNECT_DELAY);

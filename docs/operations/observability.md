@@ -12,6 +12,14 @@ The local trace file is the persisted source of truth for normal local launches.
 write a separate server log file, but SSH-managed launches also persist the remote process's
 stdout/stderr at `~/.t3/ssh-launch/<state>/server.log`.
 
+## TUI diagnostics
+
+With the development server running, use `vp run dev:tui --log-file /tmp/t3-tui.log`
+to save runtime diagnostics, console warnings and errors, and subprocess crash output.
+The command prints the log path before opening the UI. Logs append across runs.
+`vp run tui:dev` remains an alias for the same workflow. For a server using a custom
+data directory, pass its matching `--base-dir` to the TUI command.
+
 ## Where To Find Things
 
 ### Logs

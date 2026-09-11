@@ -1,6 +1,8 @@
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodeChildProcess from "node:child_process";
+import * as NodeFS from "node:fs";
 import * as NodeModule from "node:module";
+import * as NodePath from "node:path";
 
 import {
   AuthStandardClientScopes,
@@ -8,6 +10,7 @@ import {
   ORCHESTRATION_PROTOCOL_VERSION,
 } from "@t3tools/contracts";
 import * as Console from "effect/Console";
+import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -88,19 +91,19 @@ export function colorCapabilityEnv(env: NodeJS.ProcessEnv): { readonly COLORTERM
  * the Node IPC channel (fd 3). Resolves when the child exits, or immediately with
  * a hint if Bun isn't installed.
  */
-function runBunTui(input: {
+export function runBunTui(input: {
   readonly origin: string;
   readonly bearerToken: string;
   readonly logPath: string;
   readonly host: TuiHostMode;
   readonly mintSocketUrl: () => Promise<string>;
-}): Promise<void> {
+}): Promise<number> {
   const bunCommand = process.env.T3_TUI_BUN ?? "bun";
   const tuiEntry = NodeModule.createRequire(import.meta.url).resolve("@t3tools/tui");
 
-  return new Promise<void>((resolve) => {
+  return new Promise<number>((resolve) => {
     const child = NodeChildProcess.spawn(bunCommand, [tuiEntry], {
-      stdio: ["inherit", "inherit", "inherit", "ipc"],
+      stdio: ["inherit", "inherit", "pipe", "ipc"],
       env: buildTuiChildEnvironment({
         environment: process.env,
         origin: input.origin,
@@ -108,6 +111,15 @@ function runBunTui(input: {
         logPath: input.logPath,
         host: input.host,
       }),
+    });
+
+    child.stderr?.on("data", (chunk: Buffer) => {
+      process.stderr.write(chunk);
+      try {
+        NodeFS.appendFileSync(input.logPath, chunk);
+      } catch {
+        // Keep the terminal error visible even if the log becomes unwritable.
+      }
     });
 
     child.on("message", (message: MintRequest) => {
@@ -126,6 +138,14 @@ function runBunTui(input: {
     });
 
     child.on("error", (error: NodeJS.ErrnoException) => {
+      try {
+        NodeFS.appendFileSync(
+          input.logPath,
+          `Failed to start Bun: ${error.stack ?? error.message}\n`,
+        );
+      } catch {
+        // The error is also reported to stderr below.
+      }
       if (error.code === "ENOENT") {
         process.stderr.write(
           "`t3 tui` needs Bun to run its terminal UI. Install it from https://bun.sh " +
@@ -134,10 +154,17 @@ function runBunTui(input: {
       } else {
         process.stderr.write(`t3 tui: failed to start Bun: ${error.message}\n`);
       }
-      resolve();
+      resolve(1);
     });
 
-    child.on("close", () => resolve());
+    child.on("close", (code, signal) => {
+      try {
+        NodeFS.appendFileSync(input.logPath, `TUI exited: code=${code} signal=${signal}\n`);
+      } catch {
+        // Best-effort diagnostics.
+      }
+      resolve(code ?? (signal === "SIGINT" ? 130 : 1));
+    });
   });
 }
 
@@ -149,6 +176,10 @@ const tuiHostFlag = Flag.choice("tui-host", ["standalone", "herdr"] as const).pi
 export const tuiCommand = Command.make("tui", {
   ...authLocationFlags,
   tuiHost: tuiHostFlag,
+  logFile: Flag.string("log-file").pipe(
+    Flag.withDescription("Append TUI diagnostics and crash output to this file."),
+    Flag.optional,
+  ),
 }).pipe(
   Command.withDescription(
     "Open a terminal UI for the running local T3 Code server (requires Bun; no port forwarding).",
@@ -157,12 +188,27 @@ export const tuiCommand = Command.make("tui", {
     Effect.gen(function* () {
       const logLevel = yield* GlobalFlag.LogLevel;
       const config = yield* resolveCliAuthConfig(flags, logLevel);
+      const logPath = NodePath.resolve(
+        Option.getOrUndefined(flags.logFile) ??
+          process.env.T3_TUI_LOG ??
+          `${config.serverRuntimeStatePath}.tui.log`,
+      );
+      const startedAt = DateTime.formatIso(yield* DateTime.now);
+      yield* Effect.try(() => {
+        NodeFS.mkdirSync(NodePath.dirname(logPath), { recursive: true });
+        NodeFS.appendFileSync(logPath, `\n[${startedAt}] Starting TUI\n`, {
+          mode: 0o600,
+        });
+      });
+      yield* Console.error(`TUI log: ${logPath}`);
 
       const runtimeState = yield* readPersistedServerRuntimeState(config.serverRuntimeStatePath);
       if (Option.isNone(runtimeState)) {
-        yield* Console.error(
-          "No running T3 Code server was found. Start one with `t3 serve` (or `t3 start`) first.",
-        );
+        const message =
+          "No running T3 Code server was found. Start one with `t3 serve` (or `t3 start`) first.";
+        yield* Effect.try(() => NodeFS.appendFileSync(logPath, `${message}\n`));
+        yield* Console.error(message);
+        process.exitCode = 1;
         return;
       }
       const origin = runtimeState.value.origin;
@@ -208,15 +254,16 @@ export const tuiCommand = Command.make("tui", {
             }),
           );
 
-        yield* Effect.promise(() =>
+        const exitCode = yield* Effect.promise(() =>
           runBunTui({
             origin,
             bearerToken: session.token,
-            logPath: `${config.serverRuntimeStatePath}.tui.log`,
+            logPath,
             host: flags.tuiHost,
             mintSocketUrl,
           }),
         );
+        process.exitCode = exitCode;
       }).pipe(
         Effect.ensuring(
           Effect.promise(async () => {

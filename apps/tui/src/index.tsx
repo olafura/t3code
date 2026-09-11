@@ -5,6 +5,7 @@ import { createRoot } from "@opentui/react";
 import { installKittyClipboardExtension, installKittyImageExtension } from "@t3tools/opentui-image";
 
 import { ChatView } from "./components/ChatView.tsx";
+import { captureTuiConsole } from "./diagnostics.ts";
 import { buildTuiRuntime, makeTuiClient, type TuiOptions } from "./connection.ts";
 import { detectKittyGraphicsTerminal } from "./terminalGraphics.ts";
 import {
@@ -109,6 +110,7 @@ async function main(): Promise<void> {
   // reporting remain enabled explicitly in the shared renderer configuration.
   const tmuxPassthrough = detectKittyGraphicsTerminal();
   const renderer = await createCliRenderer(TUI_RENDERER_CONFIG);
+  const restoreConsole = captureTuiConsole(logPath);
 
   // Colour bugs are environment-dependent (SSH drops COLORTERM, multiplexers
   // rewrite TERM) and invisible in the output itself, so record what the
@@ -149,6 +151,7 @@ async function main(): Promise<void> {
       exiting = true;
       try {
         if (herdrInputHandler) renderer.removeInputHandler(herdrInputHandler);
+        restoreConsole();
         renderer.destroy();
       } catch {
         // best effort — destroy restores the terminal
@@ -169,6 +172,7 @@ async function main(): Promise<void> {
     // raw/alt-screen mode with a garbled message.
     try {
       if (herdrInputHandler) renderer.removeInputHandler(herdrInputHandler);
+      restoreConsole();
       renderer.destroy();
     } catch {
       // best effort
@@ -190,6 +194,6 @@ const program =
   bridgeFlagIndex >= 0 ? runHerdrTerminalBridge(process.argv.slice(bridgeFlagIndex + 1)) : main();
 
 program.catch((error) => {
-  process.stderr.write(`t3 tui crashed: ${String(error)}\n`);
+  process.stderr.write(`t3 tui crashed: ${error instanceof Error ? error.stack : String(error)}\n`);
   process.exit(1);
 });
