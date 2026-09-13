@@ -3,15 +3,27 @@ import QtQuick.Layouts
 import T3.Shell
 import T3.Bricks
 
+// The shape of a Mac app on macOS 26: the sidebar is the one Liquid Glass
+// layer, edge to edge under a transparent title bar with the traffic lights
+// and the sidebar toggle in it. The content column sits beside it on an
+// opaque canvas behind a hairline, with the header strip sharing the title
+// band, so there is a single row of chrome across the window.
 ShellWindow {
     id: root
 
     readonly property color canvas: Theme.palette.color("canvas", "#fafafa")
+    readonly property color hairline: Theme.palette.color("sidebarBorder", "#00000014")
     readonly property bool compact: width < 1100
     readonly property bool inspectorOverlay: width < 1400
-    readonly property bool overlayActive: !root.settingsActive && ((root.compact && navigation.visible) || (root.inspectorOverlay && rightPanel.visible))
-    property Item previousFocus: null
     readonly property bool sidebarVisible: !root.sidebarCollapsed || root.settingsActive
+    readonly property bool overlayActive: !root.settingsActive && ((root.compact && root.sidebarVisible) || (root.inspectorOverlay && inspector.visible))
+    // The title band: AppKit's compact toolbar strip (PlatformWindow.mm
+    // centres the traffic lights in it), which Qt reports as the top safe
+    // area. Offscreen, or without the native backdrop, it is still one strip.
+    readonly property real chromeHeight: Math.max(40, body.SafeArea.margins.top)
+    // Where the first control goes once the traffic lights share its band.
+    readonly property real lightsInset: 80
+    property Item previousFocus: null
 
     function dismissOverlays() {
         if (root.compact && root.sidebarVisible)
@@ -20,9 +32,14 @@ ShellWindow {
             Shell.dispatch("rightPanel.toggle");
     }
 
+    function toggleMaximized() {
+        root.visibility === Window.Maximized ? root.showNormal() : root.showMaximized();
+    }
+
     color: Theme.windowTransparent ? "transparent" : root.canvas
-    // AppKit owns the titlebar, traffic lights, window corners and resizing.
-    flags: Qt.Window
+    // AppKit keeps the traffic lights, window corners and resizing; the shell
+    // draws under its transparent title bar and treats it as the top band.
+    flags: Qt.Window | Qt.ExpandedClientAreaHint | Qt.NoTitleBarBackgroundHint
     height: 860
     width: 1360
 
@@ -36,14 +53,25 @@ ShellWindow {
         }
     }
 
-    Rectangle {
-        Accessible.ignored: true
-        anchors.fill: parent
-        color: Qt.alpha(root.canvas, 0.55)
+    // Drag anywhere in the title band; AppKit no longer owns that strip.
+    component TitleBand: Item {
+        implicitHeight: root.chromeHeight
+
+        DragHandler {
+            target: null
+
+            onActiveChanged: if (active)
+                root.startSystemMove()
+        }
+        TapHandler {
+            onDoubleTapped: root.toggleMaximized()
+        }
     }
-    ColumnLayout {
+
+    FocusScope {
+        id: body
+
         anchors.fill: parent
-        spacing: 0
 
         Keys.onEscapePressed: event => {
             if (root.overlayActive)
@@ -52,101 +80,188 @@ ShellWindow {
                 event.accepted = false;
         }
 
-        MacToolbar {
-            Layout.fillWidth: true
-            Layout.margins: 12
-            panelAvailable: rightPanel.available
-            panelOpen: rightPanel.open
-            settingsActive: root.settingsActive
-            sidebarCollapsed: root.sidebarCollapsed
-        }
-        FocusScope {
-            id: body
+        // Content column: one opaque canvas so text stays crisp, with the
+        // header strip in the title band.
+        Rectangle {
+            id: content
 
-            Layout.fillHeight: true
-            Layout.fillWidth: true
+            anchors.fill: parent
+            anchors.leftMargin: navigation.visible && (!root.compact || root.settingsActive) ? navigation.width : 0
+            anchors.rightMargin: inspector.visible && !root.inspectorOverlay ? inspector.width : 0
+            color: root.canvas
+            enabled: !root.overlayActive
+            objectName: "macContent"
 
-            Rectangle {
-                id: content
-
+            ColumnLayout {
                 anchors.fill: parent
-                anchors.leftMargin: navigation.visible && (!root.compact || root.settingsActive) ? navigation.width + 16 : 0
-                anchors.rightMargin: rightPanel.visible && !root.inspectorOverlay ? rightPanel.width : 0
-                clip: true
-                color: root.canvas
-                enabled: !root.overlayActive
-                objectName: "macContent"
+                spacing: 0
 
-                ColumnLayout {
-                    anchors.fill: parent
-                    spacing: 0
+                TitleBand {
+                    Layout.fillWidth: true
 
+                    // The traffic lights land here whenever the sidebar is away.
+                    MacToolbarButton {
+                        id: showSidebar
+
+                        anchors.verticalCenter: parent.verticalCenter
+                        enabled: !root.settingsActive
+                        icon.name: "sidebar.left"
+                        text: qsTr("Show Sidebar")
+                        visible: !navigation.visible
+                        x: root.lightsInset
+
+                        onClicked: Shell.dispatch("sidebar.toggle")
+                    }
                     Workspace {
-                        Layout.fillWidth: true
-                        color: root.canvas
+                        anchors.fill: parent
+                        anchors.leftMargin: navigation.visible ? 0 : showSidebar.x + showSidebar.width - 8
+                        anchors.rightMargin: trailing.width + 8
+                        color: "transparent"
                         visible: ready
                     }
-                    WebSurface {
-                        Layout.fillHeight: true
-                        Layout.fillWidth: true
-                        backgroundColor: root.canvas
-                        url: Shell.pageUrl
-                    }
-                    Composer {
-                        Layout.fillWidth: true
-                        color: root.canvas
-                        visible: ready
-                    }
-                    TerminalDrawer {
-                        Layout.fillWidth: true
+                    RowLayout {
+                        id: trailing
+
+                        anchors.right: parent.right
+                        anchors.rightMargin: 8
+                        anchors.verticalCenter: parent.verticalCenter
+                        spacing: 2
+
+                        MacToolbarButton {
+                            icon.name: "sidebar.right"
+                            objectName: "macInspectorToggle"
+                            text: rightPanel.open ? qsTr("Hide Inspector") : qsTr("Show Inspector")
+                            visible: rightPanel.available && !root.settingsActive
+
+                            onClicked: Shell.dispatch("rightPanel.toggle")
+                        }
+                        MacToolbarButton {
+                            enabled: !root.settingsActive
+                            icon.name: "gearshape"
+                            text: qsTr("Settings…")
+
+                            onClicked: Shell.dispatch("settings.open")
+                        }
                     }
                 }
-            }
-            Rectangle {
-                Accessible.ignored: true
-                anchors.fill: content
-                color: Theme.palette.color("navigationScrim", "#33000000")
-                visible: root.overlayActive
-
-                TapHandler {
-                    onTapped: root.dismissOverlays()
+                Rectangle {
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 1
+                    color: root.hairline
+                }
+                WebSurface {
+                    Layout.fillHeight: true
+                    Layout.fillWidth: true
+                    backgroundColor: root.canvas
+                    url: Shell.pageUrl
+                }
+                Composer {
+                    Layout.fillWidth: true
+                    color: root.canvas
+                    visible: ready
+                }
+                TerminalDrawer {
+                    Layout.fillWidth: true
                 }
             }
-            Rectangle {
-                id: navigation
+        }
+        Rectangle {
+            Accessible.ignored: true
+            anchors.fill: content
+            color: Theme.palette.color("navigationScrim", "#33000000")
+            visible: root.overlayActive
 
-                anchors.bottom: parent.bottom
-                anchors.left: parent.left
-                anchors.margins: 8
-                anchors.top: parent.top
-                color: root.compact ? Theme.palette.color("sidebar", "#f0f0f2") : "transparent"
-                objectName: "macNavigation"
-                radius: 16
-                visible: root.sidebarVisible
-                width: 256
+            TapHandler {
+                onTapped: root.dismissOverlays()
+            }
+        }
 
+        // Sidebar column: the glass itself. It paints nothing of its own
+        // unless it floats over the content in a narrow window.
+        Rectangle {
+            id: navigation
+
+            anchors.bottom: parent.bottom
+            anchors.left: parent.left
+            anchors.top: parent.top
+            color: root.compact && !root.settingsActive ? Theme.palette.color("sidebar", "#f0f0f2") : "transparent"
+            objectName: "macNavigation"
+            visible: root.sidebarVisible
+            width: 256
+
+            ColumnLayout {
+                anchors.fill: parent
+                spacing: 0
+
+                TitleBand {
+                    Layout.fillWidth: true
+
+                    MacToolbarButton {
+                        anchors.verticalCenter: parent.verticalCenter
+                        enabled: !root.settingsActive
+                        icon.name: "sidebar.left"
+                        objectName: "macSidebarToggle"
+                        text: qsTr("Hide Sidebar")
+                        x: root.lightsInset
+
+                        onClicked: Shell.dispatch("sidebar.toggle")
+                    }
+                }
                 Sidebar {
-                    anchors.fill: parent
+                    Layout.fillHeight: true
+                    Layout.fillWidth: true
                     color: "transparent"
                     visible: !root.settingsActive
                 }
                 SettingsNav {
-                    anchors.fill: parent
+                    Layout.fillHeight: true
+                    Layout.fillWidth: true
                     color: "transparent"
                     visible: root.settingsActive
                 }
             }
-            RightPanel {
-                id: rightPanel
-
+            Rectangle {
                 anchors.bottom: parent.bottom
                 anchors.right: parent.right
                 anchors.top: parent.top
-                color: root.inspectorOverlay ? Theme.palette.color("chrome", "#f0f0f2") : "transparent"
-                objectName: "macInspector"
+                color: root.hairline
+                width: 1
+            }
+        }
+
+        // Inspector column: beside the content in a wide window, over it
+        // otherwise. Its tab row shares the title band.
+        Rectangle {
+            id: inspector
+
+            anchors.bottom: parent.bottom
+            anchors.right: parent.right
+            anchors.top: parent.top
+            color: Theme.palette.color("chrome", "#f0f0f2")
+            objectName: "macInspector"
+            visible: rightPanel.available && rightPanel.open && !root.settingsActive
+            width: root.inspectorOverlay ? Math.min(360, body.width - 48) : Math.min(rightPanel.implicitWidth, root.width * 0.38)
+
+            TitleBand {
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.top: parent.top
+            }
+            RightPanel {
+                id: rightPanel
+
+                anchors.fill: parent
+                anchors.leftMargin: 1
+                anchors.topMargin: root.chromeHeight - 36
+                color: "transparent"
                 ownToggle: false
-                visible: available && open && !root.settingsActive
-                width: root.inspectorOverlay ? Math.min(360, body.width - 48) : Math.min(implicitWidth, root.width * 0.38)
+            }
+            Rectangle {
+                anchors.bottom: parent.bottom
+                anchors.left: parent.left
+                anchors.top: parent.top
+                color: root.hairline
+                width: 1
             }
         }
     }
@@ -154,6 +269,6 @@ ShellWindow {
         anchors.right: parent.right
         anchors.rightMargin: 20
         anchors.top: parent.top
-        anchors.topMargin: 64
+        anchors.topMargin: root.chromeHeight + 12
     }
 }

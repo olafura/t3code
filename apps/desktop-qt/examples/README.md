@@ -27,13 +27,18 @@ vp run theme:qt ~/.t3/shell
 On macOS, `glass-macos` follows the system light/dark appearance, with real window traffic lights,
 [Qt Quick's macOS controls](https://doc.qt.io/qt-6/qtquickcontrols-macos.html),
 and a [qt-liquid-glass](https://github.com/fsalinas26/qt-liquid-glass) backdrop.
-Copy all three files (`shell.qml`, `MacToolbar.qml`, and `theme.json`) into
+Copy all three files (`shell.qml`, `MacToolbarButton.qml`, and `theme.json`) into
 your shell directory, or pass `--config-dir apps/desktop-qt/examples/glass-macos`
 to the Qt executable. A rebuild is required for the native backdrop support.
 The first macOS configure fetches a pinned dependency; an offline checkout can
 be supplied with `-DFETCHCONTENT_SOURCE_DIR_QT_LIQUID_GLASS=/path/to/qt-liquid-glass`.
 
-Glass is confined to navigation and toolbar chrome, with opaque conversation,
+The sidebar is the glass, edge to edge under a transparent title bar that
+holds the traffic lights and the sidebar toggle; the header strip shares that
+band on the content side, so the window has one row of chrome. A shell that
+draws under the title bar (`Qt.ExpandedClientAreaHint`) gets AppKit's compact
+toolbar strip with the lights centred in it, reported to QML as the top safe
+area. Glass is confined to that navigation layer, with opaque conversation,
 code, and terminal content, following Apple's
 [Liquid Glass guidance](https://developer.apple.com/documentation/technologyoverviews/liquid-glass)
 and [adoption guidance](https://developer.apple.com/documentation/technologyoverviews/adopting-liquid-glass).
