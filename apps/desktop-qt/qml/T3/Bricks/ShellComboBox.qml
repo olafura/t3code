@@ -11,7 +11,8 @@ ComboBox {
     property string iconName: ""
     property real iconSize: 16
     property real chevronSize: 14
-    readonly property color hoverFill: Qt.alpha(Theme.palette.color("accentSurface", "#27272a"), outline ? 0.5 : 1)
+    readonly property color accentSurface: Theme.palette.color("accentSurface", "#27272a")
+    readonly property color hoverFill: Qt.alpha(accentSurface, accentSurface.a * (outline ? 0.5 : 1))
     readonly property color labelColor: control.hovered || control.down || control.popup.visible ? Theme.palette.color("text", "#e4e4e7") : Theme.palette.color("secondaryLabel", "#a1a1aa")
 
     implicitHeight: 28

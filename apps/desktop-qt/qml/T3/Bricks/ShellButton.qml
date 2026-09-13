@@ -20,7 +20,10 @@ Button {
     property real radius: Math.min(Theme.radius, 8)
     readonly property bool iconOnly: text.length === 0 && iconName.length > 0 && !chevron
     readonly property bool chevronOnly: text.length === 0 && iconName.length === 0 && chevron
-    readonly property color hoverFill: Qt.alpha(Theme.palette.color("accentSurface", "#27272a"), control.subtle ? 1 : 0.5)
+    readonly property color accentSurface: Theme.palette.color("accentSurface", "#27272a")
+    // The theme owns the surface's alpha (it is the page's `--accent`); ghost
+    // buttons use it as authored, outline ones at half strength.
+    readonly property color hoverFill: Qt.alpha(accentSurface, accentSurface.a * (control.subtle ? 1 : 0.5))
     readonly property color focusRing: Theme.palette.color("focus", "#3b82f6")
     // A lone glyph sits on the button's centre: the padding is what is left
     // of the height, so a 24px chevron half stays square and centred.
