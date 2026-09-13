@@ -77,7 +77,12 @@ vi.mock("../state/terminalSessions", async (importOriginal) => {
   };
 });
 vi.mock("../hooks/useSettings", () => ({
-  useEnvironmentSettings: () => ({ projectScriptOverrides: {}, defaultProjectScripts: [] }),
+  useEnvironmentSettings: () => ({
+    projectSettingsOverrides: {},
+    projectSettingsFolded: false,
+    projectScriptOverrides: {},
+    defaultProjectScripts: [],
+  }),
 }));
 vi.mock("../state/environments", () => ({
   useEnvironment: () => ({
