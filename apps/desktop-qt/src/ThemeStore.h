@@ -2,6 +2,7 @@
 
 #include <QColor>
 #include <QFileSystemWatcher>
+#include <QJsonObject>
 #include <QObject>
 #include <QString>
 #include <QTimer>
@@ -31,6 +32,7 @@ class ThemeStore : public QObject {
   Q_PROPERTY(qreal windowOpacity READ windowOpacity NOTIFY themeChanged)
   Q_PROPERTY(bool windowTransparent READ windowTransparent NOTIFY themeChanged)
   Q_PROPERTY(bool windowBlur READ windowBlur NOTIFY themeChanged)
+  Q_PROPERTY(bool windowLiquidGlass READ windowLiquidGlass NOTIFY themeChanged)
   Q_PROPERTY(bool frameless READ frameless NOTIFY themeChanged)
   Q_PROPERTY(QString injectionScript READ injectionScript NOTIFY themeChanged)
   Q_PROPERTY(QString lastError READ lastError NOTIFY themeChanged)
@@ -52,6 +54,8 @@ public:
   qreal windowOpacity() const { return m_windowOpacity; }
   bool windowTransparent() const { return m_windowTransparent; }
   bool windowBlur() const { return m_windowBlur; }
+  bool windowLiquidGlass() const { return m_windowLiquidGlass; }
+  bool followsSystemAppearance() const { return m_followsSystemAppearance; }
   bool frameless() const { return m_frameless; }
   QString injectionScript() const;
   QString lastError() const { return m_lastError; }
@@ -72,6 +76,7 @@ private:
   void watch();
   void scheduleReload();
   void applyDefaults();
+  void resolveColors(Qt::ColorScheme colorScheme);
 
   QString m_configDir;
   QString m_path;
@@ -83,6 +88,9 @@ private:
   QString m_id;
   QString m_name;
   QString m_appearance;
+  QJsonObject m_baseColors;
+  QJsonObject m_variants;
+  bool m_followsSystemAppearance = false;
   QVariantMap m_colors;
   QString m_radius;
   QString m_fontUi;
@@ -95,6 +103,7 @@ private:
   qreal m_windowOpacity = 1.0;
   bool m_windowTransparent = false;
   bool m_windowBlur = false;
+  bool m_windowLiquidGlass = false;
   bool m_frameless = true;
   QString m_lastError;
 };

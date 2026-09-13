@@ -36,6 +36,8 @@ ShellRuntime::ShellRuntime(Options options, ShellBridge* bridge, ThemeStore* the
   qmlRegisterSingletonInstance("T3.Shell", 1, 0, "Theme", m_theme);
   qmlRegisterSingletonInstance("T3.Shell", 1, 0, "Runtime", this);
 
+  applyApplicationAppearance(m_theme->windowLiquidGlass() && !m_theme->followsSystemAppearance(),
+                             m_theme->appearance() != QStringLiteral("light"));
   m_engine = new QQmlApplicationEngine(this);
   connect(m_engine, &QQmlEngine::warnings, this, [](const QList<QQmlError>& warnings) {
     for (const auto& warning : warnings) {
@@ -248,9 +250,11 @@ QQuickWindow* ShellRuntime::rootWindow() const {
 }
 
 void ShellRuntime::applyWindowTheme() {
+  applyApplicationAppearance(m_theme->windowLiquidGlass() && !m_theme->followsSystemAppearance(),
+                             m_theme->appearance() != QStringLiteral("light"));
   if (auto* window = rootWindow()) {
     applyWindowBlur(window, m_theme->windowTransparent() && m_theme->windowBlur(),
-                    m_theme->appearance() != QStringLiteral("light"));
+                    m_theme->appearance() != QStringLiteral("light"), m_theme->windowLiquidGlass());
   }
 }
 
