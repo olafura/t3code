@@ -421,8 +421,10 @@ const PersistentThreadTerminalDrawer = memo(function PersistentThreadTerminalDra
     <div
       className={cn(
         fill ? "flex min-h-0 flex-1 flex-col" : "grid shrink-0 overflow-clip",
+        // A filled document is placed and folded by its host (the shell's
+        // drawer), so closing leaves it on screen for the host's own slide.
         fill
-          ? !visible && "hidden"
+          ? !active && "hidden"
           : active
             ? visible
               ? "grid-rows-[1fr]"

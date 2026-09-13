@@ -101,6 +101,9 @@ ShellWindow {
             // Bound to the animated widths, so the content follows the slide.
             anchors.leftMargin: root.sidebarOverlay ? 0 : navigation.width
             anchors.rightMargin: root.inspectorOverlay ? 0 : inspector.width
+            // The page's last frame keeps its own size until Chromium delivers
+            // the next; clipped, it cannot bleed under a sliding panel.
+            clip: true
             color: root.canvas
             enabled: !root.overlayActive
             objectName: "macContent"
@@ -244,10 +247,16 @@ ShellWindow {
             width: root.sidebarVisible || root.sidebarOverlay ? openWidth : 0
             x: root.sidebarOverlay && !root.sidebarVisible ? -openWidth : 0
 
+            // One eased axis per mode: the width folds beside the content, x
+            // slides over it. Easing both lets one lag the other.
             Behavior on width {
+                enabled: !root.sidebarOverlay
+
                 Slide {}
             }
             Behavior on x {
+                enabled: root.sidebarOverlay
+
                 Slide {}
             }
 
@@ -313,9 +322,13 @@ ShellWindow {
             x: root.inspectorOverlay && !root.inspectorShown ? body.width : body.width - width
 
             Behavior on width {
+                enabled: !root.inspectorOverlay
+
                 Slide {}
             }
             Behavior on x {
+                enabled: root.inspectorOverlay
+
                 Slide {}
             }
 
