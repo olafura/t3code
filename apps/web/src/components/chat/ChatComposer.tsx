@@ -179,7 +179,10 @@ import {
   type TerminalContextSelection,
 } from "../../lib/terminalContext";
 import { useComposerPathSearch } from "../../lib/composerPathSearchState";
-import { replaceComposerContextReferences } from "@t3tools/shared/composerContextReferences";
+import {
+  collectComposerContextReferences,
+  replaceComposerContextReferences,
+} from "@t3tools/shared/composerContextReferences";
 import {
   COMPOSER_FOOTER_COMPACT_BREAKPOINT_PX,
   COMPOSER_FOOTER_WIDE_ACTIONS_COMPACT_BREAKPOINT_PX,
@@ -5947,7 +5950,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     composerImages.length === 0 &&
     composerFiles.length === 0 &&
     composerTerminalContexts.length === 0 &&
-    composerElementContexts.length === 0 &&
     composerPreviewAnnotations.length === 0 &&
     composerReviewComments.length === 0 &&
     pendingApprovals.length === 0 &&
@@ -6664,129 +6666,129 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                 )}
 
               {hideEditorForShell ? null : (
-              <div
-                className={cn(
-                  "relative",
-                  isComposerResting && "flex min-w-0 items-center gap-1",
-                  isComposerResting &&
-                    ((settings.contextWindowMeterEnabled && activeContextWindow) ||
-                    reserveContextWindowMeter
-                      ? "pr-28"
-                      : showComposerAttachAction
-                        ? "pr-20"
-                        : "pr-12"),
-                )}
-              >
-                {previewFile ? (
-                  <Dialog
-                    open
-                    onOpenChange={(open) => {
-                      if (!open) setPreviewFileId(null);
-                    }}
-                  >
-                    <DialogPopup
-                      {...composerFloatingLayerProps}
-                      className="h-[min(85vh,52rem)] max-w-4xl overflow-hidden"
-                      showCloseButton={false}
+                <div
+                  className={cn(
+                    "relative",
+                    isComposerResting && "flex min-w-0 items-center gap-1",
+                    isComposerResting &&
+                      ((settings.contextWindowMeterEnabled && activeContextWindow) ||
+                      reserveContextWindowMeter
+                        ? "pr-28"
+                        : showComposerAttachAction
+                          ? "pr-20"
+                          : "pr-12"),
+                  )}
+                >
+                  {previewFile ? (
+                    <Dialog
+                      open
+                      onOpenChange={(open) => {
+                        if (!open) setPreviewFileId(null);
+                      }}
                     >
-                      <DialogTitle className="sr-only">{previewFile.name}</DialogTitle>
-                      <AttachmentFilePreview
-                        key={previewFile.id}
-                        name={previewFile.name}
-                        mimeType={previewFile.mimeType}
-                        sizeBytes={previewFile.sizeBytes}
-                        file={previewFile.file}
-                        origin="Draft"
-                        {...(previewFile.uploadedAttachmentId && previewFile.uploadEnvironmentId
-                          ? {
-                              asset: {
-                                environmentId: previewFile.uploadEnvironmentId,
-                                attachmentId: previewFile.uploadedAttachmentId,
-                              },
-                            }
-                          : {})}
-                        onRemove={() => {
-                          removeComposerFileFromDraft(previewFile.id);
-                          setPreviewFileId(null);
-                        }}
-                        onClose={() => setPreviewFileId(null)}
-                      />
-                    </DialogPopup>
-                  </Dialog>
-                ) : null}
-                <ComposerContextActionsContext value={composerContextActions}>
-                  <ComposerPromptEditor
-                    editorRef={composerEditorRef}
-                    value={
-                      isComposerApprovalState
-                        ? ""
-                        : activePendingProgress
-                          ? activePendingProgress.customAnswer
-                          : prompt
-                    }
-                    cursor={composerCursor}
-                    contextRecords={composerContextRecords}
-                    buildContextClipboardFragment={buildContextClipboardFragment}
-                    importContextFragment={importContextFragment}
-                    skills={selectedProviderSkills}
-                    containerClassName={cn(isComposerResting && "min-w-0 flex-1")}
-                    className={cn(
-                      showMobilePendingAnswerActions && "max-sm:pb-11",
-                      isComposerResting &&
-                        "max-h-8 min-h-8 overflow-hidden whitespace-pre! leading-8",
-                    )}
-                    placeholderClassName={cn(
-                      isComposerResting &&
-                        "flex items-center overflow-hidden whitespace-nowrap leading-8",
-                    )}
-                    onChange={onPromptChange}
-                    onVisibleSelectionChange={expandComposerForEditorChange}
-                    onCommandKeyDown={onComposerCommandKey}
-                    onPageScrollKeyDown={onPageScrollKeyDown}
-                    onPageScrollKeyUp={onPageScrollKeyUp}
-                    onPageScrollRelease={onPageScrollRelease}
-                    onCitationSubmitAndSend={submitCitationAndSend}
-                    onPaste={onComposerPaste}
-                    placeholder={composerPlaceholder}
-                    disabled={
-                      isConnecting ||
-                      isComposerApprovalState ||
-                      projectSelectionRequired ||
-                      isChoiceOnlyPendingQuestion ||
-                      activePendingIsResponding
-                    }
-                  />
-                </ComposerContextActionsContext>
-                {isComposerResting ? collapsedComposerImagePreviews : null}
-                {showMobilePendingAnswerActions ? (
-                  <div
-                    data-chat-composer-mobile-pending-actions="true"
-                    className="absolute bottom-0 right-0 flex items-center justify-end gap-1"
-                  >
-                    <ComposerPrimaryActions
-                      compact
-                      pendingAction={pendingPrimaryAction}
-                      isRunning={false}
-                      showPlanFollowUpPrompt={false}
-                      promptHasText={false}
-                      isSendBusy={isSendBusy}
-                      sendDisabledReason={sendDisabledReason}
-                      isConnecting={isConnecting}
-                      isEnvironmentUnavailable={
-                        environmentUnavailable !== null ||
-                        noProviderAvailable ||
-                        projectSelectionRequired
+                      <DialogPopup
+                        {...composerFloatingLayerProps}
+                        className="h-[min(85vh,52rem)] max-w-4xl overflow-hidden"
+                        showCloseButton={false}
+                      >
+                        <DialogTitle className="sr-only">{previewFile.name}</DialogTitle>
+                        <AttachmentFilePreview
+                          key={previewFile.id}
+                          name={previewFile.name}
+                          mimeType={previewFile.mimeType}
+                          sizeBytes={previewFile.sizeBytes}
+                          file={previewFile.file}
+                          origin="Draft"
+                          {...(previewFile.uploadedAttachmentId && previewFile.uploadEnvironmentId
+                            ? {
+                                asset: {
+                                  environmentId: previewFile.uploadEnvironmentId,
+                                  attachmentId: previewFile.uploadedAttachmentId,
+                                },
+                              }
+                            : {})}
+                          onRemove={() => {
+                            removeComposerFileFromDraft(previewFile.id);
+                            setPreviewFileId(null);
+                          }}
+                          onClose={() => setPreviewFileId(null)}
+                        />
+                      </DialogPopup>
+                    </Dialog>
+                  ) : null}
+                  <ComposerContextActionsContext value={composerContextActions}>
+                    <ComposerPromptEditor
+                      editorRef={composerEditorRef}
+                      value={
+                        isComposerApprovalState
+                          ? ""
+                          : activePendingProgress
+                            ? activePendingProgress.customAnswer
+                            : prompt
                       }
-                      isPreparingWorktree={false}
-                      hasSendableContent={false}
-                      preserveComposerFocusOnPointerDown
-                      onPreviousPendingQuestion={onPreviousActivePendingUserInputQuestion}
-                      onInterrupt={handleInterruptPrimaryAction}
-                      onImplementPlanInNewThread={handleImplementPlanInNewThreadPrimaryAction}
+                      cursor={composerCursor}
+                      contextRecords={composerContextRecords}
+                      buildContextClipboardFragment={buildContextClipboardFragment}
+                      importContextFragment={importContextFragment}
+                      skills={selectedProviderSkills}
+                      containerClassName={cn(isComposerResting && "min-w-0 flex-1")}
+                      className={cn(
+                        showMobilePendingAnswerActions && "max-sm:pb-11",
+                        isComposerResting &&
+                          "max-h-8 min-h-8 overflow-hidden whitespace-pre! leading-8",
+                      )}
+                      placeholderClassName={cn(
+                        isComposerResting &&
+                          "flex items-center overflow-hidden whitespace-nowrap leading-8",
+                      )}
+                      onChange={onPromptChange}
+                      onVisibleSelectionChange={expandComposerForEditorChange}
+                      onCommandKeyDown={onComposerCommandKey}
+                      onPageScrollKeyDown={onPageScrollKeyDown}
+                      onPageScrollKeyUp={onPageScrollKeyUp}
+                      onPageScrollRelease={onPageScrollRelease}
+                      onCitationSubmitAndSend={submitCitationAndSend}
+                      onPaste={onComposerPaste}
+                      placeholder={composerPlaceholder}
+                      disabled={
+                        isConnecting ||
+                        isComposerApprovalState ||
+                        projectSelectionRequired ||
+                        isChoiceOnlyPendingQuestion ||
+                        activePendingIsResponding
+                      }
                     />
-                  </div>
-                ) : null}
-              </div>
+                  </ComposerContextActionsContext>
+                  {isComposerResting ? collapsedComposerImagePreviews : null}
+                  {showMobilePendingAnswerActions ? (
+                    <div
+                      data-chat-composer-mobile-pending-actions="true"
+                      className="absolute bottom-0 right-0 flex items-center justify-end gap-1"
+                    >
+                      <ComposerPrimaryActions
+                        compact
+                        pendingAction={pendingPrimaryAction}
+                        isRunning={false}
+                        showPlanFollowUpPrompt={false}
+                        promptHasText={false}
+                        isSendBusy={isSendBusy}
+                        sendDisabledReason={sendDisabledReason}
+                        isConnecting={isConnecting}
+                        isEnvironmentUnavailable={
+                          environmentUnavailable !== null ||
+                          noProviderAvailable ||
+                          projectSelectionRequired
+                        }
+                        isPreparingWorktree={false}
+                        hasSendableContent={false}
+                        preserveComposerFocusOnPointerDown
+                        onPreviousPendingQuestion={onPreviousActivePendingUserInputQuestion}
+                        onInterrupt={handleInterruptPrimaryAction}
+                        onImplementPlanInNewThread={handleImplementPlanInNewThreadPrimaryAction}
+                      />
+                    </div>
+                  ) : null}
+                </div>
               )}
             </div>
 
@@ -6817,7 +6819,26 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                 attachments={standaloneComposerImages}
                 terminalContexts={composerTerminalContexts}
                 onRemoveAttachment={removeComposerImage}
-                onRemoveTerminalContext={removeComposerTerminalContextFromDraft}
+                onRemoveTerminalContext={(id) => {
+                  // A terminal context lives as an inline reference in the prompt;
+                  // dropping the reference is what removes the context, through the
+                  // same path an editor deletion takes.
+                  const context = composerTerminalContexts.find((candidate) => candidate.id === id);
+                  if (!context) return;
+                  const { contextId } = terminalContextReference(context);
+                  const nextPrompt = replaceComposerContextReferences(
+                    promptRef.current,
+                    (occurrence) => (occurrence.contextId === contextId ? "" : occurrence.source),
+                  );
+                  const nextCursor = clampCollapsedComposerCursor(nextPrompt, composerCursor);
+                  onPromptChange(
+                    nextPrompt,
+                    nextCursor,
+                    expandCollapsedComposerCursor(nextPrompt, nextCursor),
+                    false,
+                    collectComposerContextReferences(nextPrompt).map((entry) => entry.contextId),
+                  );
+                }}
                 placeholder={composerPlaceholder}
                 editorDisabled={
                   isConnecting ||

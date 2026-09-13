@@ -40,7 +40,7 @@ export interface ShellComposerBridgeProps {
   readonly setPrompt: (prompt: string) => void;
   /** Collapsed caret ChatComposer tracks; published expanded for the raw-text editor. */
   readonly composerCursor: number;
-  readonly triggerKind: "path" | "slash-command" | "skill" | null;
+  readonly triggerKind: "path" | "slash-command" | "skill" | "pull-request" | null;
   readonly suggestions: ReadonlyArray<ComposerCommandItem>;
   readonly suggestionsEmptyText: string | null;
   /** Expanded caret from the shell's editor; re-detects the trigger. */
