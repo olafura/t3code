@@ -1,5 +1,5 @@
 import * as Schema from "effect/Schema";
-import { RuntimeMode } from "./orchestration";
+import { RuntimeMode } from "./orchestration.ts";
 
 /**
  * Contract between the web app and a native shell hosting it (the Qt shell
@@ -141,7 +141,13 @@ export type ShellComposerRuntimeMode = typeof ShellComposerRuntimeMode.Type;
 
 export const ShellComposerSuggestion = Schema.Struct({
   id: Schema.String,
-  kind: Schema.Literals(["path", "slash-command", "provider-slash-command", "skill"]),
+  kind: Schema.Literals([
+    "path",
+    "slash-command",
+    "provider-slash-command",
+    "skill",
+    "pull-request",
+  ]),
   label: Schema.String,
   description: Schema.String,
 });
@@ -163,7 +169,7 @@ export const ShellComposerState = Schema.Struct({
   /** Caret position in `text` (raw prompt, mentions written out) after the page changed it. */
   cursor: Schema.Number,
   /** Active `@`/`$`/`/` trigger at the caret, with what it resolves to. */
-  triggerKind: Schema.NullOr(Schema.Literals(["path", "slash-command", "skill"])),
+  triggerKind: Schema.NullOr(Schema.Literals(["path", "slash-command", "skill", "pull-request"])),
   suggestions: Schema.Array(ShellComposerSuggestion),
   suggestionsEmptyText: Schema.NullOr(Schema.String),
   /** Attached images and terminal selections on the draft (removable chips). */
@@ -206,6 +212,7 @@ export const ShellRightPanelKind = Schema.Literals([
   "pull-request",
   "pull-requests",
   "agents",
+  "device",
 ]);
 export type ShellRightPanelKind = typeof ShellRightPanelKind.Type;
 
