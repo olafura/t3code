@@ -94,6 +94,7 @@ function useSidebarVisibility() {
 
 function SidebarProvider({
   defaultOpen = true,
+  responsive = true,
   open: openProp,
   onOpenChange: setOpenProp,
   className,
@@ -102,10 +103,12 @@ function SidebarProvider({
   ...props
 }: React.ComponentProps<"div"> & {
   defaultOpen?: boolean;
+  responsive?: boolean;
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
 }) {
-  const isMobile = useIsMobile();
+  const smallViewport = useIsMobile();
+  const isMobile = responsive && smallViewport;
   const [openMobile, setOpenMobile] = React.useState(false);
 
   // This is the internal state of the sidebar.
