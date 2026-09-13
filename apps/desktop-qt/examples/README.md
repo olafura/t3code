@@ -24,6 +24,27 @@ vp run theme:qt
 vp run theme:qt ~/.t3/shell
 ```
 
+On macOS, `glass-macos` follows the system light/dark appearance, with real window traffic lights,
+[Qt Quick's macOS controls](https://doc.qt.io/qt-6/qtquickcontrols-macos.html),
+and a [qt-liquid-glass](https://github.com/fsalinas26/qt-liquid-glass) backdrop.
+Copy all three files (`shell.qml`, `MacToolbar.qml`, and `theme.json`) into
+your shell directory, or pass `--config-dir apps/desktop-qt/examples/glass-macos`
+to the Qt executable. A rebuild is required for the native backdrop support.
+The first macOS configure fetches a pinned dependency; an offline checkout can
+be supplied with `-DFETCHCONTENT_SOURCE_DIR_QT_LIQUID_GLASS=/path/to/qt-liquid-glass`.
+
+Glass is confined to navigation and toolbar chrome, with opaque conversation,
+code, and terminal content, following Apple's
+[Liquid Glass guidance](https://developer.apple.com/documentation/technologyoverviews/liquid-glass)
+and [adoption guidance](https://developer.apple.com/documentation/technologyoverviews/adopting-liquid-glass).
+macOS 26 uses `NSGlassEffectView`; older systems use `NSVisualEffectView`.
+Reduce Transparency uses an opaque backing and the standard material. The
+variant opts in through `window.liquidGlass` alongside `transparent` and `blur`.
+`window.followSystemAppearance` selects the matching `variants.light` or
+`variants.dark` colors when the system appearance changes, including while running.
+The original `glass` keeps its existing blur. The native controls are macOS-only,
+so use `glass` on other platforms.
+
 What you can reach from `shell.qml`: `ShellWindow` as the root (window
 colour, opacity and frame from the theme, `sidebarCollapsed` and
 `settingsActive` from the page, the error overlay and the page's window
