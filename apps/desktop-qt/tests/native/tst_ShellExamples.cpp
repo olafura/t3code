@@ -76,6 +76,11 @@ private slots:
         QTest::newRow(qPrintable(QString("%1-%2").arg(example).arg(width))) << QString(example) << width;
       }
     }
+#ifdef Q_OS_MACOS
+    for (const int width : {1400, 1180, 1000, 640}) {
+      QTest::newRow(qPrintable(QString("glass-macos-%1").arg(width))) << QString("glass-macos") << width;
+    }
+#endif
   }
 
   void layoutsFit() {
@@ -102,6 +107,79 @@ private slots:
     QVERIFY(title);
     if (width == 1400) QTRY_VERIFY(!title->property("truncated").toBool());
     QTRY_VERIFY(title->mapToScene(QPointF(title->width(), 0)).x() <= window->width());
+
+    if (example == "glass-macos") {
+      auto* navigation = window->findChild<QQuickItem*>("macNavigation");
+      auto* content = window->findChild<QQuickItem*>("macContent");
+      QVERIFY(navigation);
+      QVERIFY(content);
+      QVERIFY(!(window->flags() & Qt::FramelessWindowHint));
+      QVERIFY(theme->windowLiquidGlass());
+      QTRY_VERIFY(navigation->isVisible());
+      const qreal withSidebar = content->width();
+      bridge.publish("layout", QVariantMap{{"sidebarCollapsed", true}});
+      QTRY_VERIFY(!navigation->isVisible());
+      if (width >= 1100) QTRY_VERIFY(content->width() > withSidebar);
+      else QTRY_COMPARE(content->width(), width);
+      bridge.publish("settings", QVariantMap{{"active", true}, {"sections", QVariantList{}},
+                                             {"searchQuery", ""}, {"searchResults", QVariantList{}}});
+      QTRY_VERIFY(navigation->isVisible());
+      QTRY_COMPARE(navigation->width(), 256);
+      bridge.publish("settings", QVariant());
+      QTRY_VERIFY(!navigation->isVisible());
+      bridge.publish("layout", QVariantMap{{"sidebarCollapsed", false}});
+      QTRY_VERIFY(navigation->isVisible());
+      QTRY_VERIFY(content->width() >= 300);
+      QTRY_VERIFY(content->mapToScene(QPointF(content->width(), 0)).x() <= window->width());
+      auto* inspector = window->findChild<QQuickItem*>("macInspector");
+      QVERIFY(inspector);
+      if (width < 1100) bridge.publish("layout", QVariantMap{{"sidebarCollapsed", true}});
+      content->forceActiveFocus();
+      QTRY_VERIFY(content->hasActiveFocus());
+      auto panel = QJsonDocument::fromJson(R"({
+        "isOpen":true,"surfaces":[],"activeSurfaceId":null,"embedPath":"",
+        "canAdd":{"diff":true,"files":true,"terminal":true,"pullRequest":false,"agents":true}
+      })").toVariant().toMap();
+      bridge.publish("rightPanel", panel);
+      QTRY_VERIFY(inspector->isVisible());
+      QTRY_VERIFY(inspector->width() > 0);
+      if (width < 1100) QTRY_COMPARE(content->width(), width);
+      else if (width < 1400) QTRY_COMPARE(content->width(), withSidebar);
+      QTRY_VERIFY(content->width() >= 300);
+      QTRY_VERIFY(inspector->mapToScene(QPointF(inspector->width(), 0)).x() <= window->width());
+      if (width < 1400) {
+        QVERIFY(!content->isEnabled());
+        QVERIFY(!content->hasActiveFocus());
+        auto* toggle = window->findChild<QQuickItem*>("macInspectorToggle");
+        QVERIFY(toggle);
+        toggle->forceActiveFocus();
+        QSignalSpy actions(&bridge, &ShellBridge::actionRequested);
+        QTest::keyClick(window, Qt::Key_Escape);
+        QTRY_COMPARE(actions.count(), 1);
+        QCOMPARE(actions.first().first().toString(), "rightPanel.toggle");
+        // The page remains authoritative and publishes the result of the action.
+      }
+      panel["isOpen"] = false;
+      bridge.publish("rightPanel", panel);
+      QTRY_VERIFY(!inspector->isVisible());
+      QTRY_VERIFY(content->isEnabled());
+      QTRY_VERIFY(content->hasActiveFocus());
+      if (width >= 1100) QVERIFY(navigation->isVisible());
+      QTRY_VERIFY(content->width() >= withSidebar);
+      bridge.publish("rightPanel", QVariant());
+      bridge.publish("layout", QVariantMap{{"sidebarCollapsed", false}});
+      if (width < 1100) {
+        QTRY_VERIFY(!content->isEnabled());
+        QSignalSpy actions(&bridge, &ShellBridge::actionRequested);
+        QTest::keyClick(window, Qt::Key_Escape);
+        QTRY_COMPARE(actions.count(), 1);
+        QCOMPARE(actions.first().first().toString(), "sidebar.toggle");
+        bridge.publish("layout", QVariantMap{{"sidebarCollapsed", true}});
+        QTRY_VERIFY(content->isEnabled());
+        QTRY_VERIFY(content->hasActiveFocus());
+        bridge.publish("layout", QVariantMap{{"sidebarCollapsed", false}});
+      }
+    }
 
     if (example == "folders") {
       auto* explorer = window->findChild<QQuickItem*>("folderExplorer");
