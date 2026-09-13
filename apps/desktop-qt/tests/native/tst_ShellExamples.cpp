@@ -31,6 +31,7 @@ class ShellExamplesTest : public QObject {
 
   QTemporaryDir directory;
   ShellBridge bridge;
+  QVariantMap initialState;
   std::unique_ptr<ThemeStore> theme;
   std::unique_ptr<WebProfile> profile;
   std::unique_ptr<ShellRuntime> runtime;
@@ -66,6 +67,7 @@ private slots:
       "notifications": {"items": []}
     })").toVariant().toMap();
     for (auto it = state.cbegin(); it != state.cend(); ++it) bridge.publish(it.key(), it.value());
+    initialState = state;
   }
 
   void layoutsFit_data() {
@@ -77,7 +79,7 @@ private slots:
       }
     }
 #ifdef Q_OS_MACOS
-    for (const int width : {1400, 1180, 1000, 640}) {
+    for (const int width : {1400, 1000, 900, 640}) {
       QTest::newRow(qPrintable(QString("glass-macos-%1").arg(width))) << QString("glass-macos") << width;
     }
 #endif
@@ -109,6 +111,11 @@ private slots:
     QTRY_VERIFY(title->mapToScene(QPointF(title->width(), 0)).x() <= window->width());
 
     if (example == "glass-macos") {
+      // The page's breakpoints: the sidebar goes off-canvas under 768, the
+      // right panel becomes a sheet under 980. Panels slide, so every
+      // geometry check waits.
+      const bool sidebarOverlay = width < 768;
+      const bool inspectorOverlay = width < 980;
       auto* navigation = window->findChild<QQuickItem*>("macNavigation");
       auto* content = window->findChild<QQuickItem*>("macContent");
       QVERIFY(navigation);
@@ -116,24 +123,31 @@ private slots:
       QVERIFY(!(window->flags() & Qt::FramelessWindowHint));
       QVERIFY(theme->windowLiquidGlass());
       QTRY_VERIFY(navigation->isVisible());
+      QTRY_COMPARE(navigation->width(), 256);
+      QTRY_COMPARE(content->width(), sidebarOverlay ? width : width - 256);
       const qreal withSidebar = content->width();
       bridge.publish("layout", QVariantMap{{"sidebarCollapsed", true}});
       QTRY_VERIFY(!navigation->isVisible());
-      if (width >= 1100) QTRY_VERIFY(content->width() > withSidebar);
-      else QTRY_COMPARE(content->width(), width);
+      QTRY_COMPARE(content->width(), width);
       bridge.publish("settings", QVariantMap{{"active", true}, {"sections", QVariantList{}},
                                              {"searchQuery", ""}, {"searchResults", QVariantList{}}});
       QTRY_VERIFY(navigation->isVisible());
       QTRY_COMPARE(navigation->width(), 256);
+      QTRY_COMPARE(content->width(), width - 256);
       bridge.publish("settings", QVariant());
       QTRY_VERIFY(!navigation->isVisible());
       bridge.publish("layout", QVariantMap{{"sidebarCollapsed", false}});
       QTRY_VERIFY(navigation->isVisible());
-      QTRY_VERIFY(content->width() >= 300);
-      QTRY_VERIFY(content->mapToScene(QPointF(content->width(), 0)).x() <= window->width());
+      QTRY_COMPARE(content->width(), withSidebar);
+      QVERIFY(content->width() >= 300);
+      QVERIFY(content->mapToScene(QPointF(content->width(), 0)).x() <= window->width());
       auto* inspector = window->findChild<QQuickItem*>("macInspector");
       QVERIFY(inspector);
-      if (width < 1100) bridge.publish("layout", QVariantMap{{"sidebarCollapsed", true}});
+      if (sidebarOverlay) {
+        bridge.publish("layout", QVariantMap{{"sidebarCollapsed", true}});
+        QTRY_VERIFY(!navigation->isVisible());
+      }
+      const qreal beforeInspector = content->width();
       content->forceActiveFocus();
       QTRY_VERIFY(content->hasActiveFocus());
       auto panel = QJsonDocument::fromJson(R"({
@@ -143,11 +157,10 @@ private slots:
       bridge.publish("rightPanel", panel);
       QTRY_VERIFY(inspector->isVisible());
       QTRY_VERIFY(inspector->width() > 0);
-      if (width < 1100) QTRY_COMPARE(content->width(), width);
-      else if (width < 1400) QTRY_COMPARE(content->width(), withSidebar);
-      QTRY_VERIFY(content->width() >= 300);
-      QTRY_VERIFY(inspector->mapToScene(QPointF(inspector->width(), 0)).x() <= window->width());
-      if (width < 1400) {
+      QTRY_COMPARE(inspector->mapToScene(QPointF(inspector->width(), 0)).x(), qreal(window->width()));
+      if (inspectorOverlay) {
+        // A sheet: the content keeps its width, loses input, and Escape closes it.
+        QTRY_COMPARE(content->width(), beforeInspector);
         QVERIFY(!content->isEnabled());
         QVERIFY(!content->hasActiveFocus());
         auto* toggle = window->findChild<QQuickItem*>("macInspectorToggle");
@@ -158,17 +171,25 @@ private slots:
         QTRY_COMPARE(actions.count(), 1);
         QCOMPARE(actions.first().first().toString(), "rightPanel.toggle");
         // The page remains authoritative and publishes the result of the action.
+      } else {
+        // Beside the content: the content folds back and stays usable.
+        QTRY_VERIFY(content->width() < beforeInspector);
+        QVERIFY(content->isEnabled());
+        QVERIFY(content->hasActiveFocus());
       }
+      QTRY_VERIFY(content->width() >= 300);
       panel["isOpen"] = false;
       bridge.publish("rightPanel", panel);
       QTRY_VERIFY(!inspector->isVisible());
       QTRY_VERIFY(content->isEnabled());
       QTRY_VERIFY(content->hasActiveFocus());
-      if (width >= 1100) QVERIFY(navigation->isVisible());
-      QTRY_VERIFY(content->width() >= withSidebar);
+      QTRY_COMPARE(content->width(), beforeInspector);
+      if (!sidebarOverlay) QVERIFY(navigation->isVisible());
       bridge.publish("rightPanel", QVariant());
       bridge.publish("layout", QVariantMap{{"sidebarCollapsed", false}});
-      if (width < 1100) {
+      if (sidebarOverlay) {
+        QTRY_VERIFY(navigation->isVisible());
+        QTRY_COMPARE(navigation->x(), 0);
         QTRY_VERIFY(!content->isEnabled());
         QSignalSpy actions(&bridge, &ShellBridge::actionRequested);
         QTest::keyClick(window, Qt::Key_Escape);
@@ -179,6 +200,30 @@ private slots:
         QTRY_VERIFY(content->hasActiveFocus());
         bridge.publish("layout", QVariantMap{{"sidebarCollapsed", false}});
       }
+      // The terminal drawer folds open to the page's height and back to nothing.
+      // The slot stays visible at zero height (an invisible item gets no layout
+      // height, so it could never open); the drawer inside it is what hides.
+      auto* terminal = window->findChild<QQuickItem*>("macTerminal");
+      QVERIFY(terminal);
+      QVERIFY(!terminal->childItems().isEmpty());
+      auto* drawer = terminal->childItems().first();
+      QCOMPARE(terminal->height(), 0);
+      QVERIFY(!drawer->isVisible());
+      auto workspace = initialState.value("workspace").toMap();
+      workspace["terminalAvailable"] = true;
+      workspace["terminalOpen"] = true;
+      workspace["terminalHeight"] = 280;
+      workspace["terminalEmbedPath"] = "/embed/env/thread?surface=terminal";
+      const qreal beforeTerminal = content->height();
+      bridge.publish("workspace", workspace);
+      QTRY_COMPARE(terminal->height(), 280);
+      QVERIFY(drawer->isVisible());
+      QCOMPARE(content->height(), beforeTerminal);
+      workspace["terminalOpen"] = false;
+      bridge.publish("workspace", workspace);
+      QTRY_COMPARE(terminal->height(), 0);
+      QVERIFY(!drawer->isVisible());
+      bridge.publish("workspace", initialState.value("workspace"));
     }
 
     if (example == "folders") {
