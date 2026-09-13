@@ -100,12 +100,8 @@ target_compile_definitions(t3code-qt PRIVATE
   T3_APP_VERSION="${PROJECT_VERSION}"
 )
 
-if(APPLE)
-  target_sources(t3code-qt PRIVATE src/PlatformWindow.mm)
-  target_link_libraries(t3code-qt PRIVATE "-framework AppKit")
-else()
-  target_sources(t3code-qt PRIVATE src/PlatformWindow.cpp)
-endif()
+include(cmake/PlatformWindow.cmake)
+t3_target_platform_window(t3code-qt)
 
 add_subdirectory(qml/T3/Bricks)
 

@@ -1,3 +1,5 @@
 #include "PlatformWindow.h"
 
-void applyWindowBlur(QWindow*, bool, bool) {}
+void applyApplicationAppearance(bool, bool) {}
+
+void applyWindowBlur(QWindow*, bool, bool, bool) {}

@@ -4,6 +4,7 @@
 #include <QQmlComponent>
 #include <QQmlContext>
 #include <QSignalSpy>
+#include <QStyleHints>
 #include <QQuickWebEngineProfile>
 #include <QTemporaryDir>
 #include <QTest>
@@ -23,6 +24,89 @@ signals:
   void scriptFinished(const QVariant& result);
 
 private slots:
+  void systemAppearanceUpdatesQmlAndWebWithoutReloading() {
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    QFile file(directory.filePath("theme.json"));
+    QVERIFY(file.open(QIODevice::WriteOnly));
+    file.write("{\"id\":\"system-glass\",\"appearance\":\"light\","
+      "\"colors\":{\"canvas\":\"#fafafa\",\"text\":\"#1d1d1f\"},"
+      "\"variants\":{\"dark\":{\"canvas\":\"#1c1c1e\",\"text\":\"#f5f5f7\",\"darkOnly\":\"#123456\"}},"
+      "\"window\":{\"followSystemAppearance\":true}}");
+    file.close();
+    ThemeStore theme(directory.path());
+    QVERIFY(theme.followsSystemAppearance());
+    QCOMPARE(theme.appearance(), QGuiApplication::styleHints()->colorScheme() == Qt::ColorScheme::Dark
+                                    ? QString("dark") : QString("light"));
+    QQmlEngine engine;
+    engine.rootContext()->setContextProperty("Theme", &theme);
+    QQmlComponent component(&engine);
+    component.setData("import QtQuick\nRectangle { color: Theme.palette.color(\"canvas\", \"#111111\") }", QUrl());
+    QScopedPointer<QObject> item(component.create());
+    QVERIFY2(item, qPrintable(component.errorString()));
+    QWebEngineProfile profile;
+    QWebEnginePage page(&profile);
+    QSignalSpy loaded(&page, &QWebEnginePage::loadFinished);
+    page.setHtml("<!doctype html><html><body>System appearance</body></html>");
+    QTRY_VERIFY(!loaded.isEmpty());
+    connect(&theme, &ThemeStore::themeChanged, &page, [&] { page.runJavaScript(theme.injectionScript()); });
+    for (auto scheme : {Qt::ColorScheme::Dark, Qt::ColorScheme::Light, Qt::ColorScheme::Dark}) {
+      // Deliver the platform notification without changing the user's OS preferences.
+      QGuiApplication::styleHints()->colorSchemeChanged(scheme);
+      const bool dark = scheme == Qt::ColorScheme::Dark;
+      QCOMPARE(theme.appearance(), dark ? QString("dark") : QString("light"));
+      QCOMPARE(item->property("color").value<QColor>(), QColor(dark ? "#1c1c1e" : "#fafafa"));
+      QCOMPARE(theme.colors().contains("darkOnly"), dark);
+      QSignalSpy evaluated(this, &ShellRuntimeTest::scriptFinished);
+      page.runJavaScript(theme.injectionScript() + R"(;
+        ({dark: document.documentElement.classList.contains('dark'),
+          canvas: document.documentElement.style.getPropertyValue('--app-theme-canvas')})
+      )", [this](const QVariant& value) { emit scriptFinished(value); });
+      QTRY_COMPARE(evaluated.count(), 1);
+      const auto result = evaluated.first().first().toMap();
+      QCOMPARE(result.value("dark").toBool(), dark);
+      QCOMPARE(result.value("canvas").toString(), dark ? QString("#1c1c1e") : QString("#fafafa"));
+    }
+    QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::Truncate));
+    file.write("{\"id\":\"fixed\",\"appearance\":\"light\",\"colors\":{\"canvas\":\"#ffffff\"}}");
+    file.close();
+    theme.reload();
+    QVERIFY(!theme.followsSystemAppearance());
+    QSignalSpy changed(&theme, &ThemeStore::themeChanged);
+    QGuiApplication::styleHints()->colorSchemeChanged(Qt::ColorScheme::Dark);
+    QCOMPARE(changed.count(), 0);
+    QCOMPARE(theme.appearance(), QString("light"));
+    QCOMPARE(item->property("color").value<QColor>(), QColor("#ffffff"));
+    QVERIFY(file.remove());
+    theme.reload();
+    QVERIFY(!theme.followsSystemAppearance());
+  }
+
+  void liquidGlassThemeOptInResetsWhenThemeChanges() {
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    QFile file(directory.filePath("theme.json"));
+    QVERIFY(file.open(QIODevice::WriteOnly));
+    file.write(R"({"version":1,"id":"glass","appearance":"light","colors":{},
+                   "window":{"transparent":true,"blur":true,"liquidGlass":true,"frameless":false}})");
+    file.close();
+    ThemeStore theme(directory.path());
+    QVERIFY(theme.windowLiquidGlass());
+    QVERIFY(theme.windowTransparent());
+    QVERIFY(theme.windowBlur());
+    QVERIFY(!theme.frameless());
+    QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::Truncate));
+    file.write(R"({"version":1,"id":"plain","appearance":"light","colors":{}})");
+    file.close();
+    theme.reload();
+    QVERIFY(!theme.windowLiquidGlass());
+    QVERIFY(!theme.windowTransparent());
+    QVERIFY(!theme.windowBlur());
+    QVERIFY(file.remove());
+    theme.reload();
+    QVERIFY(!theme.windowLiquidGlass());
+  }
+
   void qmlPaletteFollowsPublishedPageTheme() {
     QTemporaryDir directory;
     QVERIFY(directory.isValid());

@@ -4,11 +4,13 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QFontDatabase>
+#include <QGuiApplication>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonValue>
 #include <QRegularExpression>
+#include <QStyleHints>
 
 namespace {
 
@@ -72,6 +74,13 @@ ThemeStore::ThemeStore(const QString& configDir, QObject* parent)
     watch();
     scheduleReload();
   });
+  connect(QGuiApplication::styleHints(), &QStyleHints::colorSchemeChanged, this,
+          [this](Qt::ColorScheme scheme) {
+    if (!m_followsSystemAppearance) return;
+    const QString previous = m_appearance;
+    resolveColors(scheme);
+    if (m_appearance != previous) emit themeChanged();
+  });
   applyDefaults();
   watch();
   reload();
@@ -95,6 +104,9 @@ void ThemeStore::applyDefaults() {
   m_id.clear();
   m_name.clear();
   m_appearance.clear();
+  m_baseColors = {};
+  m_variants = {};
+  m_followsSystemAppearance = false;
   m_colors.clear();
   m_radius.clear();
   m_fontUi.clear();
@@ -102,6 +114,7 @@ void ThemeStore::applyDefaults() {
   m_windowOpacity = 1.0;
   m_windowTransparent = false;
   m_windowBlur = false;
+  m_windowLiquidGlass = false;
   m_frameless = true;
   m_lastError.clear();
 }
@@ -145,8 +158,8 @@ void ThemeStore::reload() {
                      ? QStringLiteral("light")
                      : QStringLiteral("dark");
 
-  mergeColors(m_colors, root.value(QStringLiteral("colors")).toObject());
-  mergeColors(m_colors, root.value(QStringLiteral("variants")).toObject().value(m_appearance).toObject());
+  m_baseColors = root.value(QStringLiteral("colors")).toObject();
+  m_variants = root.value(QStringLiteral("variants")).toObject();
   // Shell-only extras; the page keeps its own font and radius preferences.
   m_radius = root.value(QStringLiteral("radius")).toString();
   const QJsonObject fonts = root.value(QStringLiteral("fonts")).toObject();
@@ -154,12 +167,25 @@ void ThemeStore::reload() {
   m_fontMono = fonts.value(QStringLiteral("mono")).toString();
 
   const QJsonObject window = root.value(QStringLiteral("window")).toObject();
+  m_followsSystemAppearance = window.value(QStringLiteral("followSystemAppearance")).toBool(false);
+  resolveColors(QGuiApplication::styleHints()->colorScheme());
   m_windowOpacity = qBound(0.1, window.value(QStringLiteral("opacity")).toDouble(1.0), 1.0);
   m_windowTransparent = window.value(QStringLiteral("transparent")).toBool(false);
   m_windowBlur = window.value(QStringLiteral("blur")).toBool(false);
+  m_windowLiquidGlass = window.value(QStringLiteral("liquidGlass")).toBool(false);
   m_frameless = window.value(QStringLiteral("frameless")).toBool(true);
 
   emit themeChanged();
+}
+
+void ThemeStore::resolveColors(Qt::ColorScheme colorScheme) {
+  if (m_followsSystemAppearance && colorScheme != Qt::ColorScheme::Unknown) {
+    m_appearance = colorScheme == Qt::ColorScheme::Light ? QStringLiteral("light")
+                                                       : QStringLiteral("dark");
+  }
+  m_colors.clear();
+  mergeColors(m_colors, m_baseColors);
+  mergeColors(m_colors, m_variants.value(m_appearance).toObject());
 }
 
 QString ThemeStore::injectionScript() const {
