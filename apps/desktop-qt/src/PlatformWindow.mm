@@ -63,6 +63,7 @@ private:
     m_id = -1;
     if (m_container != nil) {
       NSWindow* native = m_container.window;
+      restoreTitlebar(native);
       native.opaque = m_originalOpaque;
       native.backgroundColor = m_originalBackground;
       [m_originalBackground release];
@@ -86,9 +87,11 @@ private:
       m_originalBackground = [native.backgroundColor retain];
       native.opaque = NO;
       native.backgroundColor = NSColor.clearColor;
+      unifyTitlebar(native);
 
-      // Keep Qt as the native content view and leave AppKit's titlebar alone.
-      // The negative layer order puts glass behind Qt's transparent Metal layer.
+      // Keep Qt as the native content view; AppKit keeps drawing the title bar
+      // (as the toolbar band above when the shell draws under it). The
+      // negative layer order puts glass behind Qt's transparent Metal layer.
       m_container = [[T3GlassHost alloc] initWithFrame:qtView.bounds];
       m_container.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
       m_container.wantsLayer = YES;
@@ -103,11 +106,52 @@ private:
     SetGlassViewAdaptiveAppearance(m_id, m_dark ? 1 : 0);
   }
 
+  // A shell that draws under the title bar (Qt::ExpandedClientAreaHint) gets
+  // the compact toolbar band Mac apps put their controls in: no title, no
+  // separator, and an empty toolbar so AppKit centres the traffic lights in a
+  // 40 pt strip (the full unified style is 66 pt on macOS 26 with the lights
+  // sitting high in it). Qt reports the strip as the top safe area for QML
+  // to line its own controls up with. A window that keeps its title bar is
+  // left alone.
+  void unifyTitlebar(NSWindow* native) {
+    const auto mask = native.styleMask;
+    if (!(mask & NSWindowStyleMaskTitled) || !(mask & NSWindowStyleMaskFullSizeContentView)) return;
+    m_originalTitleVisibility = native.titleVisibility;
+    m_originalSeparatorStyle = native.titlebarSeparatorStyle;
+    m_originalToolbarStyle = native.toolbarStyle;
+    m_originalToolbar = [native.toolbar retain];
+    native.titleVisibility = NSWindowTitleHidden;
+    native.titlebarSeparatorStyle = NSTitlebarSeparatorStyleNone;
+    native.toolbarStyle = NSWindowToolbarStyleUnifiedCompact;
+    if (native.toolbar == nil) {
+      NSToolbar* toolbar = [[NSToolbar alloc] initWithIdentifier:@"t3-shell-titlebar"];
+      native.toolbar = toolbar;
+      [toolbar release];
+    }
+    m_unifiedTitlebar = true;
+  }
+
+  void restoreTitlebar(NSWindow* native) {
+    if (!m_unifiedTitlebar) return;
+    native.toolbar = m_originalToolbar;
+    [m_originalToolbar release];
+    m_originalToolbar = nil;
+    native.toolbarStyle = m_originalToolbarStyle;
+    native.titlebarSeparatorStyle = m_originalSeparatorStyle;
+    native.titleVisibility = m_originalTitleVisibility;
+    m_unifiedTitlebar = false;
+  }
+
   QWindow* m_window;
   id m_observer = nil;
   NSView* m_container = nil;
   NSColor* m_originalBackground = nil;
   BOOL m_originalOpaque = YES;
+  NSToolbar* m_originalToolbar = nil;
+  NSWindowTitleVisibility m_originalTitleVisibility = NSWindowTitleVisible;
+  NSTitlebarSeparatorStyle m_originalSeparatorStyle = NSTitlebarSeparatorStyleAutomatic;
+  NSWindowToolbarStyle m_originalToolbarStyle = NSWindowToolbarStyleAutomatic;
+  bool m_unifiedTitlebar = false;
   int m_id = -1;
   bool m_enabled = false;
   bool m_dark = false;

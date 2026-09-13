@@ -76,6 +76,58 @@ private slots:
     applyWindowBlur(&window, false, false, false);
     QCOMPARE(native.contentView, qtView);
   }
+
+  void glassUnifiesTheTitleBarOnlyWhenTheShellDrawsUnderIt() {
+    if (QGuiApplication::platformName() != "cocoa") QSKIP("Requires AppKit");
+    QQuickWindow window;
+    window.setFlags(Qt::Window | Qt::ExpandedClientAreaHint | Qt::NoTitleBarBackgroundHint);
+    window.setTitle("Unified title bar test");
+    window.resize(800, 600);
+    window.create();
+    auto* qtView = reinterpret_cast<NSView*>(window.winId());
+    NSWindow* native = qtView.window;
+    QVERIFY(native != nil);
+    QVERIFY(native.styleMask & NSWindowStyleMaskFullSizeContentView);
+    QCOMPARE(native.toolbar, nil);
+    const auto style = native.styleMask;
+    NSButton* close = [native standardWindowButton:NSWindowCloseButton];
+    const auto lightsFromTop = [&] {
+      [close.superview layoutSubtreeIfNeeded];
+      const NSRect frame = [close convertRect:close.bounds toView:nil];
+      return NSHeight(native.contentView.frame) - NSMidY(frame);
+    };
+    const auto original = lightsFromTop();
+
+    applyWindowBlur(&window, true, true, true);
+    QVERIFY(native.toolbar != nil);
+    QCOMPARE(native.toolbar.items.count, 0u);
+    QCOMPARE(native.titleVisibility, NSWindowTitleHidden);
+    QCOMPARE(native.titlebarSeparatorStyle, NSTitlebarSeparatorStyleNone);
+    QCOMPARE(native.toolbarStyle, NSWindowToolbarStyleUnifiedCompact);
+    QCOMPARE(native.styleMask, style);
+    // The traffic lights move down to the centre of the taller band, which
+    // is what the shell's title strip lines up with.
+    QTRY_VERIFY2(lightsFromTop() > original, qPrintable(QString("close button centre %1 -> %2, safe area top %3")
+        .arg(original).arg(lightsFromTop()).arg(window.safeAreaMargins().top())));
+    QTRY_VERIFY(window.safeAreaMargins().top() >= 36);
+    QVERIFY(qAbs(lightsFromTop() - window.safeAreaMargins().top() / 2.0) <= 2);
+
+    applyWindowBlur(&window, false, false, false);
+    QCOMPARE(native.toolbar, nil);
+    QCOMPARE(native.titleVisibility, NSWindowTitleVisible);
+    QTRY_COMPARE(lightsFromTop(), original);
+
+    // A window that keeps its title bar keeps its title.
+    QQuickWindow plain;
+    plain.setTitle("Plain title bar test");
+    plain.resize(800, 600);
+    plain.create();
+    NSWindow* plainNative = reinterpret_cast<NSView*>(plain.winId()).window;
+    applyWindowBlur(&plain, true, true, true);
+    QCOMPARE(plainNative.toolbar, nil);
+    QCOMPARE(plainNative.titleVisibility, NSWindowTitleVisible);
+    applyWindowBlur(&plain, false, false, false);
+  }
 };
 
 QTEST_MAIN(PlatformWindowTest)
