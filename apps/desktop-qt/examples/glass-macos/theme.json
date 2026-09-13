@@ -54,15 +54,16 @@
     "sidebarMutedForeground": "#636366",
     "sidebarControlSurface": "#ffffff66",
     "sidebarRowHover": "#00000008",
-    "sidebarRowActive": "#007aff1a",
-    "sidebarRowSelected": "#007aff1a",
+    "sidebarRowActive": "#00000014",
+    "sidebarRowSelected": "#00000014",
     "sidebarBorder": "#00000014",
     "terminalBackground": "#f0f0f2",
     "terminalForeground": "#1d1d1f",
     "terminalCursor": "#007aff",
     "terminalSelection": "#007aff33",
     "terminalScrollbar": "#00000014",
-    "terminalScrollbarHover": "#00000029"
+    "terminalScrollbarHover": "#00000029",
+    "navigationScrim": "#00000033"
   },
   "variants": {
     "dark": {
@@ -114,8 +115,8 @@
       "sidebarMutedForeground": "#aeaeb2",
       "sidebarControlSurface": "#ffffff14",
       "sidebarRowHover": "#ffffff0d",
-      "sidebarRowActive": "#0a84ff33",
-      "sidebarRowSelected": "#0a84ff33",
+      "sidebarRowActive": "#ffffff1f",
+      "sidebarRowSelected": "#ffffff1f",
       "sidebarBorder": "#ffffff24",
       "terminalBackground": "#1c1c1e",
       "terminalForeground": "#f5f5f7",
