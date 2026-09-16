@@ -93,7 +93,6 @@ import { assistantCitationsToPlainText } from "@t3tools/shared/assistantCitation
 import { assistantCitationFromLocation } from "../lib/assistantCitationNavigation";
 import { isMacPlatform } from "../lib/utils";
 import type { AssistantCitationSourceAnchor } from "~/lib/assistantTextSelection";
-import { useShallow } from "zustand/react/shallow";
 import {
   isAtomCommandInterrupted,
   mapAtomCommandResult,
@@ -5490,8 +5489,7 @@ export default function ChatView(props: ChatViewProps) {
       if (command === "modelPicker.toggle") {
         event.preventDefault();
         event.stopPropagation();
-        // The shell's native picker replaces the HTML one, so the toggle
-        // goes to it instead of to the composer.
+        if (event.repeat) return;
         if (shellHostsChrome) void window.t3Shell?.dispatch("composer.modelPicker.toggle");
         else composerRef.current?.toggleModelPicker();
         return;

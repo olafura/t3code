@@ -21,7 +21,6 @@ import {
   type SettledThreadTimestampInput,
   type ThreadSortInput,
 } from "../lib/threadSort";
-import { effectiveSnoozed } from "@t3tools/client-runtime/state/thread-settled";
 import {
   sortActiveThreadsByOrderKey,
   sortPinnedThreadsByOrderKey,
