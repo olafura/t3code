@@ -85,6 +85,9 @@ defmodule T3.Settings do
   @doc "Tells watchers to read the provider list again, such as after a model probe."
   def notify_providers, do: GenServer.cast(__MODULE__, :providers_changed)
 
+  @doc "Tells watchers the published themes changed (`T3.EnvironmentThemes`)."
+  def notify_themes(themes), do: GenServer.cast(__MODULE__, {:themes_changed, themes})
+
   @doc "Tells watchers the keybinding rules changed (`T3.Keybindings`)."
   def notify_keybindings(rules), do: GenServer.cast(__MODULE__, {:keybindings_changed, rules})
 
@@ -133,6 +136,11 @@ defmodule T3.Settings do
 
   def handle_cast({:keybindings_changed, rules}, state) do
     for {pid, _} <- state.watchers, do: send(pid, {:t3_keybindings, node(), rules})
+    {:noreply, state}
+  end
+
+  def handle_cast({:themes_changed, themes}, state) do
+    for {pid, _} <- state.watchers, do: send(pid, {:t3_themes, node(), themes})
     {:noreply, state}
   end
 

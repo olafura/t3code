@@ -73,6 +73,7 @@ import {
   WorktreeSetupStreamEvent,
   WsRpcGroup,
   PreviewAutomationStreamEvent,
+  EnvironmentTheme,
   type PreviewAutomationHost,
 } from "@t3tools/contracts";
 import {
@@ -123,6 +124,9 @@ function decodeConfig(raw: unknown): ServerConfig {
   return { ...config, keybindings: resolveKeybindings(rules) };
 }
 const decodeProviders = Schema.decodeUnknownSync(Schema.toCodecJson(ServerProviders));
+const decodeEnvironmentThemes = Schema.decodeUnknownSync(
+  Schema.toCodecJson(Schema.Array(EnvironmentTheme)),
+);
 const decodeAuthState = Schema.decodeUnknownSync(Schema.toCodecJson(ProviderAuthState));
 const decodeWorktreeSetup = Schema.decodeUnknownSync(Schema.toCodecJson(WorktreeSetupStreamEvent));
 const decodeScheduledTasks = Schema.decodeUnknownSync(Schema.toCodecJson(ScheduledTaskListResult));
@@ -359,7 +363,7 @@ export function makeV3Session(input: {
     };
 
     // The node's config, then its settings and providers whenever they change.
-    const serverConfig = () =>
+    const serverConfig = (request: { readonly environmentThemes?: boolean | undefined }) =>
       shapeStream(
         socket,
         { type: "config", node },
@@ -394,6 +398,15 @@ export function makeV3Session(input: {
                 version: 1 as const,
                 type: "providerStatuses" as const,
                 payload: { providers: decodeProviders(frame.providers) },
+              },
+            ];
+          // Only subscribers that understand the event get it, as on the Node server.
+          if (frame.t === "config.themes" && request.environmentThemes === true)
+            return [
+              {
+                version: 1 as const,
+                type: "environmentThemesUpdated" as const,
+                payload: { themes: decodeEnvironmentThemes(frame.themes) },
               },
             ];
           return [];

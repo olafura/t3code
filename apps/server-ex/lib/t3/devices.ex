@@ -651,7 +651,9 @@ defmodule T3.Devices do
                 "--no-fund",
                 "--no-audit",
                 "#{spec.name}@#{spec.version}"
-              ], timeout: @install_timeout)
+              ],
+              timeout: @install_timeout
+            )
 
         staged = Path.join([staging, "node_modules", spec.name | spec.entry])
 

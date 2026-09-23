@@ -111,6 +111,16 @@ defmodule T3.Web.Socket do
     end
   end
 
+  def handle_info({:t3_themes, node, themes}, state) do
+    case state.by_terminal do
+      %{{:settings, ^node} => id} ->
+        {:push, Protocol.encode(%{"t" => "config.themes", "id" => id, "themes" => themes}), state}
+
+      _ ->
+        {:ok, state}
+    end
+  end
+
   def handle_info({:t3_keybindings, node, rules}, state) do
     case state.by_terminal do
       %{{:settings, ^node} => id} ->
@@ -379,7 +389,16 @@ defmodule T3.Web.Socket do
          {:ok, config} <- remote(node, T3.Environment, :server_config, []) do
       frame = %{"t" => "config", "id" => id, "node" => Atom.to_string(node), "config" => config}
 
-      {:push, Protocol.encode(frame),
+      # Published themes follow the snapshot, as the Node server streams them.
+      themes =
+        case remote(node, T3.EnvironmentThemes, :current, []) do
+          {:ok, themes} when is_list(themes) -> themes
+          _ -> []
+        end
+
+      themes_frame = %{"t" => "config.themes", "id" => id, "themes" => themes}
+
+      {:push, [Protocol.encode(frame), Protocol.encode(themes_frame)],
        %{
          state
          | subs: Map.put(state.subs, id, shape),

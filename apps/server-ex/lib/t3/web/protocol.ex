@@ -64,6 +64,8 @@ defmodule T3.Web.Protocol do
       {"t": "config", "id", "node", "config"}
       {"t": "config.settings", "id", "settings"}   (the node's ServerSettings changed)
       {"t": "config.providers", "id", "providers"} (its ServerConfig.providers changed)
+      {"t": "config.themes", "id", "themes"} (the EnvironmentTheme[] it publishes; after
+        the snapshot, then on every change)
       {"t": "terminal", "id", "event"}   (TerminalAttachStreamEvent)
       {"t": "terminals", "id", "event"}  (TerminalMetadataStreamEvent)
       {"t": "vcs", "id", "event"}        (VcsStatusStreamEvent)
