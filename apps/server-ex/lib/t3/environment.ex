@@ -15,7 +15,7 @@ defmodule T3.Environment do
     %{
       "environmentId" => id(),
       "label" => label(),
-      "platform" => %{"os" => os(), "arch" => arch()},
+      "platform" => platform(),
       "serverVersion" => version(),
       "orchestrationProtocolVersion" => @protocol,
       # Commands are resolved against the thread on the node, so clients need not
@@ -35,6 +35,8 @@ defmodule T3.Environment do
         # A worktree that cannot be made fails its run; it never falls back to the root.
         "requiredWorktreeBootstrap" => true,
         "usagePriceOverrides" => true,
+        # The icon setting persists, and `platform.machine` is detected.
+        "environmentIcon" => true,
         # Thread commands `T3.Orchestration` understands (`@thread_updates`).
         "threadSettlement" => true,
         "threadSnooze" => true,
@@ -150,6 +152,15 @@ defmodule T3.Environment do
 
       label ->
         label
+    end
+  end
+
+  defp platform do
+    base = %{"os" => os(), "arch" => arch()}
+
+    case T3.Environment.Machine.kind() do
+      nil -> base
+      machine -> Map.put(base, "machine", machine)
     end
   end
 
