@@ -43,6 +43,10 @@ defmodule T3.Rpc do
   end
 
   def handle("filesystem.browse", input), do: T3.Projects.browse(input)
+  def handle("shell.openInEditor", input), do: T3.Editors.open(input)
+  def handle("server.refreshProviders", input), do: T3.Environment.refresh_providers(input)
+  def handle("t3.upsertKeybinding", input), do: T3.Keybindings.upsert(input)
+  def handle("t3.removeKeybinding", input), do: T3.Keybindings.remove(input)
   def handle("projects.searchEntries", input), do: T3.Workspace.search_entries(input)
   def handle("attachments.createUploadUrl", input), do: T3.Attachments.create_upload_url(input)
   def handle("attachments.delete", input), do: T3.Attachments.delete(input)

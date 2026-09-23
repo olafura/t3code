@@ -308,6 +308,27 @@ defmodule T3.OrchestrationTest do
     assert [] = StreamState.get(current(thread_id), "thread")[thread_id]["pullRequests"]
   end
 
+  test "threads are found by what was said in them, the user's words first" do
+    thread_id = launch("hello there")
+    await_statuses(thread_id, ["completed"])
+    :ok = T3.Shell.subscribe(self())
+
+    # Search lists active threads from the sidebar rows.
+    unless T3.Shell.row(node(), thread_id) do
+      assert_receive {:t3_shell, _}, 2_000
+    end
+
+    assert {:ok, %{"matches" => [%{"threadId" => ^thread_id, "source" => "assistant"} = match]}} =
+             T3.Search.threads(%{"query" => "FROM CODEX"})
+
+    assert match["snippet"] == "Hello from codex"
+
+    assert {:ok, %{"matches" => [%{"source" => "user", "snippet" => "hello there"}]}} =
+             T3.Search.threads(%{"query" => "hello"})
+
+    assert {:ok, %{"matches" => []}} = T3.Search.threads(%{"query" => "100%"})
+  end
+
   describe "queued messages" do
     test "a message sent during a run waits in the queue and starts when the run ends" do
       thread_id = launch("wait for it")

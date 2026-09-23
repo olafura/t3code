@@ -56,6 +56,17 @@ defmodule T3.Store do
       seq INTEGER NOT NULL,
       state BLOB NOT NULL
     )
+    """,
+    # Finished user and assistant messages, for thread search. Derived from events.
+    """
+    CREATE TABLE IF NOT EXISTS messages (
+      stream INTEGER NOT NULL REFERENCES streams(key),
+      id TEXT NOT NULL,
+      role TEXT NOT NULL,
+      text TEXT NOT NULL,
+      created_at TEXT,
+      PRIMARY KEY (stream, id)
+    )
     """
   ]
 
@@ -115,6 +126,47 @@ defmodule T3.Store do
       end)
     end)
   end
+
+  @doc "Records finished messages of a stream for search, as `{id, role, text, created_at}`."
+  def index_messages(store \\ __MODULE__, stream_id, messages),
+    do: GenServer.cast(store, {:index_messages, stream_id, messages})
+
+  @doc """
+  Indexed messages whose text contains `pattern` (a `LIKE` pattern escaped with
+  `!`), newest first, as `{stream_id, role, text, created_at}`.
+  """
+  def search_messages(path, pattern, limit) do
+    with_reader(path, fn db ->
+      {:ok, stmt} =
+        Sqlite3.prepare(db, """
+        SELECT s.id, m.role, m.text, m.created_at FROM messages m
+        JOIN streams s ON s.key = m.stream
+        WHERE m.text LIKE ?1 ESCAPE '!' ORDER BY m.created_at DESC LIMIT ?2
+        """)
+
+      :ok = Sqlite3.bind(stmt, [pattern, limit])
+
+      db
+      |> step_reduce(stmt, [], fn [id, role, text, at], acc -> [{id, role, text, at} | acc] end)
+      |> Enum.reverse()
+    end)
+  end
+
+  @doc "A value from the store's `meta` table."
+  def meta(path, key) do
+    with_reader(path, fn db ->
+      {:ok, stmt} = Sqlite3.prepare(db, "SELECT value FROM meta WHERE key = ?1")
+      :ok = Sqlite3.bind(stmt, [key])
+
+      case Sqlite3.step(db, stmt) do
+        {:row, [value]} -> value
+        :done -> nil
+      end
+    end)
+  end
+
+  def put_meta(store \\ __MODULE__, key, value),
+    do: GenServer.call(store, {:put_meta, key, value})
 
   @spec path(GenServer.server()) :: String.t()
   def path(store \\ __MODULE__), do: GenServer.call(store, :path)
@@ -299,6 +351,33 @@ defmodule T3.Store do
   end
 
   def handle_call(:path, _from, state), do: {:reply, state.path, state}
+
+  def handle_call({:put_meta, key, value}, _from, state) do
+    :ok =
+      exec(
+        state.db,
+        "INSERT INTO meta (key, value) VALUES (?1, ?2) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        [key, value]
+      )
+
+    {:reply, :ok, state}
+  end
+
+  @impl true
+  def handle_cast({:index_messages, stream_id, messages}, state) do
+    {key, state} = stream_key(state, :thread, stream_id)
+
+    for {id, role, text, created_at} <- messages,
+        do:
+          :ok =
+            exec(
+              state.db,
+              "INSERT INTO messages (stream, id, role, text, created_at) VALUES (?1, ?2, ?3, ?4, ?5) ON CONFLICT(stream, id) DO UPDATE SET role = excluded.role, text = excluded.text, created_at = excluded.created_at",
+              [key, id, role, text, created_at]
+            )
+
+    {:noreply, state}
+  end
 
   @impl true
   def terminate(_reason, state), do: Sqlite3.close(state.db)

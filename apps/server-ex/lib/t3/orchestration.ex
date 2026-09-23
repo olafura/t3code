@@ -30,6 +30,25 @@ defmodule T3.Orchestration do
   @spec handle(String.t(), map) :: {:ok, term} | {:error, String.t()}
   def handle("orchestration.dispatchCommand", command), do: dispatch(command)
   def handle("orchestration.launchThread", input), do: launch_thread(input)
+  def handle("orchestration.searchThreads", input), do: T3.Search.threads(input)
+
+  # This node's archived threads, with the projects they belong to.
+  def handle("orchestration.getArchivedShellSnapshot", _input) do
+    rows = for {{node, _id}, row} <- T3.Shell.rows(), node == node(), do: row
+
+    {:ok,
+     %{
+       "schemaVersion" => 1,
+       "snapshotSequence" => 0,
+       "projects" => for({"project", row} <- rows, row["deletedAt"] == nil, do: row),
+       "threads" =>
+         for(
+           {"thread", row} <- rows,
+           row["deletedAt"] == nil and row["archivedAt"] != nil,
+           do: row
+         )
+     }}
+  end
 
   def handle("orchestration.getTurnDiff", %{"threadId" => thread_id} = input),
     do: turn_diff(thread_id, input["fromTurnCount"], input["toTurnCount"], input)

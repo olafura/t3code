@@ -402,6 +402,13 @@ defmodule T3.Acp do
   @doc "The agent capabilities an instance reported when it was last probed, or `nil`."
   def capabilities(id), do: :persistent_term.get({__MODULE__, id, :capabilities}, nil)
 
+  @doc "Reads one instance's agent again, now."
+  def reload(id) do
+    forget(id)
+    if enabled?(id), do: load(id)
+    :ok
+  end
+
   @doc "Forgets what was read from an instance's agent, so it is probed again."
   def forget(id) do
     for key <- [

@@ -117,6 +117,7 @@ defmodule T3.Streams.Server do
       end)
 
     stream = Enum.reduce(events, state.stream, &StreamState.apply_event(&2, &1))
+    T3.Search.index(state.id, events, stream)
     broadcast(state, {:events, events})
     state = schedule_shell(%{state | stream: stream})
     {:reply, {:ok, last}, state, timeout(state)}

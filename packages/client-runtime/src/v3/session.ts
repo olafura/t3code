@@ -8,12 +8,17 @@ import {
   AgentSessionImportProjectChangedError,
   AgentSessionImportProjectNotFoundError,
   AgentSessionScanError,
+  ExternalLauncherError,
+  ExternalLauncherUnknownEditorError,
   FilesystemBrowseError,
   GitCommandError,
   GitManagerError,
   GitManagerServiceError,
+  KeybindingRule,
+  KeybindingsConfigError,
   OrchestrationGetFullThreadDiffError,
   OrchestrationGetTurnDiffError,
+  OrchestrationSearchThreadsError,
   ProjectListEntriesError,
   type ProjectListEntriesInput,
   ProjectMutationError,
@@ -30,9 +35,11 @@ import {
   ReviewDiffPreviewError,
   VcsError,
   OrchestrationV2DispatchCommandError,
+  OrchestrationV2GetShellSnapshotError,
   OrchestrationV2GetThreadProjectionError,
   OrchestrationV2ThreadLaunchError,
   ORCHESTRATION_V2_WS_METHODS,
+  type ResolvedKeybindingsConfig,
   ServerConfig,
   ServerProviders,
   ServerSettings,
@@ -47,6 +54,10 @@ import {
   WorktreeSetupStreamEvent,
   WsRpcGroup,
 } from "@t3tools/contracts";
+import {
+  compileResolvedKeybindingsConfig,
+  mergeWithDefaultKeybindings,
+} from "@t3tools/shared/keybindings";
 import { applyServerSettingsPatch } from "@t3tools/shared/serverSettings";
 import * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
@@ -71,7 +82,24 @@ import { ClusterRpcError, ClusterSocket, type Shape, type ShapeFrame } from "./c
 import { ShellShapeFold, type ShellRow } from "./shellShape.ts";
 import { ThreadShapeFold, type ShapeEvent, type ShapeRow } from "./threadShape.ts";
 
-const decodeConfig = Schema.decodeUnknownSync(Schema.toCodecJson(ServerConfig));
+const decodeServerConfig = Schema.decodeUnknownSync(Schema.toCodecJson(ServerConfig));
+const decodeKeybindingRule = Schema.decodeUnknownOption(KeybindingRule);
+const decodeLauncherError = Schema.decodeUnknownOption(ExternalLauncherError);
+
+/** A node's keybinding rules, merged with the defaults and compiled. */
+function resolveKeybindings(rules: unknown): ResolvedKeybindingsConfig {
+  const valid = Array.isArray(rules)
+    ? rules.flatMap((rule) => Option.toArray(decodeKeybindingRule(rule)))
+    : [];
+  return mergeWithDefaultKeybindings(compileResolvedKeybindingsConfig(valid));
+}
+
+/** A node sends its raw keybinding rules; clients compile them. */
+function decodeConfig(raw: unknown): ServerConfig {
+  const config = decodeServerConfig(raw);
+  const rules = (raw as { readonly keybindingRules?: unknown }).keybindingRules;
+  return { ...config, keybindings: resolveKeybindings(rules) };
+}
 const decodeProviders = Schema.decodeUnknownSync(Schema.toCodecJson(ServerProviders));
 const decodeAuthState = Schema.decodeUnknownSync(Schema.toCodecJson(ProviderAuthState));
 const decodeWorktreeSetup = Schema.decodeUnknownSync(Schema.toCodecJson(WorktreeSetupStreamEvent));
@@ -278,6 +306,14 @@ export function makeV3Session(input: {
                 payload: { settings: decodeSettingsSync(frame.settings) },
               },
             ];
+          if (frame.t === "config.keybindings")
+            return [
+              {
+                version: 1 as const,
+                type: "keybindingsUpdated" as const,
+                payload: { keybindings: resolveKeybindings(frame.rules), issues: [] },
+              },
+            ];
           if (frame.t === "config.providers")
             return [
               {
@@ -391,6 +427,16 @@ export function makeV3Session(input: {
       (_request: object, message) => new OrchestrationGetTurnDiffError({ message }),
     );
 
+    const searchThreads = forward(
+      ORCHESTRATION_V2_WS_METHODS.searchThreads,
+      (_request: object, message) => new OrchestrationSearchThreadsError({ message }),
+    );
+
+    const archivedShell = forward(
+      ORCHESTRATION_V2_WS_METHODS.getArchivedShellSnapshot,
+      (_request: object, message) => new OrchestrationV2GetShellSnapshotError({ message }),
+    );
+
     // Terminals live on the thread's node; attach and metadata are shapes there.
     type TerminalRequest = { readonly threadId: string; readonly terminalId?: string };
     const terminalCommand = (tag: string) =>
@@ -465,6 +511,33 @@ export function makeV3Session(input: {
         ),
       );
 
+    // Keybinding rules are stored on the node and compiled here.
+    const keybindingCommand = (method: string) => (request: object) =>
+      nodeCall(method, request).pipe(
+        Effect.map((result) => ({
+          keybindings: resolveKeybindings((result as { readonly rules?: unknown }).rules),
+          issues: [],
+        })),
+        Effect.mapError(
+          (cause) =>
+            new KeybindingsConfigError({
+              configPath: "keybindings.json",
+              detail: cause.message,
+              cause,
+            }),
+        ),
+      );
+
+    const openInEditor = forward(
+      WS_METHODS.shellOpenInEditor,
+      (request: { readonly editor: string }, _message, cause) =>
+        decodeLauncherError(cause instanceof ClusterRpcError ? cause.detail : undefined).pipe(
+          Option.getOrElse(
+            () => new ExternalLauncherUnknownEditorError({ editor: request.editor }),
+          ),
+        ),
+    );
+
     // A new thread's worktree is prepared on its node.
     const worktreeSetup = (request: { readonly threadId: string }) =>
       shapeStream(socket, { type: "worktreeSetup", node, threadId: request.threadId }, (frame) =>
@@ -487,6 +560,17 @@ export function makeV3Session(input: {
             }),
         ),
       );
+
+    const refreshProviders = forward(
+      WS_METHODS.serverRefreshProviders,
+      (request: { readonly instanceId?: string }, message, cause) =>
+        setupError(
+          request.instanceId ?? "codex",
+          "refresh",
+          message,
+          cause instanceof ClusterRpcError ? cause.detail : undefined,
+        ),
+    );
 
     const providerAuthCommand = (tag: string, operation: string) =>
       forward(tag, (request: { readonly instanceId: string }, message, cause) =>
@@ -678,6 +762,14 @@ export function makeV3Session(input: {
       [ORCHESTRATION_V2_WS_METHODS.subscribeShell]: shell,
       [ORCHESTRATION_V2_WS_METHODS.subscribeThread]: thread,
       [ORCHESTRATION_V2_WS_METHODS.getThreadProjection]: threadProjection,
+      [ORCHESTRATION_V2_WS_METHODS.searchThreads]: searchThreads,
+      [WS_METHODS.serverUpsertKeybinding]: keybindingCommand("t3.upsertKeybinding"),
+      [WS_METHODS.serverRemoveKeybinding]: keybindingCommand("t3.removeKeybinding"),
+      [WS_METHODS.shellOpenInEditor]: openInEditor,
+      [WS_METHODS.serverRefreshProviders]: refreshProviders,
+      // Nodes have no background policy that client activity would steer.
+      [WS_METHODS.serverReportClientActivity]: () => Effect.void,
+      [ORCHESTRATION_V2_WS_METHODS.getArchivedShellSnapshot]: archivedShell,
       [WS_METHODS.serverSearchAcpRegistry]: acpRegistryCommand(WS_METHODS.serverSearchAcpRegistry),
       [WS_METHODS.serverPrepareAcpRegistryAgent]: acpRegistryCommand(
         WS_METHODS.serverPrepareAcpRegistryAgent,

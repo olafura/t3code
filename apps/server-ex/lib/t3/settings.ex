@@ -43,6 +43,9 @@ defmodule T3.Settings do
   @doc "Tells watchers to read the provider list again, such as after a model probe."
   def notify_providers, do: GenServer.cast(__MODULE__, :providers_changed)
 
+  @doc "Tells watchers the keybinding rules changed (`T3.Keybindings`)."
+  def notify_keybindings(rules), do: GenServer.cast(__MODULE__, {:keybindings_changed, rules})
+
   @impl true
   def init(nil) do
     path = Path.join(Application.fetch_env!(:t3, :home), "settings.json")
@@ -83,6 +86,11 @@ defmodule T3.Settings do
   @impl true
   def handle_cast(:providers_changed, state) do
     for {pid, _} <- state.watchers, do: send(pid, {:t3_providers_changed, node()})
+    {:noreply, state}
+  end
+
+  def handle_cast({:keybindings_changed, rules}, state) do
+    for {pid, _} <- state.watchers, do: send(pid, {:t3_keybindings, node(), rules})
     {:noreply, state}
   end
 

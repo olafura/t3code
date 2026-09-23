@@ -104,6 +104,17 @@ defmodule T3.Web.Socket do
     end
   end
 
+  def handle_info({:t3_keybindings, node, rules}, state) do
+    case state.by_terminal do
+      %{{:settings, ^node} => id} ->
+        {:push, Protocol.encode(%{"t" => "config.keybindings", "id" => id, "rules" => rules}),
+         state}
+
+      _ ->
+        {:ok, state}
+    end
+  end
+
   def handle_info({:t3_providers_changed, node}, state) do
     with %{{:settings, ^node} => id} <- state.by_terminal,
          {:ok, providers} <- remote(node, T3.Environment, :providers, []) do

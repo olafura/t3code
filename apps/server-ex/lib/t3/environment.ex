@@ -30,8 +30,33 @@ defmodule T3.Environment do
   end
 
   @doc """
+  `server.refreshProviders`: reads models again when the user asks
+  (`refreshModels`), for one instance or all, then returns the provider list.
+  A background status refresh only reports what is known.
+  """
+  def refresh_providers(input) do
+    if input["refreshModels"] == true do
+      case input["instanceId"] do
+        nil ->
+          T3.Codex.Provider.load()
+          for id <- T3.Acp.instances(), do: T3.Acp.reload(id)
+
+        "codex" ->
+          T3.Codex.Provider.load()
+
+        id ->
+          if T3.Acp.agent?(id), do: T3.Acp.reload(id)
+      end
+
+      T3.Settings.notify_providers()
+    end
+
+    {:ok, %{"providers" => providers()}}
+  end
+
+  @doc """
   The client's `ServerConfig` for this node. Only what a node serves today is
-  filled in: Codex and Claude when installed, empty keybinding and editor lists, and
+  filled in: Codex and Claude when installed, the user's keybinding rules, the installed editors, and
   the stored settings (`T3.Settings`), which decode to their defaults.
   """
   @spec server_config() :: map
@@ -48,10 +73,12 @@ defmodule T3.Environment do
       },
       "cwd" => File.cwd!(),
       "keybindingsConfigPath" => Path.join(home, "keybindings.json"),
+      # Clients compile the rules with the defaults into `keybindings`.
       "keybindings" => [],
+      "keybindingRules" => T3.Keybindings.rules(),
       "issues" => [],
       "providers" => providers(),
-      "availableEditors" => [],
+      "availableEditors" => T3.Editors.available(),
       "observability" => %{
         "logsDirectoryPath" => Path.join(home, "logs"),
         "localTracingEnabled" => false,
