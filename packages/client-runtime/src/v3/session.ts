@@ -1,4 +1,7 @@
 import {
+  AgentSessionImportProjectChangedError,
+  AgentSessionImportProjectNotFoundError,
+  AgentSessionScanError,
   FilesystemBrowseError,
   GitCommandError,
   OrchestrationGetFullThreadDiffError,
@@ -45,6 +48,13 @@ const decodeTerminalError = Schema.decodeUnknownOption(TerminalError);
 // thread's stream shape already carries that state.
 const UNDECODED_RESULTS: ReadonlySet<string> = new Set([ORCHESTRATION_V2_WS_METHODS.launchThread]);
 const decodeReviewError = Schema.decodeUnknownOption(ReviewDiffPreviewError);
+const decodeAgentSessionError = Schema.decodeUnknownOption(
+  Schema.Union([
+    AgentSessionImportProjectChangedError,
+    AgentSessionImportProjectNotFoundError,
+    AgentSessionScanError,
+  ]),
+);
 
 /**
  * Streams one shape's frames, folded into items, for as long as it is consumed. An
@@ -321,6 +331,15 @@ export function makeV3Session(input: {
         ),
       );
 
+    const agentSessionCommand = (tag: string) =>
+      forward(tag, (_request: object, message, cause) =>
+        decodeAgentSessionError(cause instanceof ClusterRpcError ? cause.detail : undefined).pipe(
+          Option.getOrElse(
+            () => new AgentSessionScanError({ operation: "read-projects", cause: message }),
+          ),
+        ),
+      );
+
     const getFullThreadDiff = forward(
       ORCHESTRATION_V2_WS_METHODS.getFullThreadDiff,
       (_request: object, message) => new OrchestrationGetFullThreadDiffError({ message }),
@@ -335,6 +354,8 @@ export function makeV3Session(input: {
       [ORCHESTRATION_V2_WS_METHODS.getFullThreadDiff]: getFullThreadDiff,
       [ORCHESTRATION_V2_WS_METHODS.subscribeShell]: shell,
       [ORCHESTRATION_V2_WS_METHODS.subscribeThread]: thread,
+      [WS_METHODS.agentSessionsScan]: agentSessionCommand(WS_METHODS.agentSessionsScan),
+      [WS_METHODS.agentSessionsImport]: agentSessionCommand(WS_METHODS.agentSessionsImport),
       [WS_METHODS.reviewGetDiffPreview]: reviewCommand(WS_METHODS.reviewGetDiffPreview),
       [WS_METHODS.reviewGetDiffFileContents]: reviewCommand(WS_METHODS.reviewGetDiffFileContents),
       [WS_METHODS.terminalAttach]: terminalAttach,
