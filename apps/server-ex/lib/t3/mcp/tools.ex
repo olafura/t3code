@@ -2,7 +2,8 @@ defmodule T3.Mcp.Tools do
   @moduledoc """
   The tools of the `t3-code` MCP server (`T3.Mcp`), each acting as the thread whose
   agent called it. Definitions come from `priv/mcp_tools.json`; only the tools
-  implemented here are advertised.
+  implemented here and in the area modules (`T3.Mcp.Tools.Threads`, `Queue`,
+  `Projects` and `PullRequests`), which share the access helpers below, are advertised.
 
   The access rules follow the Node server's: a caller sees only threads of its own
   project; changing another thread needs a caller that is itself running, and never
@@ -12,8 +13,17 @@ defmodule T3.Mcp.Tools do
   alias T3.{Orchestration, StreamState}
 
   @implemented ~w(t3_thread_list t3_thread_read t3_thread_send t3_thread_wait t3_thread_interrupt
-                  t3_thread_search t3_environment_read t3_project_list t3_project_read
-                  list_scheduled_tasks schedule_task delete_scheduled_task run_scheduled_task_now)
+                  t3_thread_search t3_environment_read t3_environment_preferences_update
+                  t3_project_list t3_project_read list_scheduled_tasks schedule_task
+                  update_scheduled_task delete_scheduled_task run_scheduled_task_now
+                  t3_preview_list t3_preview_close)
+
+  @areas [
+    T3.Mcp.Tools.Threads,
+    T3.Mcp.Tools.Queue,
+    T3.Mcp.Tools.Projects,
+    T3.Mcp.Tools.PullRequests
+  ]
 
   @delegation ~w(delegate_task task_status task_cancel)
   @preview T3.Mcp.Preview.names()
@@ -28,9 +38,9 @@ defmodule T3.Mcp.Tools do
 
   @doc "The advertised tools (MCP `tools/list`)."
   def list do
-    for tool <- definitions(),
-        tool["name"] in @implemented or tool["name"] in @delegation or
-          tool["name"] in @preview do
+    names = @implemented ++ @delegation ++ @preview ++ Enum.flat_map(@areas, & &1.tools())
+
+    for tool <- definitions(), tool["name"] in names do
       Map.take(tool, ["name", "description", "inputSchema"])
     end
   end
@@ -48,10 +58,6 @@ defmodule T3.Mcp.Tools do
   end
 
   @doc "Runs a tool: `{:ok, result}` or `{:error, code, message}` (`OrchestratorMcpFailure`)."
-  def call(name, args, caller) when name in @implemented do
-    with {:ok, me} <- caller_row(caller), do: run(name, args, Map.put(caller, :row, me))
-  end
-
   # Delegated tasks belong to their caller thread (`T3.Orchestration.Delegation`).
   def call("delegate_task", args, caller) do
     with {:ok, me} <- caller_row(caller),
@@ -66,12 +72,22 @@ defmodule T3.Mcp.Tools do
 
   def call(name, args, caller) when name in @preview, do: T3.Mcp.Preview.call(name, args, caller)
 
-  def call(name, _args, _caller),
-    do: {:error, "capability_denied", "#{name} is not available on this node."}
+  def call(name, args, caller) do
+    area = if name in @implemented, do: __MODULE__, else: Enum.find(@areas, &(name in &1.tools()))
+
+    if area do
+      with {:ok, me} <- caller_row(caller), do: area.run(name, args, Map.put(caller, :row, me))
+    else
+      {:error, "capability_denied", "#{name} is not available on this node."}
+    end
+  end
 
   # --- threads ---------------------------------------------------------------------
 
-  defp run("t3_thread_list", args, %{row: me}) do
+  @doc false
+  def run(name, args, caller)
+
+  def run("t3_thread_list", args, %{row: me}) do
     statuses = args["statuses"]
     title = args["titleContains"] && String.downcase(args["titleContains"])
 
@@ -101,7 +117,7 @@ defmodule T3.Mcp.Tools do
      }}
   end
 
-  defp run("t3_thread_read", args, %{row: me}) do
+  def run("t3_thread_read", args, %{row: me}) do
     with {:ok, row} <- project_thread(me, args["threadId"]) do
       state = stream(row["id"])
       view = args["view"] || "messages"
@@ -147,7 +163,7 @@ defmodule T3.Mcp.Tools do
     end
   end
 
-  defp run("t3_thread_send", args, %{row: me} = caller) do
+  def run("t3_thread_send", args, %{row: me} = caller) do
     with {:ok, row} <- project_thread(me, args["threadId"]),
          :ok <- live(caller),
          :ok <- no_escalation(me, row),
@@ -201,7 +217,7 @@ defmodule T3.Mcp.Tools do
     end
   end
 
-  defp run("t3_thread_wait", args, %{row: me}) do
+  def run("t3_thread_wait", args, %{row: me}) do
     with {:ok, row} <- project_thread(me, args["threadId"]) do
       timeout = min(max(parse_number(args["timeoutMs"], 600_000), 1), 3_600_000)
       {run, timed_out} = wait(row["id"], args["runId"], timeout)
@@ -216,7 +232,7 @@ defmodule T3.Mcp.Tools do
     end
   end
 
-  defp run("t3_thread_interrupt", args, %{row: me} = caller) do
+  def run("t3_thread_interrupt", args, %{row: me} = caller) do
     with {:ok, row} <- project_thread(me, args["threadId"]),
          :ok <- live(caller),
          {:ok, _} <-
@@ -238,14 +254,14 @@ defmodule T3.Mcp.Tools do
     end
   end
 
-  defp run("t3_thread_search", args, %{row: me}) do
+  def run("t3_thread_search", args, %{row: me}) do
     {:ok, %{"matches" => matches}} = T3.Search.threads(Map.take(args, ["query", "limit"]))
     {:ok, %{"matches" => Enum.filter(matches, &(&1["projectId"] == me["projectId"]))}}
   end
 
   # --- environment and projects ------------------------------------------------------
 
-  defp run("t3_environment_read", _args, %{row: me}) do
+  def run("t3_environment_read", _args, %{row: me}) do
     environment = T3.Environment.descriptor()
 
     {:ok,
@@ -267,7 +283,21 @@ defmodule T3.Mcp.Tools do
      }}
   end
 
-  defp run("t3_project_list", args, _caller) do
+  def run("t3_environment_preferences_update", args, caller) do
+    with :ok <- live(caller),
+         :ok <-
+           unrestricted(caller, "Preference updates require a live full-access/default thread.") do
+      patch =
+        Map.take(
+          args,
+          ~w(defaultThreadEnvMode newWorktreesStartFromOrigin enableProviderUpdateChecks backgroundActivity sourceControlWritingStyle)
+        )
+
+      {:ok, preferences(update_settings(patch))}
+    end
+  end
+
+  def run("t3_project_list", args, _caller) do
     projects =
       for {{node, _}, {"project", row}} <- T3.Shell.rows(),
           node == node() and row["deletedAt"] == nil,
@@ -284,21 +314,21 @@ defmodule T3.Mcp.Tools do
      }}
   end
 
-  defp run("t3_project_read", %{"projectId" => id}, _caller) do
-    case T3.Shell.row(node(), id) do
-      {"project", %{"deletedAt" => nil} = row} -> {:ok, %{"project" => project(row)}}
-      _ -> {:error, "invalid_request", "The project was not found."}
+  def run("t3_project_read", %{"projectId" => id}, _caller) do
+    case project_row(id) do
+      nil -> {:error, "invalid_request", "The project was not found."}
+      row -> {:ok, %{"project" => project(row)}}
     end
   end
 
   # --- scheduled tasks ----------------------------------------------------------------
 
-  defp run("list_scheduled_tasks", _args, %{row: me}) do
+  def run("list_scheduled_tasks", _args, %{row: me}) do
     {:ok, %{"tasks" => tasks}} = T3.ScheduledTasks.list()
     {:ok, %{"tasks" => Enum.filter(tasks, &(&1["projectId"] == me["projectId"]))}}
   end
 
-  defp run("schedule_task", args, %{row: me} = caller) do
+  def run("schedule_task", args, %{row: me} = caller) do
     with :ok <- live(caller) do
       input =
         %{
@@ -323,7 +353,46 @@ defmodule T3.Mcp.Tools do
     end
   end
 
-  defp run("delete_scheduled_task", %{"scheduledTaskId" => id}, %{row: me} = caller) do
+  def run("update_scheduled_task", %{"scheduledTaskId" => id} = args, %{row: me} = caller) do
+    {:ok, %{"tasks" => tasks}} = T3.ScheduledTasks.list()
+
+    with :ok <- live(caller),
+         %{} = task <-
+           Enum.find(tasks, &(&1["id"] == id and &1["projectId"] == me["projectId"])) ||
+             {:error, "task_not_found",
+              "Scheduled task #{id} was not found in the calling project."} do
+      bind = args["bindToCurrentThread"]
+
+      # Unbound runs launch a fresh worktree each time; bound ones post into the thread.
+      input =
+        Map.merge(task, %{
+          "title" => args["title"] || task["title"],
+          "prompt" => args["prompt"] || task["prompt"],
+          "enabled" =>
+            if(is_boolean(args["enabled"]), do: args["enabled"], else: task["enabled"]),
+          "schedule" => schedule(args["schedule"]) || task["schedule"],
+          "threadId" =>
+            case bind do
+              nil -> task["threadId"]
+              true -> me["id"]
+              false -> nil
+            end,
+          "workspaceStrategy" =>
+            case bind do
+              nil -> task["workspaceStrategy"]
+              true -> %{"type" => "root"}
+              false -> %{"type" => "worktree", "baseRef" => "main", "startFromOrigin" => true}
+            end
+        })
+
+      case T3.ScheduledTasks.upsert(input) do
+        {:ok, %{"task" => task}} -> {:ok, scheduled_task(task)}
+        {:error, %{"message" => message}} -> {:error, "orchestration_error", message}
+      end
+    end
+  end
+
+  def run("delete_scheduled_task", %{"scheduledTaskId" => id}, %{row: me} = caller) do
     with :ok <- live(caller),
          :ok <- own_task(me, id) do
       {:ok, _} = T3.ScheduledTasks.delete(%{"id" => id})
@@ -331,7 +400,7 @@ defmodule T3.Mcp.Tools do
     end
   end
 
-  defp run("run_scheduled_task_now", %{"taskId" => id}, %{row: me} = caller) do
+  def run("run_scheduled_task_now", %{"taskId" => id}, %{row: me} = caller) do
     with :ok <- live(caller),
          :ok <- own_task(me, id) do
       case T3.ScheduledTasks.run_now(%{"id" => id}) do
@@ -345,7 +414,27 @@ defmodule T3.Mcp.Tools do
     end
   end
 
+  # --- preview tabs ----------------------------------------------------------------------
+
+  def run("t3_preview_list", args, %{row: me}) do
+    {:ok, result} = T3.Preview.list(%{"threadId" => me["id"]})
+    cursor = args["cursor"] || 0
+    stop = cursor + (args["limit"] || 20)
+
+    {:ok,
+     Map.merge(result, %{
+       "sessions" => Enum.slice(result["sessions"], cursor, stop - cursor),
+       "nextCursor" => if(stop < length(result["sessions"]), do: stop)
+     })}
+  end
+
+  def run("t3_preview_close", %{"tabId" => tab}, %{row: me}) do
+    {:ok, _} = T3.Preview.close(%{"threadId" => me["id"], "tabId" => tab})
+    {:ok, %{}}
+  end
+
   # --- access ---------------------------------------------------------------------------
+  # Shared by the area modules; each takes the caller (with its `row`) or its row.
 
   defp caller_row(%{thread_id: id}) do
     case T3.Shell.row(node(), id) do
@@ -354,9 +443,10 @@ defmodule T3.Mcp.Tools do
     end
   end
 
-  defp project_thread(me, nil), do: {:ok, me}
+  @doc "A thread of the caller's project (the caller itself for nil), as its sidebar row."
+  def project_thread(me, nil), do: {:ok, me}
 
-  defp project_thread(%{"projectId" => project}, id) do
+  def project_thread(%{"projectId" => project}, id) do
     case T3.Shell.row(node(), id) do
       {"thread", %{"deletedAt" => nil, "projectId" => ^project} = row} ->
         {:ok, row}
@@ -366,9 +456,22 @@ defmodule T3.Mcp.Tools do
     end
   end
 
-  # Only a caller that is itself running may change things. Read from its stream:
-  # sidebar rows trail a run's end.
-  defp live(%{row: me, instance: instance}) do
+  @doc """
+  A thread the caller may change: of its project, with the caller running and the
+  target's modes no broader than its own.
+  """
+  def writable(%{row: me} = caller, id) do
+    with {:ok, row} <- project_thread(me, id),
+         :ok <- live(caller),
+         :ok <- no_escalation(me, row),
+         do: {:ok, row}
+  end
+
+  @doc """
+  Only a caller that is itself running may change things. Read from its stream:
+  sidebar rows trail a run's end.
+  """
+  def live(%{row: me, instance: instance}) do
     running =
       stream(me["id"])
       |> StreamState.list("run")
@@ -380,7 +483,16 @@ defmodule T3.Mcp.Tools do
         {:error, "parent_not_active", "The calling provider no longer owns an active thread run."}
   end
 
-  defp no_escalation(me, target) do
+  @doc "Environment-wide changes need an unarchived full-access/default caller."
+  def unrestricted(%{row: me}, message) do
+    if me["archivedAt"] == nil and me["runtimeMode"] == "full-access" and
+         me["interactionMode"] == "default",
+       do: :ok,
+       else: {:error, "capability_denied", message}
+  end
+
+  @doc "Refuses a target whose runtime or interaction mode is broader than the caller's."
+  def no_escalation(me, target) do
     cond do
       rank(target["runtimeMode"]) > rank(me["runtimeMode"]) ->
         {:error, "runtime_mode_escalation_denied",
@@ -395,6 +507,29 @@ defmodule T3.Mcp.Tools do
     end
   end
 
+  @doc "A requested mode (the caller's own for nil or `inherit`), unless broader than the caller's."
+  def mode(:runtime, me, requested) when requested in [nil, "inherit"],
+    do: {:ok, me["runtimeMode"]}
+
+  def mode(:interaction, me, requested) when requested in [nil, "inherit"],
+    do: {:ok, me["interactionMode"]}
+
+  def mode(:runtime, me, requested) do
+    if rank(requested) > rank(me["runtimeMode"]),
+      do:
+        {:error, "runtime_mode_escalation_denied",
+         "Child runtime mode #{requested} is broader than parent mode #{me["runtimeMode"]}."},
+      else: {:ok, requested}
+  end
+
+  def mode(:interaction, me, requested) do
+    if requested != "plan" and me["interactionMode"] == "plan",
+      do:
+        {:error, "interaction_mode_escalation_denied",
+         "Child interaction mode #{requested} is broader than parent mode plan."},
+      else: {:ok, requested}
+  end
+
   defp rank(mode), do: Map.get(@runtime_ranks, mode, 3)
 
   defp own_task(me, id) do
@@ -407,7 +542,22 @@ defmodule T3.Mcp.Tools do
 
   # --- helpers --------------------------------------------------------------------------
 
-  defp project_threads(project_id) do
+  @doc "A fresh command id for a tool call."
+  def command_id, do: "mcp:" <> T3.Environment.uuid4()
+
+  @doc "A thread's own entity, current where its sidebar row may trail."
+  def thread(id), do: StreamState.get(stream(id), "thread")[id]
+
+  @doc "A project of this node that is not deleted, or nil. Project rows omit null fields."
+  def project_row(id) do
+    case T3.Shell.row(node(), id) do
+      {"project", row} -> if row["deletedAt"] == nil, do: row
+      _ -> nil
+    end
+  end
+
+  @doc "A project's threads that are not deleted, most recently updated first."
+  def project_threads(project_id) do
     for(
       {{node, _}, {"thread", row}} <- T3.Shell.rows(),
       node == node() and row["projectId"] == project_id and row["deletedAt"] == nil,
@@ -416,7 +566,8 @@ defmodule T3.Mcp.Tools do
     |> Enum.sort_by(&(&1["updatedAt"] || ""), :desc)
   end
 
-  defp list_item(row) do
+  @doc "A thread as `t3_thread_list` lists it."
+  def list_item(row) do
     %{
       "threadId" => row["id"],
       "title" => row["title"],
@@ -466,9 +617,11 @@ defmodule T3.Mcp.Tools do
   defp project(row),
     do: Map.take(row, ~w(id title workspaceRoot defaultModelSelection createdAt updatedAt))
 
-  defp stream(thread_id), do: T3.Streams.Server.state(T3.Streams.ensure(thread_id))
+  @doc "A thread's stream state."
+  def stream(thread_id), do: T3.Streams.Server.state(T3.Streams.ensure(thread_id))
 
-  defp message_run(thread_id, message_id) do
+  @doc "The run a message of the thread belongs to, or nil."
+  def message_run(thread_id, message_id) do
     state = stream(thread_id)
 
     with %{"runId" => run_id} <- StreamState.get(state, "message")[message_id],
@@ -514,13 +667,91 @@ defmodule T3.Mcp.Tools do
     end
   end
 
+  # The preferences agents may read and change, with the defaults clients fill in.
+  defp preferences(settings) do
+    style =
+      Map.merge(
+        %{
+          "mode" => "repo_conventions",
+          "customInstructions" => "",
+          "followChangeRequestTemplates" => true
+        },
+        settings["sourceControlWritingStyle"] || %{}
+      )
+
+    text = style["customInstructions"]
+
+    %{
+      "defaultThreadEnvMode" => settings["defaultThreadEnvMode"],
+      "newWorktreesStartFromOrigin" => Map.get(settings, "newWorktreesStartFromOrigin", true),
+      "enableProviderUpdateChecks" => Map.get(settings, "enableProviderUpdateChecks", true),
+      "backgroundActivity" => %{
+        "profile" => get_in(settings, ["backgroundActivity", "profile"]) || "balanced"
+      },
+      "sourceControlWritingStyle" =>
+        Map.merge(style, %{
+          "customInstructions" => String.slice(text, 0, 4000),
+          "truncated" => String.length(text) > 4000
+        })
+    }
+  end
+
+  # Merges a patch into the stored settings; a concurrent write makes it try again.
+  defp update_settings(patch) do
+    {settings, version} = T3.Settings.get()
+
+    next =
+      Enum.reduce(patch, settings, fn
+        {key, value}, acc when key in ["backgroundActivity", "sourceControlWritingStyle"] ->
+          Map.update(acc, key, value, &Map.merge(&1 || %{}, value))
+
+        {key, value}, acc ->
+          Map.put(acc, key, value)
+      end)
+
+    next =
+      case get_in(patch, ["backgroundActivity", "profile"]) do
+        nil -> next
+        profile -> Map.put(next, "backgroundActivityProfile", profile)
+      end
+
+    case T3.Settings.put(next, version) do
+      {:ok, _} -> next
+      {:error, :stale} -> update_settings(patch)
+    end
+  end
+
+  defp scheduled_task(task),
+    do: %{
+      "scheduledTaskId" => task["id"],
+      "title" => task["title"],
+      "prompt" => task["prompt"],
+      "enabled" => task["enabled"],
+      "projectId" => task["projectId"],
+      "boundThreadId" => task["threadId"],
+      "schedule" => task["schedule"],
+      "nextRunAt" => task["nextRunAt"],
+      "lastRunStatus" => task["lastRunStatus"]
+    }
+
+  # Providers that cannot pass objects send the schedule as JSON text.
+  defp schedule(text) when is_binary(text) do
+    case JSON.decode(text) do
+      {:ok, %{} = schedule} -> schedule
+      _ -> nil
+    end
+  end
+
+  defp schedule(schedule), do: schedule
+
   defp parse_number(value, _default) when is_number(value), do: round(value)
   defp parse_number(_value, default), do: default
 
-  defp orchestration({:ok, _} = ok), do: ok
+  @doc "An orchestration result as a tool result."
+  def orchestration({:ok, _} = ok), do: ok
 
-  defp orchestration({:error, message}) when is_binary(message),
+  def orchestration({:error, message}) when is_binary(message),
     do: {:error, "orchestration_error", message}
 
-  defp orchestration({:error, other}), do: {:error, "orchestration_error", inspect(other)}
+  def orchestration({:error, other}), do: {:error, "orchestration_error", inspect(other)}
 end

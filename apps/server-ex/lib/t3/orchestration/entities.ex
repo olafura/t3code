@@ -288,7 +288,7 @@ defmodule T3.Orchestration.Entities do
     id = input["threadId"]
 
     %{
-      "createdBy" => "user",
+      "createdBy" => input["createdBy"] || "user",
       "creationSource" => input["creationSource"] || "web",
       "id" => id,
       "projectId" => input["projectId"],

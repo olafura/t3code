@@ -45,7 +45,9 @@ defmodule T3.Projects do
   def mutate(%{"type" => "project.update", "projectId" => id} = m) do
     fields =
       m
-      |> Map.take(["title", "defaultModelSelection", "scripts"])
+      |> Map.take(
+        ~w(title defaultModelSelection scripts autoPull projectIcon faviconPath defaultThreadEnvMode)
+      )
       |> then(
         &if(m["workspaceRoot"],
           do: Map.put(&1, "workspaceRoot", expand(m["workspaceRoot"])),

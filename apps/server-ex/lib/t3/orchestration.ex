@@ -365,7 +365,7 @@ defmodule T3.Orchestration do
             "type" => "message.dispatch",
             "commandId" => "#{input["commandId"]}:initial-message",
             "threadId" => thread_id,
-            "createdBy" => "user",
+            "createdBy" => input["createdBy"] || "user",
             "creationSource" => input["creationSource"] || "web",
             "modelSelection" => input["modelSelection"]
           })
@@ -408,9 +408,11 @@ defmodule T3.Orchestration do
     end
   end
 
-  # A title from the first message, in the background; the thread keeps its own
-  # until one arrives.
-  defp generate_title(thread_id, text) when is_binary(text) and text != "" do
+  @doc """
+  Titles a thread from its first message's `text`, in the background; the thread
+  keeps its own title until one arrives.
+  """
+  def generate_title(thread_id, text) when is_binary(text) and text != "" do
     Task.start(fn ->
       root =
         case T3.Shell.row(node(), thread_id) do
@@ -433,7 +435,7 @@ defmodule T3.Orchestration do
     end)
   end
 
-  defp generate_title(_thread_id, _text), do: :ok
+  def generate_title(_thread_id, _text), do: :ok
 
   @doc "Starts the run a prepared workspace was waiting for."
   def release_prepared(thread_id, run_id) do
