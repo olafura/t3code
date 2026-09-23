@@ -279,6 +279,25 @@ describe("DesktopBackendConfiguration", () => {
     ),
   );
 
+  it.effect("a packaged app with a bundled Elixir node runs it", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const resources = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-resources-" });
+      yield* fileSystem.makeDirectory(`${resources}/t3-node/bin`, { recursive: true });
+      yield* fileSystem.writeFileString(`${resources}/t3-node/bin/t3`, "#!/bin/sh\n");
+
+      const config = yield* withHarness(
+        Effect.flatMap(
+          DesktopBackendConfiguration.DesktopBackendConfiguration,
+          (configuration) => configuration.resolvePrimary,
+        ),
+        { resourcesPath: resources },
+      );
+      assert.equal(config.executablePath, `${resources}/t3-node/bin/t3`);
+      assert.equal(config.bootstrapDelivery, "stdin");
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
   it.effect("resolvePrimary starts from server.asar without materializing the WSL tree", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;

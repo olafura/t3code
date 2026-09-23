@@ -162,6 +162,7 @@ interface BuildCliInput {
   readonly mockUpdates: Option.Option<boolean>;
   readonly mockUpdateServerPort: Option.Option<number>;
   readonly wslRuntime: Option.Option<string>;
+  readonly elixirNode: Option.Option<string>;
 }
 
 function detectHostBuildPlatform(hostPlatform: string): typeof BuildPlatform.Type | undefined {
@@ -919,6 +920,7 @@ interface ResolvedBuildOptions {
   readonly mockUpdates: boolean;
   readonly mockUpdateServerPort: number | undefined;
   readonly wslRuntime: string | undefined;
+  readonly elixirNode: string | undefined;
 }
 
 interface StagePackageJson {
@@ -965,6 +967,8 @@ export const DESKTOP_FILE_EXCLUSIONS = [
   "!apps/desktop/prod-resources/windows-server/**/*",
   "!apps/desktop/prod-resources/wsl-runtime.tar.gz",
   "!apps/desktop/prod-resources/wsl-runtime.tar.gz.sha256",
+  "!apps/desktop/prod-resources/elixir-node",
+  "!apps/desktop/prod-resources/elixir-node/**/*",
   "!apps/desktop/gnome-extension",
   "!apps/desktop/gnome-extension/**/*",
 ] as const;
@@ -1066,6 +1070,19 @@ export const bundlesWslRuntime = (input: {
   readonly platform: typeof BuildPlatform.Type;
   readonly runtimeArchivePath: string | undefined;
 }): boolean => input.platform === "win" && input.runtimeArchivePath !== undefined;
+
+// An Elixir node release (`--elixir-node`) ships as resources/t3-node, which the
+// packaged app finds and runs as its backend instead of the Node server. Releases
+// start through a shell script, so this is macOS and Linux only.
+export const bundlesElixirNode = (input: {
+  readonly platform: typeof BuildPlatform.Type;
+  readonly releaseDir: string | undefined;
+}): boolean => input.platform !== "win" && input.releaseDir !== undefined;
+
+export const ELIXIR_NODE_EXTRA_RESOURCE = {
+  from: "apps/desktop/prod-resources/elixir-node",
+  to: "t3-node",
+} as const;
 
 export const WSL_RUNTIME_EXTRA_RESOURCES = [
   WSL_RUNTIME_ARCHIVE_EXTRA_RESOURCE,
@@ -1582,6 +1599,9 @@ const BuildEnvConfig = Config.all({
   // by the build_linux_cli CI job. The Windows build embeds it verbatim as the
   // WSL runtime.
   wslRuntime: Config.String("T3CODE_DESKTOP_WSL_RUNTIME").pipe(Config.option),
+  // Directory of an Elixir node release (apps/server-ex, `mix release`) to ship as
+  // the app's own backend. macOS and Linux only.
+  elixirNode: Config.String("T3CODE_DESKTOP_ELIXIR_NODE").pipe(Config.option),
 });
 
 const MockUpdateServerPortSchema = Schema.NumberFromString.check(
@@ -1675,6 +1695,8 @@ export const resolveBuildOptions = Effect.fn("resolveBuildOptions")(function* (
 
   const wslRuntime =
     Option.getOrUndefined(input.wslRuntime) ?? Option.getOrUndefined(env.wslRuntime);
+  const elixirNode =
+    Option.getOrUndefined(input.elixirNode) ?? Option.getOrUndefined(env.elixirNode);
 
   return {
     platform,
@@ -1689,6 +1711,7 @@ export const resolveBuildOptions = Effect.fn("resolveBuildOptions")(function* (
     mockUpdates,
     mockUpdateServerPort,
     wslRuntime,
+    elixirNode,
   } satisfies ResolvedBuildOptions;
 });
 
@@ -2665,6 +2688,8 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
   // source file was never written fails the electron-builder step.
   wslRuntimeBundled = false,
   arch?: typeof BuildArch.Type,
+  // True only when an Elixir node release was staged (see bundlesElixirNode).
+  elixirNodeBundled = false,
 ) {
   const buildConfig: Record<string, unknown> = {
     appId: DESKTOP_APP_ID,
@@ -2694,6 +2719,7 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
       ...(platform === "linux" ? LINUX_BROWSER_SECRET_EXTRA_RESOURCES : []),
       ...(platform === "win" ? WINDOWS_SERVER_EXTRA_RESOURCES : []),
       ...(platform === "win" && wslRuntimeBundled ? WSL_RUNTIME_EXTRA_RESOURCES : []),
+      ...(elixirNodeBundled ? [ELIXIR_NODE_EXTRA_RESOURCE] : []),
     ],
   };
   const updateChannel = resolveDesktopUpdateChannel(version);
@@ -3688,6 +3714,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
         : undefined,
       bundlesWslRuntime({ platform: options.platform, runtimeArchivePath: options.wslRuntime }),
       options.arch,
+      bundlesElixirNode({ platform: options.platform, releaseDir: options.elixirNode }),
     ),
     dependencies: stageDependencies,
     devDependencies: {
@@ -3760,6 +3787,16 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
       archivePath: path.join(stageAppDir, WSL_RUNTIME_ARCHIVE_EXTRA_RESOURCE.from),
       hashPath: path.join(stageAppDir, WSL_RUNTIME_ARCHIVE_HASH_EXTRA_RESOURCE.from),
     });
+  }
+
+  if (
+    options.elixirNode !== undefined &&
+    bundlesElixirNode({ platform: options.platform, releaseDir: options.elixirNode })
+  ) {
+    yield* Effect.log(
+      `[desktop-artifact] Staging Elixir node release from ${options.elixirNode}...`,
+    );
+    yield* fs.copy(options.elixirNode, path.join(stageAppDir, ELIXIR_NODE_EXTRA_RESOURCE.from));
   }
 
   // electron-builder treats several set-but-empty variables (e.g. CSC_LINK="")
@@ -3942,6 +3979,12 @@ const buildDesktopArtifactCli = Command.make("build-desktop-artifact", {
   mockUpdateServerPort: Flag.Int("mock-update-server-port").pipe(
     Flag.withSchema(Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 65535 }))),
     Flag.withDescription("Mock update server port (env: T3CODE_DESKTOP_MOCK_UPDATE_SERVER_PORT)."),
+    Flag.optional,
+  ),
+  elixirNode: Flag.String("elixir-node").pipe(
+    Flag.withDescription(
+      "Directory of an Elixir node release (apps/server-ex/_build/prod/rel/t3) to ship as the app's own backend; macOS and Linux (env: T3CODE_DESKTOP_ELIXIR_NODE).",
+    ),
     Flag.optional,
   ),
   wslRuntime: Flag.String("wsl-runtime").pipe(
