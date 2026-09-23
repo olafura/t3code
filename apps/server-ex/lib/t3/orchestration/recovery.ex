@@ -41,7 +41,15 @@ defmodule T3.Orchestration.Recovery do
     done = %{"status" => "interrupted", "completedAt" => at}
 
     for {kind, fun} <- [
-          {"run", &if(&1["status"] in @active_runs, do: Map.merge(&1, done))},
+          {"run",
+           fn run ->
+             cond do
+               # Queued messages wait for the user to resume the queue.
+               run["status"] == "queued" -> Map.put(run, "queueHeld", true)
+               run["status"] in @active_runs -> Map.merge(run, done)
+               true -> nil
+             end
+           end},
           {"run-attempt", &if(&1["status"] in @active, do: Map.merge(&1, done))},
           {"provider-turn", &if(&1["status"] in @active, do: Map.merge(&1, done))},
           {"node", &if(&1["status"] in @active, do: Map.merge(&1, done))},

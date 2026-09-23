@@ -125,23 +125,105 @@ defmodule T3.OrchestrationTest do
     refute Enum.any?(patches, &(get_in(&1, ["s", "text"]) == "Hello from codex"))
   end
 
-  test "a second message while a run is active is rejected, and interrupt ends the run" do
+  test "interrupt ends the running turn" do
     thread_id = launch("wait for me")
     _ = await_run(thread_id, "running")
-
-    assert {:error, "a run is already active" <> _} =
-             Orchestration.dispatch(%{
-               "type" => "message.dispatch",
-               "threadId" => thread_id,
-               "messageId" => "msg-2",
-               "text" => "again"
-             })
 
     assert {:ok, _} =
              Orchestration.dispatch(%{"type" => "run.interrupt", "threadId" => thread_id})
 
     state = await_run(thread_id, "interrupted")
     assert [%{"status" => "interrupted"}] = StreamState.list(state, "run-attempt")
+  end
+
+  describe "queued messages" do
+    test "a message sent during a run waits in the queue and starts when the run ends" do
+      thread_id = launch("wait for it")
+      _ = await_run(thread_id, "running")
+
+      {:ok, _} = send_message(thread_id, "m2", "then list the files")
+      {:ok, _} = send_message(thread_id, "m3", "and once more")
+
+      state = await_statuses(thread_id, ["running", "queued", "queued"])
+      [_, second, third] = runs(state)
+      assert {second["queuePosition"], third["queuePosition"]} == {1, 2}
+      assert %{"text" => "then list the files"} = StreamState.get(state, "message")["m2"]
+
+      # Queued messages join the transcript only when their run starts.
+      refute Enum.any?(StreamState.list(state, "turn-item"), &(&1["messageId"] == "m2"))
+
+      {:ok, _} = Orchestration.dispatch(%{"type" => "run.interrupt", "threadId" => thread_id})
+
+      state = await_statuses(thread_id, ["interrupted", "completed", "completed"])
+
+      assert %{"inputIntent" => "queued_turn", "text" => "then list the files"} =
+               Enum.find(StreamState.list(state, "turn-item"), &(&1["messageId"] == "m2"))
+
+      assert Enum.all?(runs(state), &(&1["queuePosition"] == nil))
+    end
+
+    test "queued runs can be reordered, edited, and cancelled" do
+      thread_id = launch("wait for it")
+      _ = await_run(thread_id, "running")
+      {:ok, _} = send_message(thread_id, "m2", "second")
+      {:ok, _} = send_message(thread_id, "m3", "third")
+      [_, second, third] = runs(await_statuses(thread_id, ["running", "queued", "queued"]))
+
+      {:ok, _} =
+        queue_command("queued-run.reorder", thread_id, third["id"], %{
+          "beforeRunId" => second["id"]
+        })
+
+      {:ok, _} =
+        queue_command("queued-run.edit", thread_id, third["id"], %{"text" => "third, edited"})
+
+      {:ok, _} = queue_command("queued-run.cancel", thread_id, second["id"])
+
+      state = current(thread_id)
+      by_id = Map.new(runs(state), &{&1["id"], &1})
+      assert %{"status" => "cancelled", "queuePosition" => nil} = by_id[second["id"]]
+      assert %{"status" => "queued", "queuePosition" => 1} = by_id[third["id"]]
+      assert %{"text" => "third, edited"} = StreamState.get(state, "message")["m3"]
+    end
+
+    test "steering a queued message interrupts the run and starts it next" do
+      thread_id = launch("wait for it")
+      _ = await_run(thread_id, "running")
+      {:ok, _} = send_message(thread_id, "m2", "second")
+      {:ok, _} = send_message(thread_id, "m3", "third")
+      [active, _, third] = runs(await_statuses(thread_id, ["running", "queued", "queued"]))
+
+      {:ok, _} =
+        Orchestration.dispatch(%{
+          "type" => "queued-message.promote-to-steer",
+          "threadId" => thread_id,
+          "queuedRunId" => third["id"],
+          "targetRunId" => active["id"]
+        })
+
+      state = await_statuses(thread_id, ["interrupted", "completed", "completed"])
+
+      # The promoted message ran before the one queued ahead of it.
+      order =
+        state
+        |> StreamState.list("turn-item")
+        |> Enum.filter(&(&1["messageId"] in ["m2", "m3"]))
+        |> Enum.sort_by(& &1["ordinal"])
+        |> Enum.map(& &1["messageId"])
+
+      assert order == ["m3", "m2"]
+    end
+
+    test "restart interrupts the running turn and starts the message next" do
+      thread_id = launch("wait for it")
+      _ = await_run(thread_id, "running")
+
+      {:ok, _} =
+        send_message(thread_id, "m2", "do this instead", %{"deliveryIntent" => "restart"})
+
+      state = await_statuses(thread_id, ["interrupted", "completed"])
+      assert Enum.any?(StreamState.list(state, "turn-item"), &(&1["messageId"] == "m2"))
+    end
   end
 
   describe "Claude" do
@@ -460,6 +542,49 @@ defmodule T3.OrchestrationTest do
   end
 
   defp current(thread_id), do: T3.Streams.Server.state(T3.Streams.ensure(thread_id))
+
+  defp runs(state), do: state |> StreamState.list("run") |> Enum.sort_by(& &1["ordinal"])
+
+  defp send_message(thread_id, message_id, text, extra \\ %{}) do
+    Orchestration.dispatch(
+      Map.merge(
+        %{
+          "type" => "message.dispatch",
+          "threadId" => thread_id,
+          "messageId" => message_id,
+          "text" => text,
+          "attachments" => [],
+          "dispatchMode" => %{"type" => "start_immediately"},
+          "deliveryIntent" => "auto"
+        },
+        extra
+      )
+    )
+  end
+
+  defp queue_command(type, thread_id, run_id, extra \\ %{}),
+    do:
+      Orchestration.dispatch(
+        Map.merge(%{"type" => type, "threadId" => thread_id, "runId" => run_id}, extra)
+      )
+
+  # Waits until the thread's runs, in order, have these statuses.
+  defp await_statuses(thread_id, statuses) do
+    state = current(thread_id)
+
+    if Enum.map(runs(state), & &1["status"]) == statuses do
+      state
+    else
+      receive do
+        {:t3_stream, ^thread_id, _} -> await_statuses(thread_id, statuses)
+      after
+        5_000 ->
+          flunk(
+            "runs never reached #{inspect(statuses)}: #{inspect(Enum.map(runs(state), & &1["status"]))}"
+          )
+      end
+    end
+  end
 
   defp await_request(thread_id) do
     receive do

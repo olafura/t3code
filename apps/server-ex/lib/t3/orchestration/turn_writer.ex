@@ -288,7 +288,8 @@ defmodule T3.Orchestration.TurnWriter do
 
   @doc """
   Ends the run: provider turn, attempt, run, root node, and provider thread. A
-  completed run also captures its workspace checkpoint (`T3.Checkpoint`).
+  completed run also captures its workspace checkpoint (`T3.Checkpoint`). The
+  thread's next queued message then starts (`T3.Orchestration.start_next/1`).
   """
   def finish(state, status, failure) do
     ids = state.turn.ids
@@ -321,6 +322,12 @@ defmodule T3.Orchestration.TurnWriter do
             )
         ]
     end)
+
+    # The thread is idle now: its next queued message can start. Off this process,
+    # since starting a turn calls back into the runtime that is finishing this one.
+    thread_id = state.thread_id
+    Task.start(fn -> Orchestration.start_next(thread_id) end)
+    :ok
   end
 
   defp capture_checkpoint(%{scope_id: scope_id} = turn, at) do

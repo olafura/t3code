@@ -5,6 +5,10 @@ defmodule T3.Orchestration do
   ACP agent such as OpenCode;
   plus the diffs of their checkpoints.
 
+  A message sent while a run is active is queued: its run waits as `queued` with a
+  queue position and starts when the thread is next idle (`start_next/1`). Nodes do
+  not steer a running turn; "restart" interrupts it and puts the message first.
+
   Each command is decided inside the thread's stream process (`T3.Streams.transact/3`),
   so reading the thread and writing its new entities is atomic. Starting the provider
   turn happens after the commit, in the provider's runtime (`T3.Codex.ThreadRuntime`,
@@ -37,6 +41,14 @@ defmodule T3.Orchestration do
   @spec dispatch(map) :: {:ok, map} | {:error, String.t()}
   def dispatch(%{"type" => "message.dispatch", "threadId" => thread_id} = command) do
     case T3.Streams.transact(thread_id, :thread, &decide_message(&1, thread_id, command)) do
+      {:ok, :queued} ->
+        {:ok, %{"sequence" => sequence(thread_id)}}
+
+      {:ok, {:restart, active_run_id}} ->
+        # The queued message goes first; the interrupted run's end starts it.
+        _ = interrupt_any(thread_id, active_run_id)
+        {:ok, %{"sequence" => sequence(thread_id)}}
+
       {:ok, turn} ->
         :ok = T3.Checkpoint.baseline(turn.cwd, turn.scope_id, turn.run_ordinal - 1)
         start_turn(thread_id, turn)
@@ -50,6 +62,97 @@ defmodule T3.Orchestration do
   def dispatch(%{"type" => "run.interrupt", "threadId" => thread_id} = command) do
     with :ok <- interrupt_any(thread_id, command["runId"]),
          do: {:ok, %{"sequence" => sequence(thread_id)}}
+  end
+
+  def dispatch(%{"type" => "queued-run.cancel", "threadId" => thread_id, "runId" => run_id}) do
+    queue_change(thread_id, fn state ->
+      at = Entities.now()
+
+      [
+        upsert(
+          state,
+          "run",
+          run_id,
+          &if(&1["status"] == "queued",
+            do:
+              Map.merge(&1, %{
+                "status" => "cancelled",
+                "queuePosition" => nil,
+                "completedAt" => at
+              })
+          )
+        )
+      ]
+    end)
+  end
+
+  def dispatch(
+        %{"type" => "queued-run.edit", "threadId" => thread_id, "runId" => run_id} = command
+      ) do
+    queue_change(thread_id, fn state ->
+      case StreamState.get(state, "run")[run_id] do
+        %{"status" => "queued", "userMessageId" => message_id} ->
+          [
+            upsert(
+              state,
+              "message",
+              message_id,
+              &Map.merge(&1, %{"text" => command["text"] || "", "updatedAt" => Entities.now()})
+            )
+          ]
+
+        _ ->
+          []
+      end
+    end)
+  end
+
+  def dispatch(
+        %{"type" => "queued-run.reorder", "threadId" => thread_id, "runId" => run_id} = command
+      ) do
+    queue_change(thread_id, fn state ->
+      queued = queued_runs(state) |> Enum.map(& &1["id"]) |> List.delete(run_id)
+
+      order =
+        case Enum.find_index(queued, &(&1 == command["beforeRunId"])) do
+          nil -> queued ++ [run_id]
+          index -> List.insert_at(queued, index, run_id)
+        end
+
+      for {id, position} <- Enum.with_index(order, 1),
+          do: upsert(state, "run", id, &Map.put(&1, "queuePosition", position))
+    end)
+  end
+
+  # Nodes do not steer a running turn; a queued message "steers" by going first and
+  # interrupting the run, which starts it next.
+  def dispatch(%{"type" => "queued-message.promote-to-steer", "threadId" => thread_id} = command) do
+    queued_id = command["queuedRunId"]
+
+    with {:ok, result} <-
+           queue_change(thread_id, fn state ->
+             order = [
+               queued_id | queued_runs(state) |> Enum.map(& &1["id"]) |> List.delete(queued_id)
+             ]
+
+             for {id, position} <- Enum.with_index(order, 1),
+                 do: upsert(state, "run", id, &Map.put(&1, "queuePosition", position))
+           end) do
+      _ = interrupt_any(thread_id, command["targetRunId"])
+      {:ok, result}
+    end
+  end
+
+  # After a restart the queue waits until the user resumes it.
+  def dispatch(%{"type" => "queue.resume", "threadId" => thread_id}) do
+    with {:ok, result} <-
+           queue_change(thread_id, fn state ->
+             for run <- queued_runs(state),
+                 do: upsert(state, "run", run["id"], &Map.put(&1, "queueHeld", false))
+           end) do
+      start_next(thread_id)
+      {:ok, result}
+    end
   end
 
   # An approval's decision, or answers to questions (`answers`, by question id).
@@ -157,6 +260,67 @@ defmodule T3.Orchestration do
 
   defp sequence(thread_id), do: T3.Streams.Server.state(T3.Streams.ensure(thread_id)).seq
 
+  # Changes to queued runs; positions are renumbered 1.. after each one.
+  defp queue_change(thread_id, fun) do
+    T3.Streams.transact(thread_id, :thread, fn state ->
+      changes = Enum.reject(fun.(state), &is_nil/1)
+      {changes, :ok}
+    end)
+
+    T3.Streams.transact(thread_id, :thread, fn state -> {renumber(state), :ok} end)
+    {:ok, %{"sequence" => sequence(thread_id)}}
+  end
+
+  defp queued_runs(state) do
+    state
+    |> StreamState.list("run")
+    |> Enum.filter(&(&1["status"] == "queued"))
+    |> Enum.sort_by(&{&1["queuePosition"] || 0, &1["ordinal"]})
+  end
+
+  defp renumber(state) do
+    for {run, position} <- Enum.with_index(queued_runs(state), 1),
+        change = upsert(state, "run", run["id"], &Map.put(&1, "queuePosition", position)),
+        do: change
+  end
+
+  @doc """
+  Starts the thread's first queued message if nothing is running and the queue is
+  not held. Runtimes call it (off their own process) when a run ends.
+  """
+  def start_next(thread_id) do
+    case T3.Streams.transact(thread_id, :thread, &decide_next(&1, thread_id)) do
+      {:ok, turn} ->
+        :ok = T3.Checkpoint.baseline(turn.cwd, turn.scope_id, turn.run_ordinal - 1)
+        start_turn(thread_id, turn)
+
+      _idle ->
+        :ok
+    end
+  end
+
+  defp decide_next(state, thread_id) do
+    thread = StreamState.get(state, "thread")[thread_id]
+    runs = StreamState.list(state, "run")
+
+    with false <- Enum.any?(runs, &(&1["status"] in @active_statuses)),
+         %{} = next <- Enum.find(queued_runs(state), &(&1["queueHeld"] != true)),
+         %{} = message <- StreamState.get(state, "message")[next["userMessageId"]] do
+      {changes, result} = new_run(state, thread, runs, message, next)
+      # The started run leaves the queue; the rest move up.
+      rest = queued_runs(state) |> Enum.reject(&(&1["id"] == next["id"]))
+
+      positions =
+        for {run, position} <- Enum.with_index(rest, 1),
+            change = upsert(state, "run", run["id"], &Map.put(&1, "queuePosition", position)),
+            do: change
+
+      {changes ++ positions, result}
+    else
+      _ -> {[], :idle}
+    end
+  end
+
   # Records the user's message and a new run, and returns what the provider needs to
   # start the turn. Rejects a second run while one is active.
   defp decide_message(state, thread_id, command) do
@@ -167,31 +331,95 @@ defmodule T3.Orchestration do
       thread == nil ->
         {[], {:error, "unknown thread #{thread_id}"}}
 
-      Enum.any?(runs, &(&1["status"] in @active_statuses)) ->
-        {[], {:error, "a run is already active in this thread"}}
+      active = Enum.find(runs, &(&1["status"] in @active_statuses)) ->
+        restart =
+          command["deliveryIntent"] == "restart" or
+            get_in(command, ["dispatchMode", "type"]) == "restart_active"
+
+        queue_run(state, thread, runs, command, if(restart, do: active["id"]))
 
       true ->
         new_run(state, thread, runs, command)
     end
   end
 
-  defp new_run(state, thread, runs, command) do
+  # A message for later: its run waits in the queue, with the message itself. A
+  # restart puts it first and asks for the active run to be interrupted.
+  defp queue_run(state, thread, runs, command, restart_of) do
     at = Entities.now()
-    thread_id = thread["id"]
-    ordinal = length(runs) + 1
     selection = command["modelSelection"] || thread["modelSelection"]
     instance = selection["instanceId"] || thread["providerInstanceId"] || "codex"
     driver = driver_for(instance)
-    provider_thread_id = "provider-thread:#{driver}:#{thread_id}"
-    session_id = "provider-session:#{driver}:#{thread_id}"
-    cwd = thread["worktreePath"] || project_root(thread["projectId"]) || File.cwd!()
     message_id = command["messageId"] || Entities.new_id("message")
 
     ids = %{
       driver: driver,
       instance: instance,
-      thread: thread_id,
+      thread: thread["id"],
       run: Entities.new_id("run"),
+      attempt: nil,
+      root_node: nil,
+      provider_thread: "provider-thread:#{driver}:#{thread["id"]}",
+      message: message_id
+    }
+
+    queued = queued_runs(state)
+    position = if restart_of, do: 0, else: length(queued) + 1
+
+    run =
+      Entities.run(ids, length(runs) + 1, selection, at)
+      |> Map.merge(%{"status" => "queued", "queuePosition" => position})
+
+    message =
+      Entities.message(ids, message_id, "user", command["text"] || "", false, at)
+      |> Map.merge(%{
+        "attachments" => command["attachments"] || [],
+        "createdBy" => command["createdBy"] || "user",
+        "creationSource" => command["creationSource"] || "web"
+      })
+
+    # A restart's message goes first; the others move down one.
+    shifted =
+      if restart_of,
+        do:
+          for(
+            {queued_run, index} <- Enum.with_index(queued, 2),
+            change = upsert(state, "run", queued_run["id"], &Map.put(&1, "queuePosition", index)),
+            do: change
+          ),
+        else: []
+
+    run = if restart_of, do: Map.put(run, "queuePosition", 1), else: run
+
+    {[create("run", ids.run, run), create("message", message_id, message)] ++ shifted,
+     {:ok, if(restart_of, do: {:restart, restart_of}, else: :queued)}}
+  end
+
+  # Starts a run for a message: a new one, or a queued run (with its stored message
+  # as `command`), which keeps its ordinal and ids.
+  defp new_run(state, thread, runs, command, queued \\ nil) do
+    at = Entities.now()
+    thread_id = thread["id"]
+    ordinal = if queued, do: queued["ordinal"], else: length(runs) + 1
+
+    selection =
+      (queued && queued["modelSelection"]) || command["modelSelection"] ||
+        thread["modelSelection"]
+
+    instance = selection["instanceId"] || thread["providerInstanceId"] || "codex"
+    driver = driver_for(instance)
+    provider_thread_id = "provider-thread:#{driver}:#{thread_id}"
+    session_id = "provider-session:#{driver}:#{thread_id}"
+    cwd = thread["worktreePath"] || project_root(thread["projectId"]) || File.cwd!()
+
+    message_id =
+      (queued && queued["userMessageId"]) || command["messageId"] || Entities.new_id("message")
+
+    ids = %{
+      driver: driver,
+      instance: instance,
+      thread: thread_id,
+      run: (queued && queued["id"]) || Entities.new_id("run"),
       attempt: Entities.new_id("run-attempt"),
       root_node: Entities.new_id("node"),
       provider_thread: provider_thread_id,
@@ -261,9 +489,22 @@ defmodule T3.Orchestration do
     text = command["text"] || ""
 
     changes =
-      Enum.reject(provider_changes ++ [scope_change], &is_nil/1) ++
+      Enum.reject(provider_changes ++ [scope_change], &is_nil/1)
+      |> Kernel.++(
         [
-          create("run", ids.run, Entities.run(ids, ordinal, selection, at)),
+          if(queued,
+            do:
+              upsert(
+                state,
+                "run",
+                ids.run,
+                &Map.merge(
+                  &1,
+                  Map.drop(Entities.run(ids, ordinal, selection, at), ["requestedAt"])
+                )
+              ),
+            else: create("run", ids.run, Entities.run(ids, ordinal, selection, at))
+          ),
           create("run-attempt", ids.attempt, Entities.attempt(ids)),
           create(
             "node",
@@ -272,10 +513,13 @@ defmodule T3.Orchestration do
               "checkpointScopeId" => scope_id
             })
           ),
-          create(
-            "message",
-            message_id,
-            Entities.message(ids, message_id, "user", text, false, at)
+          unless(queued,
+            do:
+              create(
+                "message",
+                message_id,
+                Entities.message(ids, message_id, "user", text, false, at)
+              )
           ),
           create(
             "turn-item",
@@ -291,13 +535,15 @@ defmodule T3.Orchestration do
                 "createdBy" => command["createdBy"] || "user",
                 "creationSource" => command["creationSource"] || "web",
                 "messageId" => message_id,
-                "inputIntent" => "turn_start",
+                "inputIntent" => if(queued, do: "queued_turn", else: "turn_start"),
                 "text" => text,
                 "attachments" => command["attachments"] || []
               }
             )
           )
         ]
+        |> Enum.reject(&is_nil/1)
+      )
 
     turn = %{
       ids: ids,

@@ -30,7 +30,7 @@ defmodule T3.Orchestration.Entities do
       "supportsInterrupt" => true,
       "supportsActiveSteering" => false,
       "supportsSteeringByInterruptRestart" => false,
-      "supportsQueuedMessages" => false,
+      "supportsQueuedMessages" => true,
       "terminalStatusQuality" => "strong"
     },
     "streaming" => %{
