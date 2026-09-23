@@ -142,6 +142,13 @@ defmodule T3.Workspace do
     end
   end
 
+  @doc "A path under `root` that stays under it once symlinks resolve (asset URLs)."
+  def resolve(root, relative) do
+    inside(Path.expand(root), relative, fn _failure, message ->
+      {:error, %{"_tag" => "AssetAccessError", "message" => message}}
+    end)
+  end
+
   # --- the index -------------------------------------------------------------------
 
   defp index(root, tag) do

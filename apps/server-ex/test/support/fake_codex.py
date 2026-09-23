@@ -46,6 +46,13 @@ for line in sys.stdin:
         if "wait" in text:
             waiting_ctx = ctx
             continue
+        if "look" in text:
+            kinds = [item["type"] for item in params["input"]]
+            saved = "is saved at" in text
+            send({"method": "item/started", "params": {**ctx, "item": {"type": "agentMessage", "id": "msg-look", "text": ""}}})
+            send({"method": "item/completed", "params": {**ctx, "item": {"type": "agentMessage", "id": "msg-look", "text": f"input {','.join(kinds)} saved {saved}"}}})
+            send({"method": "turn/completed", "params": {**ctx, "turn": {"id": turn_id, "status": "completed"}}})
+            continue
         if "plan" in text:
             mode = (params.get("collaborationMode") or {}).get("mode")
             if mode == "plan":

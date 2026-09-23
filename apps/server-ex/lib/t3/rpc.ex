@@ -31,6 +31,10 @@ defmodule T3.Rpc do
 
   def handle("filesystem.browse", input), do: T3.Projects.browse(input)
   def handle("projects.searchEntries", input), do: T3.Workspace.search_entries(input)
+  def handle("attachments.createUploadUrl", input), do: T3.Attachments.create_upload_url(input)
+  def handle("attachments.delete", input), do: T3.Attachments.delete(input)
+  def handle("assets.createUrl", input), do: T3.Attachments.create_url(input)
+  def handle("assets.persistChatAttachments", input), do: T3.Attachments.persist(input)
   def handle("projects.listEntries", input), do: T3.Workspace.list_entries(input)
   def handle("projects.readFile", input), do: T3.Workspace.read_file(input)
   def handle("projects.writeFile", input), do: T3.Workspace.write_file(input)

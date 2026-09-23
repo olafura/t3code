@@ -20,7 +20,12 @@ defmodule T3.Environment do
       "orchestrationProtocolVersion" => @protocol,
       # Commands are resolved against the thread on the node, so clients need not
       # read the projection before sending.
-      "capabilities" => %{"repositoryIdentity" => false, "serverResolvedCommandContext" => true}
+      "capabilities" => %{
+        "repositoryIdentity" => false,
+        "serverResolvedCommandContext" => true,
+        # Files besides images upload to `T3.Attachments` too.
+        "fileAttachments" => %{"maxUploadBytes" => 50 * 1024 * 1024}
+      }
     }
   end
 

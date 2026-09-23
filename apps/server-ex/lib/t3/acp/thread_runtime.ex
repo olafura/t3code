@@ -107,7 +107,7 @@ defmodule T3.Acp.ThreadRuntime do
       started(state)
       conn = state.conn
       session_id = state.session_id
-      prompt = [%{"type" => "text", "text" => turn.text}]
+      prompt = acp_prompt(turn, state.capabilities)
 
       task =
         Task.async(fn ->
@@ -555,6 +555,21 @@ defmodule T3.Acp.ThreadRuntime do
     state = state |> flush() |> close_open_items(status) |> cancel_requests()
     finish(state, status, failure)
     %{state | turn: nil, items: %{}}
+  end
+
+  # The message, with where its files are; images inline when the agent takes them.
+  defp acp_prompt(turn, capabilities) do
+    attachments = Map.get(turn, :attachments, [])
+    text = [%{"type" => "text", "text" => T3.Attachments.prompt_text(turn.text, attachments)}]
+
+    if get_in(capabilities || %{}, ["promptCapabilities", "image"]) == true,
+      do:
+        text ++
+          for(
+            {mime, data} <- T3.Attachments.native_images(attachments),
+            do: %{"type" => "image", "mimeType" => mime, "data" => data}
+          ),
+      else: text
   end
 
   defp format(reason) when is_binary(reason), do: reason

@@ -1,5 +1,10 @@
 import {
   AcpRegistryOperationError,
+  AssetAccessError,
+  AssetWorkspaceResolutionError,
+  AttachmentUploadSigningKeyError,
+  PersistChatAttachmentsError,
+  type AssetCreateUrlInput,
   AgentSessionImportProjectChangedError,
   AgentSessionImportProjectNotFoundError,
   AgentSessionScanError,
@@ -418,6 +423,33 @@ export function makeV3Session(input: {
         ),
       );
 
+    // Attachments upload to, and files are served from, the thread's node.
+    const decodeAssetError = Schema.decodeUnknownOption(AssetAccessError);
+    const createAssetUrl = forward(
+      WS_METHODS.assetsCreateUrl,
+      (request: AssetCreateUrlInput, message, cause) =>
+        decodeAssetError(cause instanceof ClusterRpcError ? cause.detail : undefined).pipe(
+          Option.getOrElse(
+            () => new AssetWorkspaceResolutionError({ resource: request.resource, cause: message }),
+          ),
+        ),
+    );
+    const createUploadUrl = forward(
+      WS_METHODS.attachmentsCreateUploadUrl,
+      (_request: object, message) => new AttachmentUploadSigningKeyError({ cause: message }),
+    );
+    const persistAttachments = forward(
+      WS_METHODS.assetsPersistChatAttachments,
+      (_request: object, message, cause) =>
+        Schema.decodeUnknownOption(PersistChatAttachmentsError)(
+          cause instanceof ClusterRpcError ? cause.detail : undefined,
+        ).pipe(Option.getOrElse(() => new PersistChatAttachmentsError({ message }))),
+    );
+    const deleteAttachment = forward(
+      WS_METHODS.attachmentsDelete,
+      (_request: object, _message, cause) => cause,
+    );
+
     // A project's files are read and searched on its node.
     const projectFiles = <R extends { readonly cwd: string }, E>(
       tag: string,
@@ -631,6 +663,10 @@ export function makeV3Session(input: {
         WS_METHODS.serverDisableAcpRegistryProvider,
       ),
       [WS_METHODS.serverLogoutAcpRegistry]: acpRegistryCommand(WS_METHODS.serverLogoutAcpRegistry),
+      [WS_METHODS.assetsCreateUrl]: createAssetUrl,
+      [WS_METHODS.attachmentsCreateUploadUrl]: createUploadUrl,
+      [WS_METHODS.attachmentsDelete]: deleteAttachment,
+      [WS_METHODS.assetsPersistChatAttachments]: persistAttachments,
       [WS_METHODS.projectsSearchEntries]: projectFiles(
         WS_METHODS.projectsSearchEntries,
         Schema.decodeUnknownOption(ProjectSearchEntriesError),

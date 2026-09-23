@@ -246,6 +246,16 @@ defmodule T3.Codex.ThreadRuntime do
   @impl true
   def code_change(_old, state, _extra), do: {:ok, %{state | v: @state_version}}
 
+  # The message, with where its files are, and its images inline.
+  defp codex_input(turn) do
+    attachments = Map.get(turn, :attachments, [])
+    text = T3.Attachments.prompt_text(turn.text, attachments)
+
+    if(text == "", do: [], else: [%{"type" => "text", "text" => text}]) ++
+      for {mime, data} <- T3.Attachments.native_images(attachments),
+          do: %{"type" => "image", "url" => "data:#{mime};base64,#{data}"}
+  end
+
   defp non_empty(value, default) when is_binary(value),
     do: if(String.trim(value) == "", do: default, else: String.trim(value))
 
@@ -380,7 +390,7 @@ defmodule T3.Codex.ThreadRuntime do
 
     params = %{
       "threadId" => state.native_thread_id,
-      "input" => [%{"type" => "text", "text" => turn.text}],
+      "input" => codex_input(turn),
       "cwd" => turn.cwd,
       "model" => turn.model,
       "approvalPolicy" => approval,

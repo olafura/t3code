@@ -45,22 +45,10 @@ defmodule T3.Orchestration do
 
   @spec dispatch(map) :: {:ok, map} | {:error, String.t()}
   def dispatch(%{"type" => "message.dispatch", "threadId" => thread_id} = command) do
-    case T3.Streams.transact(thread_id, :thread, &decide_message(&1, thread_id, command)) do
-      {:ok, :queued} ->
-        {:ok, %{"sequence" => sequence(thread_id)}}
-
-      {:ok, {:steer, run}} ->
-        steer(thread_id, run, command)
-
-      {:ok, {:restart, active_run_id}} ->
-        # The queued message goes first; the interrupted run's end starts it.
-        _ = interrupt_any(thread_id, active_run_id)
-        {:ok, %{"sequence" => sequence(thread_id)}}
-
-      {:ok, turn} ->
-        :ok = T3.Checkpoint.baseline(turn.cwd, turn.scope_id, turn.run_ordinal - 1)
-        start_turn(thread_id, turn)
-        {:ok, %{"sequence" => sequence(thread_id)}}
+    # Uploads join the thread before the message names them.
+    case T3.Attachments.claim(thread_id, command["attachments"] || []) do
+      {:ok, attachments} ->
+        dispatch_message(thread_id, Map.put(command, "attachments", attachments))
 
       {:error, _} = error ->
         error
@@ -313,6 +301,29 @@ defmodule T3.Orchestration do
         if runtime.interrupt(thread_id, run_id) == :ok, do: :ok
       end
     )
+  end
+
+  defp dispatch_message(thread_id, command) do
+    case T3.Streams.transact(thread_id, :thread, &decide_message(&1, thread_id, command)) do
+      {:ok, :queued} ->
+        {:ok, %{"sequence" => sequence(thread_id)}}
+
+      {:ok, {:steer, run}} ->
+        steer(thread_id, run, command)
+
+      {:ok, {:restart, active_run_id}} ->
+        # The queued message goes first; the interrupted run's end starts it.
+        _ = interrupt_any(thread_id, active_run_id)
+        {:ok, %{"sequence" => sequence(thread_id)}}
+
+      {:ok, turn} ->
+        :ok = T3.Checkpoint.baseline(turn.cwd, turn.scope_id, turn.run_ordinal - 1)
+        start_turn(thread_id, turn)
+        {:ok, %{"sequence" => sequence(thread_id)}}
+
+      {:error, _} = error ->
+        error
+    end
   end
 
   defp sequence(thread_id), do: T3.Streams.Server.state(T3.Streams.ensure(thread_id)).seq
@@ -738,7 +749,9 @@ defmodule T3.Orchestration do
               create(
                 "message",
                 message_id,
-                Entities.message(ids, message_id, "user", text, false, at)
+                Entities.message(ids, message_id, "user", text, false, at, %{
+                  "attachments" => command["attachments"] || []
+                })
               )
           ),
           create(
@@ -775,6 +788,18 @@ defmodule T3.Orchestration do
       model: selection["model"],
       runtime_mode: thread["runtimeMode"] || "full-access",
       interaction_mode: thread["interactionMode"] || "default",
+      # The files providers read, from this node's attachment store.
+      attachments:
+        for(
+          attachment <- command["attachments"] || [],
+          path = T3.Attachments.path(attachment),
+          do: %{
+            type: attachment["type"],
+            name: attachment["name"],
+            mime_type: attachment["mimeType"],
+            path: path
+          }
+        ),
       native_thread_id: get_in(provider_thread || %{}, ["nativeThreadRef", "nativeId"])
     }
 

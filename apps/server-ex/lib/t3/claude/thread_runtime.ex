@@ -118,7 +118,7 @@ defmodule T3.Claude.ThreadRuntime do
 
     case ensure_session(state, turn) do
       {:ok, state} ->
-        Session.send_message(state.session, turn.text)
+        Session.send_message(state.session, claude_content(turn))
         at = Entities.now()
 
         commit(state, fn stream ->
@@ -319,6 +319,25 @@ defmodule T3.Claude.ThreadRuntime do
     do: if(String.trim(value) == "", do: default, else: String.trim(value))
 
   defp non_empty(_value, default), do: default
+
+  # The message, with where its files are; images go inline as content blocks.
+  defp claude_content(turn) do
+    attachments = Map.get(turn, :attachments, [])
+    text = T3.Attachments.prompt_text(turn.text, attachments)
+
+    case T3.Attachments.native_images(attachments) do
+      [] ->
+        text
+
+      images ->
+        [%{"type" => "text", "text" => text}] ++
+          for {mime, data} <- images,
+              do: %{
+                "type" => "image",
+                "source" => %{"type" => "base64", "media_type" => mime, "data" => data}
+              }
+    end
+  end
 
   # Plan mode, or the thread's runtime mode.
   defp permission_mode(turn) do

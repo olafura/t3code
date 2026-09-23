@@ -142,6 +142,62 @@ defmodule T3.Web.Router do
 
   defp iso(ms), do: ms |> DateTime.from_unix!(:millisecond) |> DateTime.to_iso8601()
 
+  # Signed URLs are their own authorization. Each names the node that issued it,
+  # which holds the file and checks the signature; this node only forwards.
+  post "/api/attachments/upload/:token" do
+    with {:ok, node} <- T3.Attachments.issuer(token),
+         {:ok, body, conn} <- read_all(conn, 50 * 1024 * 1024 + 1, []) do
+      case remote(node, T3.Attachments, :store, [token, body]) do
+        :ok -> send_resp(conn, 204, "")
+        {:error, status, message} -> send_resp(conn, status, message)
+        _ -> send_resp(conn, 502, "The node holding this upload is unavailable.")
+      end
+    else
+      :too_large -> send_resp(conn, 413, "The upload is too large.")
+      _ -> send_resp(conn, 403, "The link is invalid or expired.")
+    end
+  end
+
+  get "/api/assets/:token" do
+    with {:ok, node} <- T3.Attachments.issuer(token),
+         {:ok, bytes, mime, name, disposition} <- remote(node, T3.Attachments, :read, [token]) do
+      conn
+      |> put_resp_content_type(mime || "application/octet-stream", nil)
+      |> put_resp_header(
+        "content-disposition",
+        ~s(#{disposition || "inline"}; filename="#{String.replace(name || "file", ~s("), "")}")
+      )
+      |> put_resp_header("cache-control", "private, max-age=3600")
+      |> send_resp(200, bytes)
+    else
+      {:error, status, message} -> send_resp(conn, status, message)
+      _ -> send_resp(conn, 403, "The link is invalid or expired.")
+    end
+  end
+
+  defp read_all(conn, left, acc) do
+    case read_body(conn, length: min(left, 8_000_000)) do
+      {:ok, data, conn} ->
+        if byte_size(data) >= left,
+          do: :too_large,
+          else: {:ok, IO.iodata_to_binary([acc, data]), conn}
+
+      {:more, data, conn} ->
+        if byte_size(data) >= left,
+          do: :too_large,
+          else: read_all(conn, left - byte_size(data), [acc, data])
+
+      {:error, _} = error ->
+        error
+    end
+  end
+
+  defp remote(node, module, fun, args) do
+    :erpc.call(node, module, fun, args, 60_000)
+  catch
+    _, _ -> {:error, 502, "The node holding this file is unavailable."}
+  end
+
   match _ do
     send_resp(conn, 404, "not found")
   end

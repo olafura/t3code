@@ -136,6 +136,54 @@ defmodule T3.OrchestrationTest do
     assert [%{"status" => "interrupted"}] = StreamState.list(state, "run-attempt")
   end
 
+  test "a message's image upload reaches codex inline, with where it is saved" do
+    png = <<137, 80, 78, 71, 13, 10, 26, 10>>
+
+    {:ok, %{"attachmentId" => id, "relativeUrl" => "/api/attachments/upload/" <> token}} =
+      T3.Attachments.create_upload_url(%{
+        "name" => "a.png",
+        "mimeType" => "image/png",
+        "sizeBytes" => byte_size(png)
+      })
+
+    :ok = T3.Attachments.store(token, png)
+
+    thread_id = "thread-#{System.unique_integer([:positive])}"
+    :ok = T3.Streams.subscribe(thread_id, self(), nil)
+
+    {:ok, _} =
+      Orchestration.launch_thread(%{
+        "commandId" => "c",
+        "threadId" => thread_id,
+        "projectId" => "project-1",
+        "title" => "Look",
+        "modelSelection" => %{"instanceId" => "codex", "model" => "gpt-5.4"},
+        "runtimeMode" => "full-access",
+        "interactionMode" => "default",
+        "workspaceStrategy" => %{"type" => "root"},
+        "initialMessage" => %{
+          "messageId" => "m1",
+          "text" => "look at this",
+          "attachments" => [
+            %{
+              "type" => "image",
+              "id" => id,
+              "name" => "a.png",
+              "mimeType" => "image/png",
+              "sizeBytes" => byte_size(png)
+            }
+          ]
+        }
+      })
+
+    state = await_run(thread_id, "completed")
+    items = StreamState.list(state, "turn-item")
+    assert Enum.any?(items, &(&1["text"] == "input text,image saved True"))
+
+    assert %{"attachments" => [%{"id" => "thread-" <> _}]} =
+             StreamState.get(state, "message")["m1"]
+  end
+
   describe "thread settings and plan mode" do
     test "thread commands set the thread's own fields" do
       thread_id = launch("list the files")
