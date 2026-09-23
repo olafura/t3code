@@ -37,7 +37,10 @@ defmodule T3.Claude.Session do
   @impl true
   def init(opts) do
     Process.flag(:trap_exit, true)
-    cmd = [Keyword.get(opts, :executable, "claude") | Protocol.cli_args(opts)]
+    # `:command` replaces the `claude` executable (with its own leading args), e.g. in tests.
+    cmd =
+      Keyword.get(opts, :command, [Keyword.get(opts, :executable, "claude")]) ++
+        Protocol.cli_args(opts)
 
     with {:ok, sub} <- Subprocess.start(cmd, Keyword.take(opts, [:cd, :env])),
          :ok <- Subprocess.write_line(sub, Protocol.control_request("init", "initialize", %{})) do

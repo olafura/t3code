@@ -103,14 +103,18 @@ defmodule T3.Orchestration.Entities do
   @spec new_id(String.t()) :: String.t()
   def new_id(prefix), do: "#{prefix}:#{T3.Environment.uuid4()}"
 
-  def provider_ref(native_id),
-    do: %{"driver" => "codex", "nativeId" => native_id, "strength" => "strong"}
+  def provider_ref(native_id, driver \\ "codex"),
+    do: %{"driver" => driver, "nativeId" => native_id, "strength" => "strong"}
 
-  def provider_session(id, cwd, model, at) do
+  @doc "The provider driver and instance of a turn (`ids.driver`, `ids.instance`)."
+  def driver(ids), do: Map.get(ids, :driver, "codex")
+  def instance(ids), do: Map.get(ids, :instance, driver(ids))
+
+  def provider_session(id, cwd, model, at, driver \\ "codex", instance \\ "codex") do
     %{
       "id" => id,
-      "driver" => "codex",
-      "providerInstanceId" => "codex",
+      "driver" => driver,
+      "providerInstanceId" => instance,
       "status" => "ready",
       "cwd" => cwd,
       "model" => model,
@@ -121,11 +125,19 @@ defmodule T3.Orchestration.Entities do
     }
   end
 
-  def provider_thread(id, thread_id, session_id, run_ordinal, at) do
+  def provider_thread(
+        id,
+        thread_id,
+        session_id,
+        run_ordinal,
+        at,
+        driver \\ "codex",
+        instance \\ "codex"
+      ) do
     %{
       "id" => id,
-      "driver" => "codex",
-      "providerInstanceId" => "codex",
+      "driver" => driver,
+      "providerInstanceId" => instance,
       "providerSessionId" => session_id,
       "appThreadId" => thread_id,
       "ownerNodeId" => nil,
@@ -146,7 +158,7 @@ defmodule T3.Orchestration.Entities do
       "id" => ids.run,
       "threadId" => ids.thread,
       "ordinal" => ordinal,
-      "providerInstanceId" => "codex",
+      "providerInstanceId" => instance(ids),
       "modelSelection" => model_selection,
       "providerThreadId" => ids.provider_thread,
       "userMessageId" => ids.message,
@@ -168,7 +180,7 @@ defmodule T3.Orchestration.Entities do
       "runId" => ids.run,
       "attemptOrdinal" => 1,
       "rootNodeId" => ids.root_node,
-      "providerInstanceId" => "codex",
+      "providerInstanceId" => instance(ids),
       "providerThreadId" => ids.provider_thread,
       "providerTurnId" => nil,
       "reason" => "initial",
@@ -207,7 +219,7 @@ defmodule T3.Orchestration.Entities do
       "providerThreadId" => ids.provider_thread,
       "nodeId" => ids.root_node,
       "runAttemptId" => ids.attempt,
-      "nativeTurnRef" => provider_ref(native_turn_id),
+      "nativeTurnRef" => provider_ref(native_turn_id, driver(ids)),
       "ordinal" => ordinal,
       "status" => "running",
       "startedAt" => at,
@@ -270,7 +282,7 @@ defmodule T3.Orchestration.Entities do
       "id" => id,
       "projectId" => input["projectId"],
       "title" => input["title"] || "New thread",
-      "providerInstanceId" => "codex",
+      "providerInstanceId" => get_in(input, ["modelSelection", "instanceId"]) || "codex",
       "modelSelection" => input["modelSelection"],
       "runtimeMode" => input["runtimeMode"] || "full-access",
       "interactionMode" => input["interactionMode"] || "default",

@@ -1,12 +1,12 @@
 defmodule T3.Orchestration do
   @moduledoc """
   Client commands on this node's threads: start a thread, send a message, and
-  interrupt a run, for threads whose provider is Codex.
+  interrupt a run, for threads whose provider is Codex or Claude.
 
   Each command is decided inside the thread's stream process (`T3.Streams.transact/3`),
   so reading the thread and writing its new entities is atomic. Starting the provider
-  turn happens after the commit, in `T3.Codex.ThreadRuntime`, which streams the turn
-  back into the same log.
+  turn happens after the commit, in the provider's runtime (`T3.Codex.ThreadRuntime`,
+  `T3.Claude.ThreadRuntime`), which streams the turn back into the same log.
   """
 
   alias T3.Orchestration.Entities
@@ -24,7 +24,7 @@ defmodule T3.Orchestration do
   def dispatch(%{"type" => "message.dispatch", "threadId" => thread_id} = command) do
     case T3.Streams.transact(thread_id, :thread, &decide_message(&1, thread_id, command)) do
       {:ok, turn} ->
-        :ok = T3.Codex.ThreadRuntime.start_turn(thread_id, turn)
+        :ok = runtime(turn.ids.instance).start_turn(thread_id, turn)
         {:ok, %{"sequence" => sequence(thread_id)}}
 
       {:error, _} = error ->
@@ -33,7 +33,7 @@ defmodule T3.Orchestration do
   end
 
   def dispatch(%{"type" => "run.interrupt", "threadId" => thread_id} = command) do
-    with :ok <- T3.Codex.ThreadRuntime.interrupt(thread_id, command["runId"]),
+    with :ok <- interrupt_any(thread_id, command["runId"]),
          do: {:ok, %{"sequence" => sequence(thread_id)}}
   end
 
@@ -70,6 +70,21 @@ defmodule T3.Orchestration do
          do: {:ok, %{"threadId" => thread_id, "resumed" => false}}
   end
 
+  @doc "The runtime module for a provider instance."
+  def runtime("claudeAgent"), do: T3.Claude.ThreadRuntime
+  def runtime(_codex), do: T3.Codex.ThreadRuntime
+
+  # A thread has at most one running turn; interrupt whichever runtime holds it.
+  defp interrupt_any(thread_id, run_id) do
+    Enum.find_value(
+      [T3.Codex.ThreadRuntime, T3.Claude.ThreadRuntime],
+      {:error, "no running turn"},
+      fn runtime ->
+        if runtime.interrupt(thread_id, run_id) == :ok, do: :ok
+      end
+    )
+  end
+
   defp sequence(thread_id), do: T3.Streams.Server.state(T3.Streams.ensure(thread_id)).seq
 
   # Records the user's message and a new run, and returns what the provider needs to
@@ -94,13 +109,17 @@ defmodule T3.Orchestration do
     at = Entities.now()
     thread_id = thread["id"]
     ordinal = length(runs) + 1
-    provider_thread_id = "provider-thread:codex:#{thread_id}"
-    session_id = "provider-session:codex:#{thread_id}"
     selection = command["modelSelection"] || thread["modelSelection"]
+    instance = selection["instanceId"] || thread["providerInstanceId"] || "codex"
+    driver = runtime(instance).driver()
+    provider_thread_id = "provider-thread:#{driver}:#{thread_id}"
+    session_id = "provider-session:#{driver}:#{thread_id}"
     cwd = thread["worktreePath"] || project_root(thread["projectId"]) || File.cwd!()
     message_id = command["messageId"] || Entities.new_id("message")
 
     ids = %{
+      driver: driver,
+      instance: instance,
       thread: thread_id,
       run: Entities.new_id("run"),
       attempt: Entities.new_id("run-attempt"),
@@ -126,12 +145,20 @@ defmodule T3.Orchestration do
           create(
             "provider-session",
             session_id,
-            Entities.provider_session(session_id, cwd, selection["model"], at)
+            Entities.provider_session(session_id, cwd, selection["model"], at, driver, instance)
           ),
           create(
             "provider-thread",
             provider_thread_id,
-            Entities.provider_thread(provider_thread_id, thread_id, session_id, ordinal, at)
+            Entities.provider_thread(
+              provider_thread_id,
+              thread_id,
+              session_id,
+              ordinal,
+              at,
+              driver,
+              instance
+            )
           )
         ]
       end

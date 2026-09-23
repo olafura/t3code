@@ -1,0 +1,37 @@
+# Fake `claude -p --input-format stream-json --output-format stream-json` for tests.
+# Plays one turn per user message: thinking, a Bash tool call, and a streamed answer.
+# A message containing "wait" stays open until an interrupt control request.
+import json, sys
+
+def send(msg):
+    sys.stdout.write(json.dumps(msg) + "\n")
+    sys.stdout.flush()
+
+session = "fake-session-1"
+turn = 0
+for line in sys.stdin:
+    msg = json.loads(line)
+    if msg.get("type") == "control_request":
+        sub = msg["request"]["subtype"]
+        send({"type": "control_response", "response": {"subtype": "success", "request_id": msg["request_id"], "response": {}}})
+        if sub == "interrupt":
+            send({"type": "result", "subtype": "error_during_execution", "is_error": True, "session_id": session})
+        continue
+    if msg.get("type") != "user":
+        continue
+    turn += 1
+    text = msg["message"]["content"] if isinstance(msg["message"]["content"], str) else ""
+    send({"type": "system", "subtype": "init", "session_id": session, "model": "claude-haiku"})
+    if "wait" in text:
+        continue
+    ev = lambda e: send({"type": "stream_event", "session_id": session, "event": e})
+    send({"type": "assistant", "session_id": session, "message": {"id": f"m{turn}a", "role": "assistant", "content": [{"type": "thinking", "thinking": "Let me look."}]}})
+    send({"type": "assistant", "session_id": session, "message": {"id": f"m{turn}b", "role": "assistant", "content": [{"type": "tool_use", "id": f"tool-{turn}", "name": "Bash", "input": {"command": "ls"}}]}})
+    send({"type": "user", "session_id": session, "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": f"tool-{turn}", "content": "a.txt\n", "is_error": False}]}})
+    ev({"type": "message_start", "message": {"id": f"m{turn}c"}})
+    ev({"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}})
+    for d in ["Hel", "lo from ", "claude"]:
+        ev({"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": d}})
+    ev({"type": "content_block_stop", "index": 0})
+    send({"type": "assistant", "session_id": session, "message": {"id": f"m{turn}c", "role": "assistant", "content": [{"type": "text", "text": "Hello from claude"}]}})
+    send({"type": "result", "subtype": "success", "is_error": False, "result": "Hello from claude", "session_id": session})

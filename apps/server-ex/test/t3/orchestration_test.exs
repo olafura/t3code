@@ -5,20 +5,28 @@ defmodule T3.OrchestrationTest do
 
   @moduletag :tmp_dir
   @fake_codex Path.expand("../support/fake_codex.py", __DIR__)
+  @fake_claude Path.expand("../support/fake_claude.py", __DIR__)
 
   setup %{tmp_dir: dir} do
     Application.put_env(:t3, :home, dir)
     Application.put_env(:t3, :codex_command, ["python3", "-u", @fake_codex])
-    on_exit(fn -> Application.delete_env(:t3, :codex_command) end)
+    Application.put_env(:t3, :claude_command, ["python3", "-u", @fake_claude])
+
+    on_exit(fn ->
+      Application.delete_env(:t3, :codex_command)
+      Application.delete_env(:t3, :claude_command)
+    end)
+
     start_supervised!({T3.Store, path: Path.join(dir, "t3.sqlite")})
     start_supervised!(T3.Streams)
     start_supervised!(T3.Shell)
     start_supervised!({Registry, keys: :unique, name: T3.Codex.Registry})
+    start_supervised!({Registry, keys: :unique, name: T3.Claude.Registry}, id: :claude_registry)
     start_supervised!({DynamicSupervisor, name: T3.Codex.Supervisor, strategy: :one_for_one})
     :ok
   end
 
-  defp launch(text) do
+  defp launch(text, instance \\ "codex") do
     thread_id = "thread-#{System.unique_integer([:positive])}"
     :ok = T3.Streams.subscribe(thread_id, self(), nil)
 
@@ -28,7 +36,7 @@ defmodule T3.OrchestrationTest do
         "threadId" => thread_id,
         "projectId" => "project-1",
         "title" => "Try codex",
-        "modelSelection" => %{"instanceId" => "codex", "model" => "gpt-5.4"},
+        "modelSelection" => %{"instanceId" => instance, "model" => "gpt-5.4"},
         "runtimeMode" => "full-access",
         "interactionMode" => "default",
         "workspaceStrategy" => %{"type" => "root"},
@@ -121,5 +129,49 @@ defmodule T3.OrchestrationTest do
 
     state = await_run(thread_id, "interrupted")
     assert [%{"status" => "interrupted"}] = StreamState.list(state, "run-attempt")
+  end
+
+  describe "Claude" do
+    test "a message runs a Claude turn: thinking, a Bash call, and a streamed answer" do
+      thread_id = launch("list the files", "claudeAgent")
+      state = await_run(thread_id, "completed")
+
+      items = StreamState.list(state, "turn-item")
+
+      assert Enum.map(items, & &1["type"]) == [
+               "user_message",
+               "reasoning",
+               "command_execution",
+               "assistant_message"
+             ]
+
+      [_, thinking, command, answer] = items
+      assert %{"text" => "Let me look.", "status" => "completed"} = thinking
+      assert %{"input" => "ls", "output" => "a.txt\n", "status" => "completed"} = command
+
+      assert %{"text" => "Hello from claude", "streaming" => false, "status" => "completed"} =
+               answer
+
+      assert [
+               %{
+                 "driver" => "claudeAgent",
+                 "nativeThreadRef" => %{"nativeId" => "fake-session-1"}
+               }
+             ] =
+               StreamState.list(state, "provider-thread")
+
+      assert [%{"providerInstanceId" => "claudeAgent"}] = StreamState.list(state, "run")
+    end
+
+    test "interrupt ends a Claude run" do
+      thread_id = launch("wait for me", "claudeAgent")
+      _ = await_run(thread_id, "running")
+
+      assert {:ok, _} =
+               Orchestration.dispatch(%{"type" => "run.interrupt", "threadId" => thread_id})
+
+      assert [%{"status" => "interrupted"}] =
+               StreamState.list(await_run(thread_id, "interrupted"), "run-attempt")
+    end
   end
 end

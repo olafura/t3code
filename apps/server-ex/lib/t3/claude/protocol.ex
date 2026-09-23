@@ -36,7 +36,8 @@ defmodule T3.Claude.Protocol do
       flag("--model", opts[:model]) ++
       flag("--permission-mode", opts[:permission_mode]) ++
       flag("--resume", opts[:resume]) ++
-      if(opts[:persist_session] == false, do: ["--no-session-persistence"], else: [])
+      if(opts[:persist_session] == false, do: ["--no-session-persistence"], else: []) ++
+      if(opts[:partial_messages] == true, do: ["--include-partial-messages"], else: [])
   end
 
   defp flag(_name, nil), do: []

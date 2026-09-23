@@ -26,7 +26,7 @@ defmodule T3.Environment do
 
   @doc """
   The client's `ServerConfig` for this node. Only what a node serves today is
-  filled in: Codex when it is installed, and empty keybinding and editor lists;
+  filled in: Codex and Claude when installed, and empty keybinding and editor lists;
   settings decode to their defaults.
   """
   @spec server_config() :: map
@@ -45,7 +45,8 @@ defmodule T3.Environment do
       "keybindingsConfigPath" => Path.join(home, "keybindings.json"),
       "keybindings" => [],
       "issues" => [],
-      "providers" => Enum.reject([T3.Codex.Provider.entry()], &is_nil/1),
+      "providers" =>
+        Enum.reject([T3.Codex.Provider.entry(), T3.Claude.Provider.entry()], &is_nil/1),
       "availableEditors" => [],
       "observability" => %{
         "logsDirectoryPath" => Path.join(home, "logs"),

@@ -6,20 +6,21 @@ defmodule T3.Codex.ThreadRuntime do
   The process owns the app-server connection for its thread. A turn starts with
   `thread/start` (or `thread/resume` for a thread Codex already knows) and
   `turn/start`; the app-server's notifications then become entity patches.
-  Streamed text and command output are buffered for `@flush_ms` and written as
-  appends, so a long answer costs its new bytes, not its whole length, per update.
+  Streamed text and command output are written as appends (`T3.Orchestration.TurnWriter`),
+  so a long answer costs its new bytes, not its whole length, per update.
   """
 
   use GenServer, restart: :temporary
 
   require Logger
 
+  import T3.Orchestration.TurnWriter
+
   alias T3.Orchestration
   alias T3.Orchestration.Entities
   alias T3.JsonRpc.Connection
 
   @state_version 1
-  @flush_ms 50
 
   # runtimeMode -> {approvalPolicy, sandboxPolicy type}, as the Node adapter maps it.
   @runtime_policies %{
@@ -28,6 +29,8 @@ defmodule T3.Codex.ThreadRuntime do
     "auto" => {"on-request", "workspaceWrite"},
     "full-access" => {"never", "dangerFullAccess"}
   }
+
+  def driver, do: "codex"
 
   @spec start_turn(String.t(), map) :: :ok
   def start_turn(thread_id, turn),
@@ -305,78 +308,6 @@ defmodule T3.Codex.ThreadRuntime do
 
   defp notification(_method, _params, state), do: state
 
-  # Creates the turn item (and its node) for a Codex item the first time it is seen.
-  defp ensure_item(state, native, kind, fields \\ %{}) do
-    if Map.has_key?(state.items, native) do
-      state
-    else
-      ids = state.turn.ids
-      at = Entities.now()
-      node_id = Entities.new_id("node")
-      item_id = "turn-item:codex:#{native}"
-      message_id = if kind == :assistant, do: "message:codex:#{native}"
-      item_ids = Map.put(ids, :node, node_id)
-
-      {node_kind, type, item_fields} =
-        case kind do
-          :assistant ->
-            {"assistant_message", "assistant_message",
-             %{"messageId" => message_id, "text" => "", "streaming" => true}}
-
-          :reasoning ->
-            {"reasoning", "reasoning", %{"text" => "", "streaming" => true}}
-
-          :command ->
-            {"tool_call", "command_execution", fields}
-        end
-
-      commit(state, fn stream ->
-        [
-          Orchestration.create(
-            "node",
-            node_id,
-            Entities.node(ids, node_id, node_kind, "running", at, %{
-              "nativeItemRef" => Entities.provider_ref(native)
-            })
-          ),
-          Orchestration.create(
-            "turn-item",
-            item_id,
-            Entities.turn_item(
-              item_ids,
-              item_id,
-              type,
-              Orchestration.next_ordinal(stream),
-              "running",
-              at,
-              item_fields
-            )
-            |> Map.put("nativeItemRef", Entities.provider_ref(native))
-          ),
-          message_id &&
-            Orchestration.create(
-              "message",
-              message_id,
-              Entities.message(item_ids, message_id, "assistant", "", true, at, %{
-                "nodeId" => node_id
-              })
-            )
-        ]
-      end)
-
-      %{
-        state
-        | items:
-            Map.put(state.items, native, %{
-              id: item_id,
-              node: node_id,
-              message: message_id,
-              kind: kind
-            })
-      }
-    end
-  end
-
   defp complete_item(state, %{"type" => "agentMessage", "id" => native} = item) do
     finish_item(state, native, "completed", fn entity ->
       Map.merge(entity, %{"text" => item["text"] || entity["text"], "streaming" => false})
@@ -411,7 +342,7 @@ defmodule T3.Codex.ThreadRuntime do
   defp complete_item(state, %{"type" => "fileChange", "id" => native, "changes" => [change | _]}) do
     ids = state.turn.ids
     at = Entities.now()
-    item_id = "turn-item:codex:#{native}"
+    item_id = item_id(ids, native)
 
     commit(state, fn stream ->
       [
@@ -438,96 +369,4 @@ defmodule T3.Codex.ThreadRuntime do
   end
 
   defp complete_item(state, _item), do: state
-
-  defp finish_item(state, native, status, fun) do
-    %{id: item_id, node: node_id, message: message_id} = Map.fetch!(state.items, native)
-    at = Entities.now()
-
-    commit(state, fn stream ->
-      [
-        Orchestration.upsert(
-          stream,
-          "turn-item",
-          item_id,
-          &(fun.(&1) |> Map.merge(%{"status" => status, "completedAt" => at, "updatedAt" => at}))
-        ),
-        Orchestration.upsert(
-          stream,
-          "node",
-          node_id,
-          &Map.merge(&1, %{"status" => status, "completedAt" => at})
-        ),
-        message_id &&
-          Orchestration.upsert(
-            stream,
-            "message",
-            message_id,
-            &(fun.(&1) |> Map.put("updatedAt", at))
-          )
-      ]
-    end)
-
-    state
-  end
-
-  # Ends the run: provider turn, attempt, run, root node, and provider thread.
-  defp finish(state, status, failure) do
-    ids = state.turn.ids
-    at = Entities.now()
-    done = %{"status" => status, "completedAt" => at}
-
-    commit(state, fn stream ->
-      [
-        Map.has_key?(ids, :provider_turn) &&
-          Orchestration.upsert(stream, "provider-turn", ids.provider_turn, &Map.merge(&1, done)),
-        Orchestration.upsert(stream, "run-attempt", ids.attempt, &Map.merge(&1, done)),
-        Orchestration.upsert(stream, "run", ids.run, &Map.merge(&1, done)),
-        Orchestration.upsert(stream, "node", ids.root_node, &Map.merge(&1, done)),
-        Orchestration.upsert(
-          stream,
-          "provider-thread",
-          ids.provider_thread,
-          &Map.merge(&1, %{"status" => "idle", "updatedAt" => at})
-        ),
-        failure && status == "failed" &&
-          Orchestration.upsert(
-            stream,
-            "provider-session",
-            "provider-session:codex:#{ids.thread}",
-            &Map.merge(&1, %{"lastError" => failure, "updatedAt" => at})
-          )
-      ]
-    end)
-  end
-
-  # --- writing ------------------------------------------------------------------
-
-  defp buffer(state, native, field, delta) do
-    buffer = Map.update(state.buffer, {native, field}, delta, &(&1 <> delta))
-    timer = state.flush_timer || Process.send_after(self(), :flush, @flush_ms)
-    %{state | buffer: buffer, flush_timer: timer}
-  end
-
-  defp flush(%{buffer: buffer} = state) when map_size(buffer) == 0, do: state
-
-  defp flush(state) do
-    changes =
-      Enum.flat_map(state.buffer, fn {{native, field}, text} ->
-        %{id: item_id, message: message_id} = Map.fetch!(state.items, native)
-        append = %{"a" => %{field => text}}
-
-        [{"turn-item", item_id, append}] ++
-          if(message_id && field == "text", do: [{"message", message_id, append}], else: [])
-      end)
-
-    {:ok, _} = T3.Streams.commit(state.thread_id, :thread, changes)
-    if state.flush_timer, do: Process.cancel_timer(state.flush_timer)
-    %{state | buffer: %{}, flush_timer: nil}
-  end
-
-  defp commit(state, fun) do
-    T3.Streams.transact(state.thread_id, :thread, fn stream ->
-      {fun.(stream) |> Enum.filter(&is_tuple/1), :ok}
-    end)
-  end
 end
