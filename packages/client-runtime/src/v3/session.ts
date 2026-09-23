@@ -1,4 +1,6 @@
 import {
+  FilesystemBrowseError,
+  ProjectMutationError,
   OrchestrationV2DispatchCommandError,
   OrchestrationV2ThreadLaunchError,
   ORCHESTRATION_V2_WS_METHODS,
@@ -169,7 +171,30 @@ export function makeV3Session(input: {
           }),
       });
 
+    const mutateProject = (mutation: { readonly commandId: string }) =>
+      Effect.tryPromise({
+        try: () => socket.call(input.environmentId, WS_METHODS.projectsMutate, mutation),
+        catch: (cause) =>
+          new ProjectMutationError({
+            commandId: mutation.commandId as never,
+            message: cause instanceof Error ? cause.message : String(cause),
+          }),
+      });
+
+    const browse = (request: { readonly partialPath: string }) =>
+      Effect.tryPromise({
+        try: () => socket.call(input.environmentId, WS_METHODS.filesystemBrowse, request),
+        catch: (cause) =>
+          new FilesystemBrowseError({
+            partialPath: request.partialPath as never,
+            failure: "read_directory_failed",
+            cause,
+          }),
+      });
+
     const served: Record<string, (request: never) => unknown> = {
+      [WS_METHODS.projectsMutate]: mutateProject,
+      [WS_METHODS.filesystemBrowse]: browse,
       [ORCHESTRATION_V2_WS_METHODS.dispatchCommand]: dispatchCommand,
       [ORCHESTRATION_V2_WS_METHODS.launchThread]: launchThread,
       [ORCHESTRATION_V2_WS_METHODS.subscribeShell]: shell,

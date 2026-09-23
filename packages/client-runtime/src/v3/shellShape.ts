@@ -28,8 +28,9 @@ export class ShellShapeFold {
     const archivedThreads: Array<unknown> = [];
     for (const [node, , kind, row] of rows) {
       if (node !== this.node) continue;
-      if (kind === "project") projects.push(row);
-      else if (kind === "thread" && row.deletedAt == null) {
+      if (kind === "project") {
+        if (row.deletedAt == null) projects.push(row);
+      } else if (kind === "thread" && row.deletedAt == null) {
         (row.archivedAt == null ? threads : archivedThreads).push(row);
       }
     }
@@ -57,7 +58,9 @@ export class ShellShapeFold {
     return rows.map(([id, kind, row]) => {
       const sequence = ++this.sequence;
       if (kind === "project")
-        return decodeItem({ kind: "project.updated", sequence, project: row });
+        return row.deletedAt == null
+          ? decodeItem({ kind: "project.updated", sequence, project: row })
+          : decodeItem({ kind: "project.removed", sequence, projectId: id });
       const location = row.archivedAt == null ? "active" : "archive";
       return row.deletedAt == null
         ? decodeItem({ kind: "thread.updated", sequence, location, thread: row })

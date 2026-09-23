@@ -101,7 +101,7 @@ defmodule T3.Web.Socket do
 
           node ->
             try do
-              :erpc.call(node, T3.Orchestration, :handle, [method, payload || %{}], 60_000)
+              :erpc.call(node, T3.Rpc, :handle, [method, payload || %{}], 60_000)
             catch
               :error, {:erpc, reason} -> {:error, "node unavailable: #{reason}"}
               kind, reason -> {:error, Exception.format(kind, reason)}

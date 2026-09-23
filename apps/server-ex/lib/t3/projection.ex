@@ -51,7 +51,8 @@ defmodule T3.Projection do
     }
 
     optional =
-      for field <- ~w(repositoryIdentity defaultThreadEnvMode autoPull faviconPath projectIcon),
+      for field <-
+            ~w(repositoryIdentity defaultThreadEnvMode autoPull faviconPath projectIcon deletedAt),
           (value = JS.get(project, field)) != nil,
           into: %{},
           do: {field, JS.json(value)}
