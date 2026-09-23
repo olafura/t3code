@@ -1,11 +1,13 @@
 defmodule T3.Acp do
   @moduledoc """
   The Agent Client Protocol agents a node can run (`T3.Acp.ThreadRuntime`), and
-  their entries in `ServerConfig.providers`.
+  their entries in `ServerConfig.providers`: the built-in OpenCode and Grok, more
+  instances of them, and `acpRegistry` instances running an agent from the ACP
+  Registry (`T3.Acp.Catalog`). Everything is keyed by provider instance id.
 
-  ACP agents are off until enabled in the node's settings (`providers.<driver>` or
-  a `providerInstances` entry), as on the Node server, so nothing is spawned for
-  users who never opted in. An enabled agent's model list comes from the `model`
+  Built-in agents are off until enabled in the node's settings (`providers.<driver>`
+  or a `providerInstances` entry), as on the Node server, so nothing is spawned for
+  users who never opted in; a registry instance is on once added. An enabled agent's model list comes from the `model`
   config option of a throwaway session, which lists the models of the providers it
   is connected to; it is read once, at boot or when the agent is first enabled.
   """
@@ -17,28 +19,77 @@ defmodule T3.Acp do
     "grok" => %{binary: "grok", label: "Grok"}
   }
 
-  @doc "Driver ids of the ACP agents."
-  def drivers, do: Map.keys(@agents)
+  # Instances of this driver run an agent from the ACP Registry (`T3.Acp.Catalog`).
+  @registry "acpRegistry"
 
-  def agent?(driver), do: Map.has_key?(@agents, driver)
+  @doc "Instance ids of the ACP agents: the built-in agents and configured instances."
+  def instances do
+    configured =
+      for {id, %{"driver" => driver}} <- T3.Settings.settings()["providerInstances"] || %{},
+          driver == @registry or Map.has_key?(@agents, driver),
+          do: id
 
-  def label(driver), do: get_in(@agents, [driver, :label]) || driver
+    Enum.uniq(Map.keys(@agents) ++ configured)
+  end
+
+  @doc "Whether a provider instance runs over ACP."
+  def agent?(instance), do: instance(instance) != nil
+
+  # `{driver, instance settings}`; a built-in agent's id is its own default instance.
+  defp instance(id) do
+    case (T3.Settings.settings()["providerInstances"] || %{})[id] do
+      %{"driver" => driver} = entry when driver == @registry ->
+        {driver, entry}
+
+      %{"driver" => driver} = entry ->
+        if Map.has_key?(@agents, driver), do: {driver, entry}, else: builtin(id)
+
+      _ ->
+        builtin(id)
+    end
+  end
+
+  defp builtin(id), do: if(Map.has_key?(@agents, id), do: {id, %{}})
+
+  def label(instance) do
+    case instance(instance) do
+      {_, %{"displayName" => name}} when is_binary(name) -> name
+      {@registry, entry} -> get_in(entry, ["config", "agentId"]) || instance
+      {driver, _} -> @agents[driver].label
+      nil -> instance
+    end
+  end
 
   @doc """
-  The command that starts an agent for a thread's runtime mode, with the binary
-  set in the node's provider settings; `:acp_commands` overrides it (tests).
+  The command and environment that start an instance's agent for a thread's
+  runtime mode: the binary set in its settings, or a registry agent's install;
+  `:acp_commands` overrides it (tests).
   """
-  def command(driver, runtime_mode \\ nil) do
-    cond do
-      command = Application.get_env(:t3, :acp_commands, %{})[driver] ->
-        {:ok, command}
+  def command(instance, runtime_mode \\ nil) do
+    override = Application.get_env(:t3, :acp_commands, %{})[instance]
 
-      agent = @agents[driver] ->
-        {:ok, [binary(driver, agent.binary) | args(driver, runtime_mode)]}
+    case override || instance(instance) do
+      [_ | _] = command ->
+        {:ok, command, []}
 
-      true ->
-        {:error, "unknown ACP agent #{driver}"}
+      {@registry, entry} ->
+        with {:ok, command, env} <- T3.Acp.Catalog.command(entry["config"] || %{}),
+             do: {:ok, command, env ++ instance_env(entry)}
+
+      {driver, entry} ->
+        binary = binary(driver, entry, @agents[driver].binary)
+        {:ok, [binary | args(driver, runtime_mode)], instance_env(entry)}
+
+      nil ->
+        {:error, "unknown ACP agent #{instance}"}
     end
+  end
+
+  # Variables set on the instance in settings, such as an API key.
+  defp instance_env(entry) do
+    for %{"name" => name, "value" => value} <- entry["environment"] || [],
+        is_binary(name) and is_binary(value),
+        do: {name, value}
   end
 
   defp args("opencode", _mode), do: ["acp"]
@@ -53,65 +104,103 @@ defmodule T3.Acp do
   defp args("grok", "auto"), do: ["--permission-mode", "auto", "agent", "stdio"]
   defp args("grok", _mode), do: ["agent", "stdio"]
 
-  defp binary(driver, default) do
-    settings = T3.Settings.settings()
-
+  defp binary(driver, entry, default) do
     [
-      get_in(settings, ["providerInstances", driver, "config", "binaryPath"]),
-      get_in(settings, ["providers", driver, "binaryPath"])
+      get_in(entry, ["config", "binaryPath"]),
+      get_in(T3.Settings.settings(), ["providers", driver, "binaryPath"])
     ]
     |> Enum.find(default, &(is_binary(&1) and String.trim(&1) != ""))
   end
 
-  @doc "Provider entries for the agents installed on this node."
-  def entries, do: for(driver <- drivers(), entry = entry(driver), do: entry)
+  @doc "Provider entries for the ACP instances on this node whose agent is available."
+  def entries, do: for(id <- instances(), entry = entry(id), do: entry)
 
-  def entry(driver) do
-    with {:ok, [executable | _]} <- command(driver),
-         path when is_binary(path) <- System.find_executable(executable) do
-      _ = path
-      enabled = enabled?(driver)
-      models = :persistent_term.get({__MODULE__, driver, :models}, nil)
-      if enabled and models == nil, do: load_once(driver)
+  def entry(id) do
+    with {driver, instance} <- instance(id),
+         {:ok, base} <- base_entry(id, driver, instance) do
+      enabled = enabled?(id)
+      models = :persistent_term.get({__MODULE__, id, :models}, nil)
+      failure = :persistent_term.get({__MODULE__, id, :error}, nil)
+      if enabled and models == nil and failure == nil, do: load_once(id)
 
-      %{
-        "instanceId" => driver,
-        "driver" => driver,
-        "enabled" => enabled,
-        "installed" => true,
-        "version" => :persistent_term.get({__MODULE__, driver, :version}, "unknown"),
-        "status" => "ready",
-        "availability" => "available",
-        "auth" => %{"status" => "authenticated"},
-        "checkedAt" => T3.Orchestration.Entities.now(),
-        "models" => models || [],
-        "slashCommands" => [],
-        "skills" => []
-      }
+      Map.merge(
+        %{
+          "instanceId" => id,
+          "driver" => driver,
+          "enabled" => enabled,
+          "installed" => true,
+          "version" => :persistent_term.get({__MODULE__, id, :version}, "unknown"),
+          "status" => if(failure, do: "error", else: "ready"),
+          "availability" => "available",
+          "auth" => %{"status" => "authenticated"},
+          "checkedAt" => T3.Orchestration.Entities.now(),
+          "models" => models || [],
+          "slashCommands" => [],
+          "skills" => []
+        },
+        base
+      )
+      |> then(&if(failure, do: Map.put(&1, "message", failure), else: &1))
     else
       _ -> nil
     end
   end
 
+  # A registry agent is installed when first used, so it counts as available.
+  defp base_entry(id, @registry, instance) do
+    agent_id = get_in(instance, ["config", "agentId"])
+
+    case T3.Acp.Catalog.describe(agent_id) do
+      nil ->
+        :error
+
+      agent ->
+        {:ok,
+         %{
+           "displayName" => instance["displayName"] || agent.name,
+           "iconUrl" => "https://cdn.agentclientprotocol.com/registry/v1/latest/#{agent_id}.svg",
+           "version" => :persistent_term.get({__MODULE__, id, :version}, agent.version)
+         }
+         |> then(&if(agent.website, do: Map.put(&1, "setup", setup(agent.website)), else: &1))}
+    end
+  end
+
+  defp base_entry(id, _driver, instance) do
+    with {:ok, [executable | _], _env} <- command(id),
+         path when is_binary(path) <- System.find_executable(executable) do
+      {:ok,
+       if(instance["displayName"], do: %{"displayName" => instance["displayName"]}, else: %{})}
+    else
+      _ -> :error
+    end
+  end
+
+  defp setup(url),
+    do: %{"canAuthenticate" => false, "canInstall" => false, "documentationUrl" => url}
+
   @doc "Reads each enabled agent's version and models from a throwaway session."
   def load do
-    for driver <- drivers(), enabled?(driver), do: load(driver)
+    for id <- instances(), enabled?(id), do: load(id)
     :ok
   end
 
   # An agent enabled after boot is read in the background, once.
-  defp load_once(driver) do
-    if :persistent_term.get({__MODULE__, driver, :loading}, false) == false do
-      :persistent_term.put({__MODULE__, driver, :loading}, true)
-      Task.start(fn -> load(driver) end)
+  defp load_once(id) do
+    if :persistent_term.get({__MODULE__, id, :loading}, false) == false do
+      :persistent_term.put({__MODULE__, id, :loading}, true)
+      Task.start(fn -> load(id) end)
     end
   end
 
-  @doc "Whether the node's settings enable an agent (off by default)."
-  def enabled?(driver) do
-    settings = T3.Settings.settings()
-    instance = get_in(settings, ["providerInstances", driver]) || %{}
+  @doc "Whether the node's settings enable an instance (built-in agents are off by default)."
+  def enabled?(id) do
+    case instance(id) do
+      nil -> false
+      {driver, instance} -> enabled?(id, driver, instance)
+    end
+  end
 
+  defp enabled?(id, driver, instance) do
     cond do
       instance["enabled"] == false or get_in(instance, ["config", "enabled"]) == false ->
         false
@@ -122,46 +211,58 @@ defmodule T3.Acp do
       is_boolean(get_in(instance, ["config", "enabled"])) ->
         get_in(instance, ["config", "enabled"])
 
+      driver == @registry ->
+        true
+
       true ->
-        get_in(settings, ["providers", driver, "enabled"]) == true
+        id == driver and get_in(T3.Settings.settings(), ["providers", driver, "enabled"]) == true
     end
   end
 
-  defp load(driver) do
-    dir = Path.join(System.tmp_dir!(), "t3-acp-#{driver}-#{System.unique_integer([:positive])}")
+  defp load(id) do
+    dir = Path.join(System.tmp_dir!(), "t3-acp-#{System.unique_integer([:positive])}")
     File.mkdir_p!(dir)
 
     try do
-      read_agent(driver, dir)
+      case read_agent(id, dir) do
+        :ok -> :persistent_term.erase({__MODULE__, id, :error})
+        {:error, reason} -> :persistent_term.put({__MODULE__, id, :error}, describe(reason))
+        _ -> :ok
+      end
     catch
       _, _ -> :ok
     after
       File.rm_rf(dir)
+      T3.Settings.notify_providers()
     end
   end
 
-  defp read_agent(driver, dir) do
-    with {:ok, command} <- command(driver),
-         path when is_binary(path) <- System.find_executable(hd(command)),
-         {:ok, conn} <-
-           Connection.start_link(cmd: command, handler: self(), cd: dir, dialect: :v2),
-         {:ok, init} <-
-           Connection.call(conn, "initialize", %{
-             "protocolVersion" => 1,
-             "clientCapabilities" => %{
-               "fs" => %{"readTextFile" => false, "writeTextFile" => false},
-               "terminal" => false
-             }
-           }),
-         {:ok, session} <-
-           Connection.call(conn, "session/new", %{"cwd" => dir, "mcpServers" => []}, 60_000) do
-      :persistent_term.put(
-        {__MODULE__, driver, :version},
-        get_in(init, ["agentInfo", "version"]) || "unknown"
-      )
+  defp describe(%{"message" => message}) when is_binary(message), do: message
+  defp describe(reason) when is_binary(reason), do: reason
+  defp describe(reason), do: inspect(reason)
 
-      :persistent_term.put({__MODULE__, driver, :models}, models(session))
-      Connection.stop(conn)
+  defp read_agent(id, dir) do
+    with {:ok, command, env} <- command(id),
+         {:ok, conn} <-
+           Connection.start_link(cmd: command, handler: self(), cd: dir, env: env, dialect: :v2) do
+      try do
+        with {:ok, init} <-
+               Connection.call(conn, "initialize", %{
+                 "protocolVersion" => 1,
+                 "clientCapabilities" => %{
+                   "fs" => %{"readTextFile" => false, "writeTextFile" => false},
+                   "terminal" => false
+                 }
+               }),
+             {:ok, session} <-
+               Connection.call(conn, "session/new", %{"cwd" => dir, "mcpServers" => []}, 60_000) do
+          version = get_in(init, ["agentInfo", "version"]) || "unknown"
+          :persistent_term.put({__MODULE__, id, :version}, version)
+          :persistent_term.put({__MODULE__, id, :models}, models(session))
+        end
+      after
+        Connection.stop(conn)
+      end
     end
   end
 

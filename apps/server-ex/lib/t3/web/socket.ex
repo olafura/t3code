@@ -94,11 +94,23 @@ defmodule T3.Web.Socket do
   def handle_info({:t3_settings, node, settings}, state) do
     case state.by_terminal do
       %{{:settings, ^node} => id} ->
+        # Settings can add, remove, or enable providers.
+        send(self(), {:t3_providers_changed, node})
         frame = %{"t" => "config.settings", "id" => id, "settings" => settings}
         {:push, Protocol.encode(frame), state}
 
       _ ->
         {:ok, state}
+    end
+  end
+
+  def handle_info({:t3_providers_changed, node}, state) do
+    with %{{:settings, ^node} => id} <- state.by_terminal,
+         {:ok, providers} <- remote(node, T3.Environment, :providers, []) do
+      frame = %{"t" => "config.providers", "id" => id, "providers" => providers}
+      {:push, Protocol.encode(frame), state}
+    else
+      _ -> {:ok, state}
     end
   end
 

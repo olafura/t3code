@@ -7,7 +7,9 @@ defmodule T3.Settings do
   `server.updateSettings` patch with the shared `applyServerSettingsPatch` to the
   version it read and writes the whole result back with `put/2`, which refuses a
   stale version so concurrent editors retry instead of overwriting each other.
-  Watchers (client sockets) get `{:t3_settings, node, settings}` on every change.
+  Watchers (client sockets) get `{:t3_settings, node, settings}` on every change,
+  and `{:t3_providers_changed, node}` when something else changes the node's
+  provider list (`notify_providers/0`).
   """
 
   use GenServer
@@ -37,6 +39,9 @@ defmodule T3.Settings do
   end
 
   def unwatch(pid), do: GenServer.cast(__MODULE__, {:unwatch, pid})
+
+  @doc "Tells watchers to read the provider list again, such as after a model probe."
+  def notify_providers, do: GenServer.cast(__MODULE__, :providers_changed)
 
   @impl true
   def init(nil) do
@@ -76,6 +81,11 @@ defmodule T3.Settings do
   end
 
   @impl true
+  def handle_cast(:providers_changed, state) do
+    for {pid, _} <- state.watchers, do: send(pid, {:t3_providers_changed, node()})
+    {:noreply, state}
+  end
+
   def handle_cast({:unwatch, pid}, state) do
     {ref, watchers} = Map.pop(state.watchers, pid)
     if ref, do: Process.demonitor(ref, [:flush])

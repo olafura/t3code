@@ -1,4 +1,5 @@
 import {
+  AcpRegistryOperationError,
   AgentSessionImportProjectChangedError,
   AgentSessionImportProjectNotFoundError,
   AgentSessionScanError,
@@ -15,6 +16,7 @@ import {
   OrchestrationV2ThreadLaunchError,
   ORCHESTRATION_V2_WS_METHODS,
   ServerConfig,
+  ServerProviders,
   ServerSettings,
   ServerSettingsError,
   type ProviderInstanceMutation,
@@ -51,6 +53,7 @@ import { ShellShapeFold, type ShellRow } from "./shellShape.ts";
 import { ThreadShapeFold, type ShapeEvent, type ShapeRow } from "./threadShape.ts";
 
 const decodeConfig = Schema.decodeUnknownSync(Schema.toCodecJson(ServerConfig));
+const decodeProviders = Schema.decodeUnknownSync(Schema.toCodecJson(ServerProviders));
 const decodeTerminalError = Schema.decodeUnknownOption(TerminalError);
 const settingsCodec = Schema.toCodecJson(ServerSettings);
 const isServerSettingsError = Schema.is(ServerSettingsError);
@@ -93,6 +96,7 @@ function vcsError(operation: string, cwd: string, detail: unknown, message: stri
     ),
   );
 }
+const decodeAcpRegistryError = Schema.decodeUnknownOption(AcpRegistryOperationError);
 const decodeAgentSessionError = Schema.decodeUnknownOption(
   Schema.Union([
     AgentSessionImportProjectChangedError,
@@ -230,8 +234,7 @@ export function makeV3Session(input: {
       });
     };
 
-    // Settings and config do not change on a node yet, so the stream is its snapshot.
-    // The node's config, then its settings whenever any client changes them.
+    // The node's config, then its settings and providers whenever they change.
     const serverConfig = () =>
       shapeStream(
         socket,
@@ -251,6 +254,14 @@ export function makeV3Session(input: {
                 version: 1 as const,
                 type: "settingsUpdated" as const,
                 payload: { settings: decodeSettingsSync(frame.settings) },
+              },
+            ];
+          if (frame.t === "config.providers")
+            return [
+              {
+                version: 1 as const,
+                type: "providerStatuses" as const,
+                payload: { providers: decodeProviders(frame.providers) },
               },
             ];
           return [];
@@ -393,6 +404,16 @@ export function makeV3Session(input: {
         ),
       );
 
+    // ACP Registry search and installs run on the node that will run the agent.
+    const acpRegistryCommand = (tag: string) =>
+      forward(tag, (_request: object, message, cause) =>
+        decodeAcpRegistryError(cause instanceof ClusterRpcError ? cause.detail : undefined).pipe(
+          Option.getOrElse(
+            () => new AcpRegistryOperationError({ reason: "registry_unavailable", message }),
+          ),
+        ),
+      );
+
     const agentSessionCommand = (tag: string) =>
       forward(tag, (_request: object, message, cause) =>
         decodeAgentSessionError(cause instanceof ClusterRpcError ? cause.detail : undefined).pipe(
@@ -529,6 +550,13 @@ export function makeV3Session(input: {
       [ORCHESTRATION_V2_WS_METHODS.getFullThreadDiff]: getFullThreadDiff,
       [ORCHESTRATION_V2_WS_METHODS.subscribeShell]: shell,
       [ORCHESTRATION_V2_WS_METHODS.subscribeThread]: thread,
+      [WS_METHODS.serverSearchAcpRegistry]: acpRegistryCommand(WS_METHODS.serverSearchAcpRegistry),
+      [WS_METHODS.serverPrepareAcpRegistryAgent]: acpRegistryCommand(
+        WS_METHODS.serverPrepareAcpRegistryAgent,
+      ),
+      [WS_METHODS.serverUninstallAcpRegistryManagedBinary]: acpRegistryCommand(
+        WS_METHODS.serverUninstallAcpRegistryManagedBinary,
+      ),
       [WS_METHODS.agentSessionsScan]: agentSessionCommand(WS_METHODS.agentSessionsScan),
       [WS_METHODS.agentSessionsImport]: agentSessionCommand(WS_METHODS.agentSessionsImport),
       [WS_METHODS.subscribeVcsStatus]: vcsStatus,

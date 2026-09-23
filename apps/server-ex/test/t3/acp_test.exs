@@ -10,12 +10,12 @@ defmodule T3.AcpTest do
   end
 
   test "agent commands follow the runtime mode and the configured binary" do
-    assert {:ok, ["opencode", "acp"]} = T3.Acp.command("opencode", "full-access")
+    assert {:ok, ["opencode", "acp"], []} = T3.Acp.command("opencode", "full-access")
 
-    assert {:ok, ["grok", "agent", "--always-approve", "stdio"]} =
+    assert {:ok, ["grok", "agent", "--always-approve", "stdio"], []} =
              T3.Acp.command("grok", "full-access")
 
-    assert {:ok, ["grok", "--permission-mode", "default", "agent", "stdio"]} =
+    assert {:ok, ["grok", "--permission-mode", "default", "agent", "stdio"], []} =
              T3.Acp.command("grok", "approval-required")
 
     {:ok, _} =
@@ -32,7 +32,7 @@ defmodule T3.AcpTest do
         0
       )
 
-    assert {:ok, ["/opt/oc", "acp"]} = T3.Acp.command("opencode")
+    assert {:ok, ["/opt/oc", "acp"], []} = T3.Acp.command("opencode")
     assert T3.Acp.enabled?("opencode")
     refute T3.Acp.enabled?("grok")
     assert {:error, _} = T3.Acp.command("nope")

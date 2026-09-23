@@ -30,6 +30,12 @@ defmodule T3.Rpc do
   end
 
   def handle("filesystem.browse", input), do: T3.Projects.browse(input)
+  def handle("server.searchAcpRegistry", input), do: T3.Acp.Catalog.search(input)
+  def handle("server.prepareAcpRegistryAgent", input), do: T3.Acp.Catalog.prepare(input)
+
+  def handle("server.uninstallAcpRegistryManagedBinary", input),
+    do: T3.Acp.Catalog.uninstall(input)
+
   def handle("agentSessions.scan", input), do: T3.AgentSessions.scan(input)
   def handle("agentSessions.import", input), do: T3.AgentSessions.import_project(input)
   def handle("review.getDiffPreview", input), do: T3.Review.diff_preview(input)

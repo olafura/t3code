@@ -45,9 +45,7 @@ defmodule T3.Environment do
       "keybindingsConfigPath" => Path.join(home, "keybindings.json"),
       "keybindings" => [],
       "issues" => [],
-      "providers" =>
-        Enum.reject([T3.Codex.Provider.entry(), T3.Claude.Provider.entry()], &is_nil/1) ++
-          T3.Acp.entries(),
+      "providers" => providers(),
       "availableEditors" => [],
       "observability" => %{
         "logsDirectoryPath" => Path.join(home, "logs"),
@@ -58,6 +56,12 @@ defmodule T3.Environment do
       },
       "settings" => T3.Settings.settings()
     }
+  end
+
+  @doc "`ServerConfig.providers`: the agents this node can run."
+  def providers do
+    Enum.reject([T3.Codex.Provider.entry(), T3.Claude.Provider.entry()], &is_nil/1) ++
+      T3.Acp.entries()
   end
 
   @spec id() :: String.t()

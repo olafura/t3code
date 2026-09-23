@@ -1,7 +1,7 @@
 defmodule T3.Acp.ThreadRuntime do
   @moduledoc """
   Runs one thread's turns on an Agent Client Protocol agent (OpenCode's
-  `opencode acp`, and any other ACP agent in `T3.Acp.agents/0`) and writes them into
+  `opencode acp`, a registry agent, or any other instance in `T3.Acp.instances/0`) and writes them into
   the thread's log.
 
   One agent process serves the thread: `initialize`, then `session/new`, or
@@ -215,9 +215,15 @@ defmodule T3.Acp.ThreadRuntime do
     driver = turn.ids.driver
     if state.conn, do: Connection.stop(state.conn)
 
-    with {:ok, command} <- T3.Acp.command(driver, turn.runtime_mode),
+    with {:ok, command, env} <- T3.Acp.command(driver, turn.runtime_mode),
          {:ok, conn} <-
-           Connection.start_link(cmd: command, handler: self(), cd: turn.cwd, dialect: :v2),
+           Connection.start_link(
+             cmd: command,
+             handler: self(),
+             cd: turn.cwd,
+             env: env,
+             dialect: :v2
+           ),
          {:ok, init} <-
            Connection.call(conn, "initialize", %{
              "protocolVersion" => 1,

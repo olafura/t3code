@@ -15,7 +15,7 @@ defmodule T3.MixProject do
 
   def application do
     [
-      extra_applications: [:logger],
+      extra_applications: [:logger, :inets, :ssl, :public_key],
       mod: {T3.Application, []}
     ]
   end
