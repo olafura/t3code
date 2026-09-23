@@ -38,7 +38,7 @@ defmodule T3.Projects do
         }
 
         {:ok, _} = T3.Streams.commit(id, :project, [{"project", id, Patch.diff(nil, project)}])
-        {:ok, project}
+        {:ok, contract(project)}
     end
   end
 
@@ -72,11 +72,32 @@ defmodule T3.Projects do
           next = fun.(current)
 
           case Patch.diff(current, next) do
-            :unchanged -> {[], {:ok, next}}
-            patch -> {[{"project", id, patch}], {:ok, next}}
+            :unchanged -> {[], {:ok, contract(next)}}
+            patch -> {[{"project", id, patch}], {:ok, contract(next)}}
           end
       end
     end)
+  end
+
+  # The contracts' `Project`: stored entities drop null fields, and projects
+  # imported from the Node log name their id `projectId`.
+  defp contract(project) do
+    optional =
+      Map.take(
+        project,
+        ~w(repositoryIdentity faviconPath projectIcon defaultThreadEnvMode autoPull)
+      )
+
+    Map.merge(optional, %{
+      "id" => project["id"] || project["projectId"],
+      "title" => project["title"],
+      "workspaceRoot" => project["workspaceRoot"],
+      "defaultModelSelection" => project["defaultModelSelection"],
+      "scripts" => project["scripts"] || [],
+      "createdAt" => project["createdAt"],
+      "updatedAt" => project["updatedAt"],
+      "deletedAt" => project["deletedAt"]
+    })
   end
 
   @doc """

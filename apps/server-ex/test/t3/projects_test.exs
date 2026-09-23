@@ -34,7 +34,8 @@ defmodule T3.ProjectsTest do
     assert File.dir?(root)
     assert_receive {:t3_shell, {:rows, _, [{"p1", {"project", %{"title" => "app"}}}]}}, 1_000
 
-    assert {:ok, %{"title" => "Renamed"}} =
+    # Results are complete `Project`s, null fields included.
+    assert {:ok, %{"title" => "Renamed", "deletedAt" => nil, "scripts" => []}} =
              Projects.mutate(%{
                "type" => "project.update",
                "projectId" => "p1",
