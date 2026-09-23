@@ -186,4 +186,19 @@ defmodule T3.Web.SocketTest do
              "detail" => %{"_tag" => "TerminalSessionLookupError", "terminalId" => "term-9"}
            } = error
   end
+
+  test "a node without a feature fails that subscription, not the socket", %{port: port} do
+    # No terminal hub runs here, as on a node from before terminals.
+    client =
+      connect(port)
+      |> WsClient.send_json(%{
+        "t" => "sub",
+        "id" => 1,
+        "shape" => %{"type" => "terminals", "node" => Atom.to_string(node())}
+      })
+
+    {%{"t" => "error", "id" => 1}, client} = WsClient.recv(client, 1_000)
+    client = WsClient.send_json(client, %{"t" => "ping"})
+    assert {%{"t" => "pong"}, _} = WsClient.recv(client, 1_000)
+  end
 end

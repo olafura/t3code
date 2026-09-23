@@ -193,16 +193,12 @@ defmodule T3.Web.Socket do
 
   defp subscribe(state, id, {:config, node}, _offset) do
     frame =
-      try do
-        %{
-          "t" => "config",
-          "id" => id,
-          "node" => Atom.to_string(node),
-          "config" => :erpc.call(node, T3.Environment, :server_config, [], 15_000)
-        }
-      catch
-        :error, {:erpc, reason} ->
-          %{"t" => "error", "id" => id, "reason" => "node unavailable: #{reason}"}
+      case remote(node, T3.Environment, :server_config, []) do
+        {:ok, config} ->
+          %{"t" => "config", "id" => id, "node" => Atom.to_string(node), "config" => config}
+
+        {:error, reason} ->
+          error_frame(id, reason)
       end
 
     {:push, Protocol.encode(frame), state}
@@ -210,27 +206,20 @@ defmodule T3.Web.Socket do
 
   defp subscribe(state, id, {:stream, node, stream_id} = shape, offset) do
     if Map.has_key?(state.by_stream, stream_id) do
-      {:push, Protocol.encode(%{"t" => "error", "id" => id, "reason" => "already subscribed"}),
-       state}
+      {:push, Protocol.encode(error_frame(id, "already subscribed")), state}
     else
-      try do
-        :ok = :erpc.call(node, T3.Streams, :subscribe, [stream_id, self(), offset], 15_000)
+      # The owning node may be gone or slow; the client retries when it is back.
+      case remote(node, T3.Streams, :subscribe, [stream_id, self(), offset]) do
+        {:ok, :ok} ->
+          {:ok,
+           %{
+             state
+             | subs: Map.put(state.subs, id, shape),
+               by_stream: Map.put(state.by_stream, stream_id, id)
+           }}
 
-        {:ok,
-         %{
-           state
-           | subs: Map.put(state.subs, id, shape),
-             by_stream: Map.put(state.by_stream, stream_id, id)
-         }}
-      catch
-        # The owning node went away or timed out; the client retries when it is back.
-        :error, {:erpc, reason} ->
-          {:push,
-           Protocol.encode(%{
-             "t" => "error",
-             "id" => id,
-             "reason" => "node unavailable: #{reason}"
-           }), state}
+        {:error, reason} ->
+          {:push, Protocol.encode(error_frame(id, reason)), state}
       end
     end
   end
@@ -239,15 +228,8 @@ defmodule T3.Web.Socket do
   defp subscribe(state, id, {:terminal, node, input}, _offset) do
     key = {input["threadId"], input["terminalId"]}
 
-    reply =
-      try do
-        :erpc.call(node, T3.Terminal, :attach, [input, self()], 15_000)
-      catch
-        :error, {:erpc, reason} -> {:error, %{"message" => "node unavailable: #{reason}"}}
-      end
-
-    case reply do
-      {:ok, snapshot} ->
+    case remote(node, T3.Terminal, :attach, [input, self()]) do
+      {:ok, {:ok, snapshot}} ->
         frame = %{"type" => "snapshot", "snapshot" => snapshot}
 
         {:push, Protocol.encode(%{"t" => "terminal", "id" => id, "event" => frame}),
@@ -257,43 +239,47 @@ defmodule T3.Web.Socket do
              by_terminal: Map.put(state.by_terminal, key, id)
          }}
 
-      {:error, %{} = error} ->
-        frame = %{
-          "t" => "error",
-          "id" => id,
-          "reason" => error["message"],
-          "detail" => Map.delete(error, "message")
-        }
+      {:ok, {:error, %{} = error}} ->
+        frame =
+          Map.put(error_frame(id, error["message"]), "detail", Map.delete(error, "message"))
 
         {:push, Protocol.encode(frame), state}
 
-      {:error, error} ->
-        {:push, Protocol.encode(%{"t" => "error", "id" => id, "reason" => to_string(error)}),
-         state}
+      {_, reason} ->
+        {:push, Protocol.encode(error_frame(id, reason)), state}
     end
   end
 
   defp subscribe(state, id, {:terminals, node} = shape, _offset) do
-    try do
-      terminals = :erpc.call(node, T3.Terminal.Hub, :watch, [self()], 15_000)
-      event = %{"type" => "snapshot", "terminals" => terminals}
+    case remote(node, T3.Terminal.Hub, :watch, [self()]) do
+      {:ok, terminals} ->
+        event = %{"type" => "snapshot", "terminals" => terminals}
 
-      {:push, Protocol.encode(%{"t" => "terminals", "id" => id, "event" => event}),
-       %{
-         state
-         | subs: Map.put(state.subs, id, shape),
-           by_terminal: Map.put(state.by_terminal, shape, id)
-       }}
-    catch
-      :error, {:erpc, reason} ->
-        {:push,
-         Protocol.encode(%{
-           "t" => "error",
-           "id" => id,
-           "reason" => "node unavailable: #{reason}"
-         }), state}
+        {:push, Protocol.encode(%{"t" => "terminals", "id" => id, "event" => event}),
+         %{
+           state
+           | subs: Map.put(state.subs, id, shape),
+             by_terminal: Map.put(state.by_terminal, shape, id)
+         }}
+
+      {:error, reason} ->
+        {:push, Protocol.encode(error_frame(id, reason)), state}
     end
   end
+
+  # Calls a node without ever taking this socket down: an unreachable node, or one
+  # without the feature (an older version), fails only the one subscription.
+  defp remote(node, module, fun, args) do
+    {:ok, :erpc.call(node, module, fun, args, 15_000)}
+  catch
+    :error, {:erpc, reason} ->
+      {:error, "node unavailable: #{reason}"}
+
+    kind, reason ->
+      {:error, "#{node} cannot serve this: #{Exception.format_banner(kind, reason)}"}
+  end
+
+  defp error_frame(id, reason), do: %{"t" => "error", "id" => id, "reason" => to_string(reason)}
 
   defp unsubscribe(state, id) do
     case Map.pop(state.subs, id) do
