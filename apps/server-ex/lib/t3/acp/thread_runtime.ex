@@ -22,7 +22,7 @@ defmodule T3.Acp.ThreadRuntime do
   alias T3.Orchestration
   alias T3.Orchestration.Entities
 
-  @state_version 1
+  @state_version 2
   @registry T3.Acp.Registry
 
   @spec start_turn(String.t(), map) :: :ok
@@ -75,6 +75,7 @@ defmodule T3.Acp.ThreadRuntime do
        thread_id: thread_id,
        conn: nil,
        agent: nil,
+       mode: nil,
        capabilities: %{},
        session_id: nil,
        model: nil,
@@ -197,19 +198,24 @@ defmodule T3.Acp.ThreadRuntime do
   def handle_info(_other, state), do: {:noreply, state}
 
   @impl true
-  def code_change(_old, state, _extra), do: {:ok, %{state | v: @state_version}}
+  def code_change(_old, state, _extra), do: {:ok, migrate(state)}
+
+  # Every older state shape migrates forward here; v2 added the agent's mode.
+  defp migrate(%{v: @state_version} = state), do: state
+  defp migrate(%{v: 1} = state), do: state |> Map.put_new(:mode, nil) |> Map.put(:v, 2)
 
   # --- session -------------------------------------------------------------------
 
-  defp ensure_session(%{conn: conn, session_id: sid, agent: agent} = state, turn)
-       when conn != nil and sid != nil and agent == turn.ids.driver,
+  # The agent's permission mode is set when it starts, so a new mode means a new process.
+  defp ensure_session(%{conn: conn, session_id: sid, agent: agent, mode: mode} = state, turn)
+       when conn != nil and sid != nil and agent == turn.ids.driver and mode == turn.runtime_mode,
        do: {:ok, state}
 
   defp ensure_session(state, turn) do
     driver = turn.ids.driver
     if state.conn, do: Connection.stop(state.conn)
 
-    with {:ok, command} <- T3.Acp.command(driver),
+    with {:ok, command} <- T3.Acp.command(driver, turn.runtime_mode),
          {:ok, conn} <-
            Connection.start_link(cmd: command, handler: self(), cd: turn.cwd, dialect: :v2),
          {:ok, init} <-
@@ -225,6 +231,7 @@ defmodule T3.Acp.ThreadRuntime do
            state
            | conn: conn,
              agent: driver,
+             mode: turn.runtime_mode,
              capabilities: init["agentCapabilities"] || %{}
          },
          {:ok, session_id, state} <- open_session(state, turn) do

@@ -13,7 +13,8 @@ defmodule T3.Acp do
   alias T3.JsonRpc.Connection
 
   @agents %{
-    "opencode" => %{command: ["opencode", "acp"], label: "OpenCode"}
+    "opencode" => %{binary: "opencode", label: "OpenCode"},
+    "grok" => %{binary: "grok", label: "Grok"}
   }
 
   @doc "Driver ids of the ACP agents."
@@ -23,13 +24,43 @@ defmodule T3.Acp do
 
   def label(driver), do: get_in(@agents, [driver, :label]) || driver
 
-  @doc "The command that starts an agent; `:acp_commands` overrides it (tests)."
-  def command(driver) do
-    case Application.get_env(:t3, :acp_commands, %{})[driver] ||
-           get_in(@agents, [driver, :command]) do
-      nil -> {:error, "unknown ACP agent #{driver}"}
-      command -> {:ok, command}
+  @doc """
+  The command that starts an agent for a thread's runtime mode, with the binary
+  set in the node's provider settings; `:acp_commands` overrides it (tests).
+  """
+  def command(driver, runtime_mode \\ nil) do
+    cond do
+      command = Application.get_env(:t3, :acp_commands, %{})[driver] ->
+        {:ok, command}
+
+      agent = @agents[driver] ->
+        {:ok, [binary(driver, agent.binary) | args(driver, runtime_mode)]}
+
+      true ->
+        {:error, "unknown ACP agent #{driver}"}
     end
+  end
+
+  defp args("opencode", _mode), do: ["acp"]
+
+  # Grok applies permissions itself; full access skips its prompts entirely.
+  defp args("grok", "full-access"), do: ["agent", "--always-approve", "stdio"]
+  defp args("grok", "approval-required"), do: ["--permission-mode", "default", "agent", "stdio"]
+
+  defp args("grok", "auto-accept-edits"),
+    do: ["--permission-mode", "acceptEdits", "agent", "stdio"]
+
+  defp args("grok", "auto"), do: ["--permission-mode", "auto", "agent", "stdio"]
+  defp args("grok", _mode), do: ["agent", "stdio"]
+
+  defp binary(driver, default) do
+    settings = T3.Settings.settings()
+
+    [
+      get_in(settings, ["providerInstances", driver, "config", "binaryPath"]),
+      get_in(settings, ["providers", driver, "binaryPath"])
+    ]
+    |> Enum.find(default, &(is_binary(&1) and String.trim(&1) != ""))
   end
 
   @doc "Provider entries for the agents installed on this node."
