@@ -183,6 +183,8 @@ defmodule T3.Acp do
           "availability" => "available",
           # Commit messages and titles come from Claude or Codex (`T3.TextGeneration`).
           "supportsTextGeneration" => false,
+          # ACP agents run without T3's plan mode.
+          "showInteractionModeToggle" => false,
           "auth" => %{"status" => "authenticated"},
           "checkedAt" => T3.Orchestration.Entities.now(),
           "models" => models || [],

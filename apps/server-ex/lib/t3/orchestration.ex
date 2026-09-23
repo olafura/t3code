@@ -20,6 +20,11 @@ defmodule T3.Orchestration do
 
   @active_statuses ~w(preparing starting running waiting)
 
+  @thread_updates ~w(thread.archive thread.unarchive thread.delete thread.settle thread.unsettle
+                     thread.snooze thread.unsnooze thread.pin thread.unpin thread.pin.reorder
+                     thread.active.reorder thread.visit thread.mark-unread thread.metadata.update
+                     thread.runtime-mode.set thread.interaction-mode.set thread.model-selection.set)
+
   @doc "Handles one client RPC by method name; see `packages/contracts/src/orchestrationV2.ts`."
   @spec handle(String.t(), map) :: {:ok, term} | {:error, String.t()}
   def handle("orchestration.dispatchCommand", command), do: dispatch(command)
@@ -122,6 +127,32 @@ defmodule T3.Orchestration do
       for {id, position} <- Enum.with_index(order, 1),
           do: upsert(state, "run", id, &Map.put(&1, "queuePosition", position))
     end)
+  end
+
+  # Commands that set fields on the thread itself.
+  def dispatch(%{"type" => "thread." <> _ = type, "threadId" => thread_id} = command)
+      when type in @thread_updates do
+    at = Entities.now()
+
+    result =
+      T3.Streams.transact(thread_id, :thread, fn state ->
+        case StreamState.get(state, "thread")[thread_id] do
+          nil ->
+            {[], {:error, "unknown thread #{thread_id}"}}
+
+          thread ->
+            case thread_fields(type, command, thread, at) do
+              {:error, _} = error ->
+                {[], error}
+
+              fields ->
+                change = upsert(state, "thread", thread_id, &Map.merge(&1, fields))
+                {Enum.reject([change], &is_nil/1), :ok}
+            end
+        end
+      end)
+
+    with :ok <- result, do: {:ok, %{"sequence" => sequence(thread_id)}}
   end
 
   # Nodes do not steer a running turn; a queued message "steers" by going first and
@@ -259,6 +290,70 @@ defmodule T3.Orchestration do
   end
 
   defp sequence(thread_id), do: T3.Streams.Server.state(T3.Streams.ensure(thread_id)).seq
+
+  # The thread fields a command sets, as the Node server's projector sets them.
+  defp thread_fields("thread.archive", _, _, at), do: %{"archivedAt" => at}
+  defp thread_fields("thread.unarchive", _, _, _), do: %{"archivedAt" => nil}
+  defp thread_fields("thread.delete", _, _, at), do: %{"deletedAt" => at}
+
+  defp thread_fields("thread.settle", command, _, at),
+    do: %{"settledOverride" => "settled", "settledAt" => command["settledAt"] || at}
+
+  defp thread_fields("thread.unsettle", _, _, at),
+    do: %{"settledOverride" => "active", "settledAt" => nil, "unsettledAt" => at}
+
+  defp thread_fields("thread.snooze", command, _, at),
+    do: %{"snoozedUntil" => command["snoozedUntil"], "snoozedAt" => at}
+
+  defp thread_fields("thread.unsnooze", _, _, _), do: %{"snoozedUntil" => nil, "snoozedAt" => nil}
+
+  defp thread_fields("thread.pin", command, _, at),
+    do: %{"pinnedAt" => at, "pinOrderKey" => command["orderKey"]}
+
+  defp thread_fields("thread.unpin", _, _, _), do: %{"pinnedAt" => nil, "pinOrderKey" => nil}
+
+  defp thread_fields("thread.pin.reorder", command, _, _),
+    do: %{"pinOrderKey" => command["orderKey"]}
+
+  defp thread_fields("thread.active.reorder", command, _, _),
+    do: %{"activeOrderKey" => command["orderKey"]}
+
+  # Visits only move forward, so a late or replayed visit changes nothing.
+  defp thread_fields("thread.visit", command, thread, _) do
+    visited = command["visitedAt"]
+
+    if is_binary(thread["lastVisitedAt"]) and thread["lastVisitedAt"] >= visited,
+      do: %{},
+      else: %{"lastVisitedAt" => visited}
+  end
+
+  defp thread_fields("thread.mark-unread", _, _, _), do: %{"lastVisitedAt" => nil}
+
+  defp thread_fields("thread.runtime-mode.set", command, _, at),
+    do: %{"runtimeMode" => command["runtimeMode"], "updatedAt" => at}
+
+  defp thread_fields("thread.interaction-mode.set", command, _, at),
+    do: %{"interactionMode" => command["interactionMode"], "updatedAt" => at}
+
+  defp thread_fields("thread.model-selection.set", %{"modelSelection" => selection}, _, at),
+    do: %{
+      "modelSelection" => selection,
+      "providerInstanceId" => selection["instanceId"],
+      "updatedAt" => at
+    }
+
+  defp thread_fields("thread.metadata.update", command, thread, at) do
+    cond do
+      Map.has_key?(command, "expectedWorktreePath") and
+          command["expectedWorktreePath"] != thread["worktreePath"] ->
+        {:error, "the thread's worktree changed"}
+
+      true ->
+        command
+        |> Map.take(~w(title branch worktreePath limitRecovery linkedPullRequest))
+        |> Map.put("updatedAt", at)
+    end
+  end
 
   # Changes to queued runs; positions are renumbered 1.. after each one.
   defp queue_change(thread_id, fun) do
@@ -542,6 +637,7 @@ defmodule T3.Orchestration do
             )
           )
         ]
+        |> Kernel.++([implemented_plan(state, thread_id, command["sourcePlanRef"])])
         |> Enum.reject(&is_nil/1)
       )
 
@@ -553,11 +649,25 @@ defmodule T3.Orchestration do
       scope_id: scope_id,
       model: selection["model"],
       runtime_mode: thread["runtimeMode"] || "full-access",
+      interaction_mode: thread["interactionMode"] || "default",
       native_thread_id: get_in(provider_thread || %{}, ["nativeThreadRef", "nativeId"])
     }
 
     {changes, {:ok, turn}}
   end
+
+  # A message that implements a proposed plan of this thread completes it.
+  defp implemented_plan(state, thread_id, %{"threadId" => thread_id, "planId" => plan_id}) do
+    case StreamState.get(state, "plan")[plan_id] do
+      %{"kind" => "proposed_plan"} ->
+        upsert(state, "plan", plan_id, &Map.put(&1, "status", "completed"))
+
+      _ ->
+        nil
+    end
+  end
+
+  defp implemented_plan(_state, _thread_id, _ref), do: nil
 
   @doc "The next free turn-item ordinal in a thread."
   def next_ordinal(state) do

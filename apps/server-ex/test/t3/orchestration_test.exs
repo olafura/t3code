@@ -38,7 +38,7 @@ defmodule T3.OrchestrationTest do
     %{work: work}
   end
 
-  defp launch(text, instance \\ "codex", mode \\ "full-access") do
+  defp launch(text, instance \\ "codex", mode \\ "full-access", interaction \\ "default") do
     thread_id = "thread-#{System.unique_integer([:positive])}"
     :ok = T3.Streams.subscribe(thread_id, self(), nil)
 
@@ -50,7 +50,7 @@ defmodule T3.OrchestrationTest do
         "title" => "Try codex",
         "modelSelection" => %{"instanceId" => instance, "model" => "gpt-5.4"},
         "runtimeMode" => mode,
-        "interactionMode" => "default",
+        "interactionMode" => interaction,
         "workspaceStrategy" => %{"type" => "root"},
         "initialMessage" => %{"messageId" => "msg-user-1", "text" => text, "attachments" => []}
       })
@@ -134,6 +134,99 @@ defmodule T3.OrchestrationTest do
 
     state = await_run(thread_id, "interrupted")
     assert [%{"status" => "interrupted"}] = StreamState.list(state, "run-attempt")
+  end
+
+  describe "thread settings and plan mode" do
+    test "thread commands set the thread's own fields" do
+      thread_id = launch("list the files")
+      _ = await_run(thread_id, "completed")
+
+      for {type, fields} <- [
+            {"thread.metadata.update", %{"title" => "Renamed"}},
+            {"thread.interaction-mode.set", %{"interactionMode" => "plan"}},
+            {"thread.runtime-mode.set", %{"runtimeMode" => "approval-required"}},
+            {"thread.pin", %{"orderKey" => "a0"}},
+            {"thread.visit", %{"visitedAt" => "2026-09-23T12:00:00.000Z"}},
+            {"thread.visit", %{"visitedAt" => "2026-09-23T11:00:00.000Z"}},
+            {"thread.archive", %{}}
+          ] do
+        {:ok, _} =
+          Orchestration.dispatch(Map.merge(%{"type" => type, "threadId" => thread_id}, fields))
+      end
+
+      assert %{
+               "title" => "Renamed",
+               "interactionMode" => "plan",
+               "runtimeMode" => "approval-required",
+               "pinOrderKey" => "a0",
+               "pinnedAt" => pinned,
+               "lastVisitedAt" => "2026-09-23T12:00:00.000Z",
+               "archivedAt" => archived
+             } = StreamState.get(current(thread_id), "thread")[thread_id]
+
+      assert is_binary(pinned) and is_binary(archived)
+    end
+
+    test "codex in plan mode proposes a plan and keeps a todo list; implementing completes it" do
+      thread_id = launch("make a plan", "codex", "full-access", "plan")
+      state = await_run(thread_id, "completed")
+
+      assert [
+               %{"kind" => "proposed_plan", "status" => "active", "markdown" => "# Plan\n- do it"} =
+                 plan
+             ] =
+               Enum.filter(StreamState.list(state, "plan"), &(&1["kind"] == "proposed_plan"))
+
+      items = StreamState.list(state, "turn-item")
+
+      assert %{"markdown" => "# Plan\n- do it", "streaming" => false, "status" => "completed"} =
+               Enum.find(items, &(&1["type"] == "proposed_plan"))
+
+      assert %{
+               "steps" => [%{"status" => "completed"}, %{"status" => "running"}],
+               "explanation" => "Two steps"
+             } =
+               Enum.find(items, &(&1["type"] == "todo_list"))
+
+      {:ok, _} =
+        Orchestration.dispatch(%{
+          "type" => "message.dispatch",
+          "threadId" => thread_id,
+          "messageId" => "m-implement",
+          "text" => "go ahead",
+          "attachments" => [],
+          "sourcePlanRef" => %{"threadId" => thread_id, "planId" => plan["id"]},
+          "dispatchMode" => %{"type" => "start_immediately"}
+        })
+
+      state = await_statuses(thread_id, ["completed", "completed"])
+      assert %{"status" => "completed"} = StreamState.get(state, "plan")[plan["id"]]
+    end
+
+    test "codex outside plan mode is told so" do
+      thread_id = launch("make a plan", "codex")
+      state = await_run(thread_id, "completed")
+      assert Enum.any?(StreamState.list(state, "turn-item"), &(&1["text"] == "mode default"))
+    end
+
+    test "claude's ExitPlanMode becomes the proposed plan, and TodoWrite a todo list" do
+      thread_id = launch("make a plan", "claudeAgent", "full-access", "plan")
+      state = await_run(thread_id, "completed")
+
+      assert [%{"status" => "active", "markdown" => "# Plan\n- do it"}] =
+               Enum.filter(StreamState.list(state, "plan"), &(&1["kind"] == "proposed_plan"))
+
+      refute Enum.any?(StreamState.list(state, "turn-item"), &(&1["toolName"] == "ExitPlanMode"))
+
+      thread_id = launch("keep a todo list", "claudeAgent")
+      state = await_run(thread_id, "completed")
+
+      assert [%{"kind" => "todo_list", "status" => "active", "steps" => [first, second]}] =
+               StreamState.list(state, "plan")
+
+      assert {first["text"], first["status"], second["status"]} ==
+               {"Read the code", "completed", "running"}
+    end
   end
 
   describe "queued messages" do

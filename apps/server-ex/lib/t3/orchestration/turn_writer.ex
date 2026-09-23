@@ -33,8 +33,10 @@ defmodule T3.Orchestration.TurnWriter do
       node_id = Entities.new_id("node")
       item_id = item_id(ids, native)
       message_id = if kind == :assistant, do: "message:#{driver}:#{native}"
+      plan_id = if kind == :plan, do: "plan:#{driver}:#{native}"
       item_ids = Map.put(ids, :node, node_id)
       {node_kind, type, item_fields} = shape(kind, message_id, fields)
+      item_fields = if plan_id, do: Map.put(item_fields, "planId", plan_id), else: item_fields
 
       commit(state, fn stream ->
         [
@@ -66,11 +68,17 @@ defmodule T3.Orchestration.TurnWriter do
               Entities.message(item_ids, message_id, "assistant", "", true, at, %{
                 "nodeId" => node_id
               })
+            ),
+          plan_id &&
+            Orchestration.create(
+              "plan",
+              plan_id,
+              plan(ids, plan_id, node_id, "proposed_plan", "draft", %{"markdown" => ""})
             )
         ]
       end)
 
-      item = %{id: item_id, node: node_id, message: message_id, kind: kind}
+      item = %{id: item_id, node: node_id, message: message_id, plan: plan_id, kind: kind}
       %{state | items: Map.put(state.items, native, item)}
     end
   end
@@ -87,6 +95,136 @@ defmodule T3.Orchestration.TurnWriter do
   defp shape(:file, _, fields), do: {"tool_call", "file_change", fields}
   defp shape(:web, _, fields), do: {"tool_call", "web_search", fields}
   defp shape(:tool, _, fields), do: {"tool_call", "dynamic_tool", fields}
+  defp shape(:plan, _, _), do: {"plan", "proposed_plan", %{"markdown" => "", "streaming" => true}}
+
+  defp plan(ids, plan_id, node_id, kind, status, fields) do
+    Map.merge(
+      %{
+        "id" => plan_id,
+        "threadId" => ids.thread,
+        "runId" => ids.run,
+        "nodeId" => node_id,
+        "kind" => kind,
+        "status" => status
+      },
+      fields
+    )
+  end
+
+  @doc """
+  Completes a proposed plan (an item of kind `:plan`, whose text streamed into its
+  turn item): the final `markdown` goes to the item and the plan, which becomes
+  `active`, ready for the user to implement.
+  """
+  def finish_plan(state, native, markdown) do
+    %{plan: plan_id} = Map.fetch!(state.items, native)
+
+    state
+    |> finish_item(native, "completed", fn entity ->
+      Map.merge(entity, %{
+        "markdown" => markdown || entity["markdown"] || "",
+        "streaming" => false
+      })
+    end)
+    |> tap(fn state ->
+      commit(state, fn stream ->
+        [
+          Orchestration.upsert(stream, "plan", plan_id, fn plan ->
+            Map.merge(plan, %{
+              "status" => "active",
+              "markdown" =>
+                markdown ||
+                  get_in(stream.entities, [
+                    "turn-item",
+                    item_id(state.turn.ids, native),
+                    "markdown"
+                  ]) || ""
+            })
+          end)
+        ]
+      end)
+    end)
+  end
+
+  @doc """
+  Writes a todo list (`OrchestrationV2PlanStep`s) as a plan with its turn item and
+  node, creating them the first time and replacing the steps after that. The plan
+  is complete once every step is.
+  """
+  def write_todo(state, native, steps, explanation \\ nil) do
+    ids = state.turn.ids
+    driver = Entities.driver(ids)
+    at = Entities.now()
+    plan_id = "plan:#{driver}:#{native}"
+    item_id = item_id(ids, native)
+    node_id = "node:todo:#{driver}:#{native}"
+    done = steps != [] and Enum.all?(steps, &(&1["status"] == "completed"))
+
+    fields =
+      %{"steps" => steps}
+      |> then(&if(explanation, do: Map.put(&1, "explanation", explanation), else: &1))
+
+    # The item is a snapshot of the list; the plan's status tracks its progress.
+    item_status = "completed"
+
+    commit(state, fn stream ->
+      if stream.entities["plan"][plan_id] do
+        [
+          Orchestration.upsert(
+            stream,
+            "plan",
+            plan_id,
+            &Map.merge(&1, Map.put(fields, "status", if(done, do: "completed", else: "active")))
+          ),
+          Orchestration.upsert(
+            stream,
+            "turn-item",
+            item_id,
+            &Map.merge(&1, Map.merge(fields, %{"status" => item_status, "updatedAt" => at}))
+          )
+        ]
+      else
+        item_ids = Map.put(ids, :node, node_id)
+
+        [
+          Orchestration.create(
+            "node",
+            node_id,
+            Entities.node(ids, node_id, "todo_list", "completed", at, %{
+              "nativeItemRef" => Entities.provider_ref(native, driver)
+            })
+          ),
+          Orchestration.create(
+            "plan",
+            plan_id,
+            plan(
+              ids,
+              plan_id,
+              node_id,
+              "todo_list",
+              if(done, do: "completed", else: "active"),
+              fields
+            )
+          ),
+          Orchestration.create(
+            "turn-item",
+            item_id,
+            Entities.turn_item(
+              item_ids,
+              item_id,
+              "todo_list",
+              Orchestration.next_ordinal(stream),
+              item_status,
+              at,
+              Map.put(fields, "planId", plan_id)
+            )
+          )
+        ]
+      end
+    end)
+
+    state
+  end
 
   @doc "Finishes an item with `status`, applying `fun` to its turn item (and message)."
   def finish_item(state, native, status, fun) do

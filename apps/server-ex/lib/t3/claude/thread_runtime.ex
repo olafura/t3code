@@ -20,7 +20,7 @@ defmodule T3.Claude.ThreadRuntime do
   alias T3.Orchestration
   alias T3.Orchestration.Entities
 
-  @state_version 1
+  @state_version 2
 
   # runtimeMode -> the CLI's permission mode; prompts it raises become approval
   # requests the user answers in the client.
@@ -92,7 +92,9 @@ defmodule T3.Claude.ThreadRuntime do
        message_id: nil,
        interrupted: false,
        # Open permission prompts: request id -> the CLI's control request id.
-       requests: %{}
+       requests: %{},
+       # The session's permission mode, switched before a turn that needs another.
+       permission_mode: nil
      }}
   end
 
@@ -212,6 +214,24 @@ defmodule T3.Claude.ThreadRuntime do
     {:noreply, state}
   end
 
+  # Plan mode's plan: captured for the user, and Claude stops to wait for them.
+  def handle_info({:claude, session, {:permission, id, "ExitPlanMode", input, _}}, state) do
+    state =
+      state
+      |> flush()
+      |> ensure_item("plan:#{id}", :plan)
+      |> finish_plan("plan:#{id}", input["plan"] || "")
+
+    Session.answer_permission(
+      session,
+      id,
+      {:deny,
+       "The client captured your proposed plan. Stop here and wait for the user's feedback or implementation request in a later turn."}
+    )
+
+    {:noreply, state}
+  end
+
   def handle_info({:claude, _session, {:permission, id, "AskUserQuestion", input, _}}, state) do
     {state, request_id} = open_question(flush(state), id, claude_questions(input))
     request = {:question, id, input}
@@ -240,7 +260,8 @@ defmodule T3.Claude.ThreadRuntime do
   def handle_info(_other, state), do: {:noreply, state}
 
   @impl true
-  def code_change(_old, state, _extra), do: {:ok, %{state | v: @state_version}}
+  def code_change(_old, state, _extra),
+    do: {:ok, state |> Map.put_new(:permission_mode, nil) |> Map.put(:v, @state_version)}
 
   # AskUserQuestion's questions; each is keyed by its text, as Claude keys answers.
   defp claude_questions(input) do
@@ -273,7 +294,22 @@ defmodule T3.Claude.ThreadRuntime do
 
   defp non_empty(_value, default), do: default
 
-  defp ensure_session(%{session: session} = state, _turn) when session != nil, do: {:ok, state}
+  # Plan mode, or the thread's runtime mode.
+  defp permission_mode(turn) do
+    if Map.get(turn, :interaction_mode) == "plan",
+      do: "plan",
+      else: Map.get(@permission_modes, turn.runtime_mode, "default")
+  end
+
+  defp ensure_session(%{session: session} = state, turn) when session != nil do
+    mode = permission_mode(turn)
+
+    if state.permission_mode != mode do
+      _ = Session.control(session, "set_permission_mode", %{"mode" => mode})
+    end
+
+    {:ok, %{state | permission_mode: mode}}
+  end
 
   defp ensure_session(state, turn) do
     Process.flag(:trap_exit, true)
@@ -282,7 +318,7 @@ defmodule T3.Claude.ThreadRuntime do
       handler: self(),
       cd: turn.cwd,
       model: turn.model,
-      permission_mode: Map.get(@permission_modes, turn.runtime_mode, "default"),
+      permission_mode: permission_mode(turn),
       resume: turn.native_thread_id,
       partial_messages: true
     ]
@@ -294,7 +330,7 @@ defmodule T3.Claude.ThreadRuntime do
       end
 
     case Session.start_link(opts) do
-      {:ok, session} -> {:ok, %{state | session: session}}
+      {:ok, session} -> {:ok, %{state | session: session, permission_mode: permission_mode(turn)}}
       {:error, reason} -> {:error, reason}
     end
   end
@@ -406,6 +442,30 @@ defmodule T3.Claude.ThreadRuntime do
     |> ensure_item(key, :reasoning)
     |> finish_item(key, "completed", &Map.merge(&1, %{"text" => text, "streaming" => false}))
   end
+
+  # Claude's todo list: one per run, updated in place.
+  defp assistant_block(%{"type" => "tool_use", "name" => "TodoWrite"} = block, _id, _index, state) do
+    steps =
+      for {todo, index} <- Enum.with_index(get_in(block, ["input", "todos"]) || [], 1),
+          text = non_empty(todo["content"], ""),
+          text != "" do
+        status =
+          case todo["status"] do
+            "completed" -> "completed"
+            "in_progress" -> "running"
+            _ -> "pending"
+          end
+
+        %{"id" => "step-#{index}", "text" => text, "status" => status}
+      end
+
+    write_todo(state, "todos:#{state.turn.ids.run}", steps)
+  end
+
+  # Shown as their question card and plan instead.
+  defp assistant_block(%{"type" => "tool_use", "name" => name}, _id, _index, state)
+       when name in ["AskUserQuestion", "ExitPlanMode"],
+       do: state
 
   defp assistant_block(
          %{"type" => "tool_use", "id" => tool_id, "name" => name} = block,

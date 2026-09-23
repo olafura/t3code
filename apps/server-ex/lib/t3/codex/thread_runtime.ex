@@ -216,6 +216,11 @@ defmodule T3.Codex.ThreadRuntime do
   @impl true
   def code_change(_old, state, _extra), do: {:ok, %{state | v: @state_version}}
 
+  defp non_empty(value, default) when is_binary(value),
+    do: if(String.trim(value) == "", do: default, else: String.trim(value))
+
+  defp non_empty(_value, default), do: default
+
   # Codex takes each answered question's choices as strings.
   defp codex_answers(answers, question_ids) do
     for {id, value} <- answers, id in question_ids, into: %{} do
@@ -351,7 +356,12 @@ defmodule T3.Codex.ThreadRuntime do
       "approvalPolicy" => approval,
       "approvalsReviewer" => "user",
       "sandboxPolicy" => %{"type" => sandbox},
-      "summary" => "detailed"
+      "summary" => "detailed",
+      # Always explicit: Codex keeps the last collaboration mode on a resumed thread.
+      "collaborationMode" => %{
+        "mode" => if(Map.get(turn, :interaction_mode) == "plan", do: "plan", else: "default"),
+        "settings" => %{"model" => turn.model}
+      }
     }
 
     case Connection.call(state.conn, "turn/start", params) do
@@ -374,6 +384,36 @@ defmodule T3.Codex.ThreadRuntime do
   defp notification("item/started", %{"item" => %{"type" => "commandExecution"} = item}, state) do
     state
     |> ensure_item(item["id"], :command, %{"input" => item["command"] || "", "output" => ""})
+  end
+
+  # Plan mode's proposed plan streams as its own item.
+  defp notification("item/started", %{"item" => %{"type" => "plan", "id" => native}}, state),
+    do: ensure_item(state, native, :plan)
+
+  defp notification("item/plan/delta", %{"itemId" => native, "delta" => delta}, state),
+    do: state |> ensure_item(native, :plan) |> buffer(native, "markdown", delta)
+
+  # The agent's own todo list for the turn.
+  defp notification("turn/plan/updated", %{"plan" => plan} = params, state) when is_list(plan) do
+    steps =
+      for {step, index} <- Enum.with_index(plan, 1) do
+        %{
+          "id" => "step-#{index}",
+          "text" => non_empty(step["step"], "Step #{index}"),
+          "status" =>
+            case step["status"] do
+              "completed" -> "completed"
+              "inProgress" -> "running"
+              _ -> "pending"
+            end
+        }
+      end
+
+    explanation =
+      if is_binary(params["explanation"]) and params["explanation"] != "",
+        do: params["explanation"]
+
+    write_todo(state, "turn-plan:#{params["turnId"]}", steps, explanation)
   end
 
   defp notification("item/agentMessage/delta", %{"itemId" => native, "delta" => delta}, state),
@@ -422,6 +462,12 @@ defmodule T3.Codex.ThreadRuntime do
     finish_item(state, native, "completed", fn entity ->
       Map.merge(entity, %{"text" => item["text"] || entity["text"], "streaming" => false})
     end)
+  end
+
+  # The completed plan item is authoritative over its streamed deltas.
+  defp complete_item(state, %{"type" => "plan", "id" => native} = item) do
+    text = if is_binary(item["text"]) and item["text"] != "", do: item["text"]
+    state |> ensure_item(native, :plan) |> finish_plan(native, text)
   end
 
   defp complete_item(state, %{"type" => "reasoning", "id" => native}) do

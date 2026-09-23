@@ -45,6 +45,20 @@ for line in sys.stdin:
         send({"method": "turn/started", "params": {**ctx, "turn": {"id": turn_id, "status": "inProgress"}}})
         if "wait" in text:
             continue
+        if "plan" in text:
+            mode = (params.get("collaborationMode") or {}).get("mode")
+            if mode == "plan":
+                send({"method": "turn/plan/updated", "params": {**ctx, "explanation": "Two steps", "plan": [
+                    {"step": "Read the code", "status": "completed"}, {"step": "Write the plan", "status": "inProgress"}]}})
+                send({"method": "item/started", "params": {**ctx, "item": {"type": "plan", "id": "plan-1", "text": ""}}})
+                for delta in ["# Plan\n", "- do it"]:
+                    send({"method": "item/plan/delta", "params": {**ctx, "itemId": "plan-1", "delta": delta}})
+                send({"method": "item/completed", "params": {**ctx, "item": {"type": "plan", "id": "plan-1", "text": "# Plan\n- do it"}}})
+            else:
+                send({"method": "item/started", "params": {**ctx, "item": {"type": "agentMessage", "id": "msg-mode", "text": ""}}})
+                send({"method": "item/completed", "params": {**ctx, "item": {"type": "agentMessage", "id": "msg-mode", "text": f"mode {mode}"}}})
+            send({"method": "turn/completed", "params": {**ctx, "turn": {"id": turn_id, "status": "completed"}}})
+            continue
         if "ask" in text:
             pending_ctx = ctx
             send({"id": "input-1", "method": "item/tool/requestUserInput", "params": {**ctx, "itemId": "ask-1", "questions": [
