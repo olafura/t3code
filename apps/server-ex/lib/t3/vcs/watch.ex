@@ -62,7 +62,7 @@ defmodule T3.Vcs.Watch do
        cwd: cwd,
        subscribers: %{},
        local: Vcs.local_status(cwd),
-       remote: Vcs.remote_status(cwd),
+       remote: Vcs.remote_status(cwd, pr: true),
        timer: Process.send_after(self(), :fetch, @remote_ms)
      }}
   end
@@ -87,15 +87,20 @@ defmodule T3.Vcs.Watch do
     end
   end
 
+  # A local change keeps the pull request last looked up; the timer refreshes it.
   def handle_cast(:refresh, state) do
-    {:noreply, update(state, Vcs.local_status(state.cwd), Vcs.remote_status(state.cwd))}
+    remote =
+      with %{} = remote <- Vcs.remote_status(state.cwd),
+           do: Map.put(remote, "pr", state.remote && state.remote["pr"])
+
+    {:noreply, update(state, Vcs.local_status(state.cwd), remote)}
   end
 
   def handle_cast({:publish, local, remote}, state), do: {:noreply, update(state, local, remote)}
 
   @impl true
   def handle_info(:fetch, state) do
-    state = update(state, state.local, Vcs.remote_status(state.cwd, fetch: true))
+    state = update(state, state.local, Vcs.remote_status(state.cwd, fetch: true, pr: true))
     {:noreply, %{state | timer: Process.send_after(self(), :fetch, @remote_ms)}}
   end
 

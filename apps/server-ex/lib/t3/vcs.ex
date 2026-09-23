@@ -71,7 +71,8 @@ defmodule T3.Vcs do
 
   @doc """
   `VcsStatusRemoteResult`, or nil outside a repository. With `fetch: true` the
-  upstream is fetched first so the behind count is current.
+  upstream is fetched first so the behind count is current; with `pr: true` the
+  branch's GitHub pull request is looked up (otherwise `pr` is nil).
   """
   def remote_status(cwd, opts \\ []) do
     with true <- File.dir?(cwd),
@@ -98,7 +99,7 @@ defmodule T3.Vcs do
         "aheadCount" => if(branch.upstream, do: branch.ahead, else: ahead_of_base),
         "behindCount" => if(branch.upstream, do: branch.behind, else: 0),
         "aheadOfDefaultCount" => if(branch.head && not default?, do: ahead_of_base, else: 0),
-        "pr" => nil
+        "pr" => if(opts[:pr] && branch.head, do: pull_request(cwd, branch.head, default?))
       }
     else
       _ -> nil
@@ -108,9 +109,49 @@ defmodule T3.Vcs do
   @doc "`vcs.refreshStatus`: both halves, fetched fresh; watchers are told too."
   def refresh_status(%{"cwd" => cwd}) do
     local = local_status(cwd)
-    remote = remote_status(cwd, fetch: true)
+    remote = remote_status(cwd, fetch: true, pr: true)
     T3.Vcs.Watch.publish(cwd, local, remote)
     {:ok, Map.merge(local, remote || empty_remote())}
+  end
+
+  # The branch's latest GitHub pull request, through `gh`. On the default branch
+  # only an open one counts: merged or closed matches there are reverse merges.
+  defp pull_request(cwd, branch, default?) do
+    with gh when is_binary(gh) <- System.find_executable("gh"),
+         {:ok, url} <- Git.ok(cwd, ~w(remote get-url origin)),
+         true <- String.contains?(url, "github.com"),
+         [pr | _] <- gh_pr_list(gh, cwd, branch),
+         state = String.downcase(pr["state"] || "open"),
+         true <- state == "open" or not default? do
+      %{
+        "number" => pr["number"],
+        "title" => pr["title"],
+        "url" => pr["url"],
+        "baseRef" => pr["baseRefName"],
+        "headRef" => pr["headRefName"],
+        "state" => state,
+        "isDraft" => pr["isDraft"] == true,
+        "updatedAt" => pr["updatedAt"]
+      }
+    else
+      _ -> nil
+    end
+  end
+
+  defp gh_pr_list(gh, cwd, branch) do
+    args =
+      ~w(pr list --state all --limit 1 --json number,title,url,baseRefName,headRefName,state,isDraft,updatedAt --head) ++
+        [branch]
+
+    # Unauthenticated or offline `gh` means no pull request, quietly.
+    task = Task.async(fn -> System.cmd(gh, args, cd: cwd, stderr_to_stdout: true) end)
+
+    case Task.yield(task, 10_000) || Task.shutdown(task, :brutal_kill) do
+      {:ok, {out, 0}} -> JSON.decode!(out)
+      _ -> []
+    end
+  rescue
+    _ -> []
   end
 
   defp empty_remote,
