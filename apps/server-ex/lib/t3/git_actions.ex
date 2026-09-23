@@ -4,15 +4,17 @@ defmodule T3.GitActions do
   combination, reporting `GitActionProgressEvent`s as each phase runs.
 
   A missing commit message is written by a coding agent (`T3.TextGeneration`), as
-  is a feature branch name when one is asked for. Pull requests are GitHub's, via
-  the `gh` CLI: an open one for the branch is reused, otherwise one is created
-  with a generated title and body.
+  is a feature branch name when one is asked for, in the project's writing style
+  (`T3.TextGeneration.Style`). Pull requests are GitHub's, via the `gh` CLI: an
+  open one for the branch is reused, otherwise one is created with a generated
+  title and body that follow the repository's pull request template.
 
   `start/2` runs an action in its own process and sends each event to the
   subscriber as `{:t3_git_action, action_id, event}`.
   """
 
   alias T3.{Git, TextGeneration, Vcs}
+  alias T3.TextGeneration.Style
 
   @commit_actions ~w(commit commit_push commit_push_pr)
 
@@ -209,8 +211,9 @@ defmodule T3.GitActions do
     end
 
     {:ok, summary} = Git.ok(cwd, ~w(diff --cached --name-status))
+    summary = String.trim(summary)
 
-    if String.trim(summary) == "" do
+    if summary == "" do
       nil
     else
       case custom_message(input["commitMessage"]) do
@@ -222,12 +225,13 @@ defmodule T3.GitActions do
           {:ok, %{out: patch}} =
             Git.run(cwd, ~w(diff --no-ext-diff --cached --patch --minimal), max_bytes: 200_000)
 
-          case TextGeneration.commit_message(cwd, branch, summary, patch, include_branch) do
-            {:ok, %{"subject" => subject} = generated} ->
-              Map.merge(generated, %{
-                "subject" => commit_subject(subject),
-                "body" => String.trim(generated["body"] || "")
-              })
+          policy = Style.policy(cwd)
+
+          case TextGeneration.commit_message(cwd, branch, summary, patch, include_branch,
+                 policy: policy
+               ) do
+            {:ok, generated} ->
+              generated
 
             {:error, reason} ->
               fail!("Could not write a commit message: #{reason}")
@@ -243,20 +247,6 @@ defmodule T3.GitActions do
       [""] -> nil
       [subject | rest] -> {String.trim(subject), rest |> Enum.join("\n") |> String.trim()}
     end
-  end
-
-  defp commit_subject(raw) do
-    subject =
-      raw
-      |> String.trim()
-      |> String.split(~r/\r?\n/)
-      |> hd()
-      |> String.replace(~r/\.+$/, "")
-      |> String.trim()
-
-    if subject == "",
-      do: "Update project files",
-      else: subject |> String.slice(0, 72) |> String.trim_trailing()
   end
 
   defp push(cwd, branch) do
@@ -319,7 +309,8 @@ defmodule T3.GitActions do
         }
 
       _ ->
-        range = "#{base_ref(cwd, base)}...HEAD"
+        base_ref = base_ref(cwd, base)
+        range = "#{base_ref}...HEAD"
         {:ok, commits} = Git.ok(cwd, ["log", "--oneline", String.replace(range, "...", "..")])
         {:ok, %{out: stat}} = Git.run(cwd, ["diff", "--stat", range], max_bytes: 100_000)
 
@@ -329,12 +320,13 @@ defmodule T3.GitActions do
           )
 
         %{"title" => title, "body" => body} =
-          case TextGeneration.pr_content(cwd, base, branch, commits, stat, patch) do
+          case TextGeneration.pr_content(cwd, base, branch, commits, stat, patch,
+                 policy: Style.policy(cwd),
+                 template: Style.pr_template(cwd, base_ref)
+               ) do
             {:ok, content} -> content
             {:error, reason} -> fail!("Could not write the PR description: #{reason}")
           end
-
-        title = title |> String.trim() |> String.split("\n") |> hd()
 
         case Exile.stream(
                [
@@ -448,19 +440,7 @@ defmodule T3.GitActions do
 
   @doc "A `feature/…` branch name from free text."
   def feature_branch_name(raw) do
-    fragment =
-      raw
-      |> String.trim()
-      |> String.downcase()
-      |> String.replace(~r/['"`]/, "")
-      |> String.replace(~r{^[./\s_-]+|[./\s_-]+$}, "")
-      |> String.replace(~r{[^a-z0-9/_-]+}, "-")
-      |> String.replace(~r{/+}, "/")
-      |> String.replace(~r/-+/, "-")
-      |> String.replace(~r{^[./_-]+|[./_-]+$}, "")
-      |> String.slice(0, 64)
-      |> String.replace(~r{[./_-]+$}, "")
-      |> then(&if(&1 == "", do: "update", else: &1))
+    fragment = TextGeneration.branch_fragment(raw)
 
     if String.starts_with?(fragment, "feature/"), do: fragment, else: "feature/#{fragment}"
   end

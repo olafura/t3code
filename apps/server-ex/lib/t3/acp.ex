@@ -181,8 +181,8 @@ defmodule T3.Acp do
           "version" => :persistent_term.get({__MODULE__, id, :version}, "unknown"),
           "status" => if(failure, do: "error", else: "ready"),
           "availability" => "available",
-          # Commit messages and titles come from Claude or Codex (`T3.TextGeneration`).
-          "supportsTextGeneration" => false,
+          # `T3.TextGeneration` runs these; registry agents and Pi write no commits or titles.
+          "supportsTextGeneration" => driver in ~w(grok opencode cursor),
           # ACP agents run without T3's plan mode.
           "showInteractionModeToggle" => false,
           "auth" => %{"status" => "authenticated"},

@@ -555,8 +555,9 @@ defmodule T3.Orchestration do
         {:ok, result}
 
       message ->
-        if input["generateTitle"] == true and (message["text"] || "") != "",
-          do: generate_title(thread_id, message["text"])
+        if input["generateTitle"] == true and
+             ((message["text"] || "") != "" or (message["attachments"] || []) != []),
+           do: generate_title(thread_id, message["text"] || "", message["attachments"] || [])
 
         command =
           Map.merge(message, %{
@@ -605,10 +606,12 @@ defmodule T3.Orchestration do
     end
   end
 
-  # Titles a thread from its first message's `text`, in the background; the thread
-  # keeps its own title until one arrives. A regenerated title that fails clears
-  # the thread's in-flight mark.
-  defp generate_title(thread_id, text, regenerating \\ false) do
+  # Titles a thread in the background, as the Node server does: from its first
+  # message's `text` and `attachments` (tried three times), or, regenerating, from
+  # its user and assistant messages and its `previous` title. The thread keeps its
+  # title until a new one arrives; a regeneration that fails or keeps the title
+  # clears the thread's in-flight mark.
+  defp generate_title(thread_id, text, attachments, previous \\ nil) do
     Task.start(fn ->
       root =
         case T3.Shell.row(node(), thread_id) do
@@ -616,34 +619,64 @@ defmodule T3.Orchestration do
           _ -> nil
         end
 
-      with true <- is_binary(text) and text != "",
-           {:ok, %{"title" => title}} <-
-             T3.TextGeneration.thread_title(root || System.tmp_dir!(), text),
-           title when title != "" <- title |> String.trim() |> String.slice(0, 80) do
-        dispatch(%{"type" => "thread.metadata.update", "threadId" => thread_id, "title" => title})
-      else
-        failure ->
-          require Logger
-          Logger.warning("thread title not generated: #{inspect(failure)}")
+      opts = [attachments: attachments, previous_title: previous]
+      attempts = if previous, do: 1, else: 3
 
-          if regenerating,
-            do:
+      result =
+        Enum.reduce_while(1..attempts, nil, fn attempt, _ ->
+          case T3.TextGeneration.thread_title(root || System.tmp_dir!(), text, opts) do
+            {:ok, _} = ok ->
+              {:halt, ok}
+
+            error ->
+              if attempt < attempts, do: Process.sleep(2_000 * 2 ** (attempt - 1))
+              {:cont, error}
+          end
+        end)
+
+      case result do
+        {:ok, %{"title" => title}} when title != "New thread" ->
+          if previous != nil and String.trim(title) == String.trim(previous),
+            do: title_settled(thread_id),
+            else:
               dispatch(%{
                 "type" => "thread.metadata.update",
                 "threadId" => thread_id,
-                "regenerateTitle" => false
+                "title" => title
               })
+
+        failure ->
+          require Logger
+
+          unless match?({:ok, _}, failure),
+            do: Logger.warning("thread title not generated: #{inspect(failure)}")
+
+          if previous != nil, do: title_settled(thread_id)
       end
     end)
   end
 
-  defp regenerate_title(thread_id) do
-    text =
-      T3.Streams.Server.state(T3.Streams.ensure(thread_id))
-      |> StreamState.list("message")
-      |> Enum.find_value(&(&1["role"] == "user" and (&1["text"] || "") != "" and &1["text"]))
+  defp title_settled(thread_id),
+    do:
+      dispatch(%{
+        "type" => "thread.metadata.update",
+        "threadId" => thread_id,
+        "regenerateTitle" => false
+      })
 
-    generate_title(thread_id, text, true)
+  defp regenerate_title(thread_id) do
+    state = T3.Streams.Server.state(T3.Streams.ensure(thread_id))
+    previous = (StreamState.get(state, "thread")[thread_id] || %{})["title"] || ""
+
+    messages =
+      state
+      |> StreamState.list("message")
+      |> Enum.filter(&(&1["role"] in ["user", "assistant"] and &1["streaming"] != true))
+
+    case T3.TextGeneration.Prompts.thread_context(messages) do
+      {"", []} -> title_settled(thread_id)
+      {text, attachments} -> generate_title(thread_id, text, attachments, previous)
+    end
   end
 
   @doc "Starts the run a prepared workspace was waiting for."

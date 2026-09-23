@@ -24,6 +24,7 @@ def update(sid, u):
     send({"method": "session/update", "params": {"sessionId": sid, "update": u}})
 
 sessions = 0
+model = "fake/one"  # the session's model, as set_config_option leaves it
 waiting = None      # prompt request id held until cancel
 pending = None      # (prompt id, session id) waiting on a permission answer
 
@@ -74,13 +75,20 @@ for line in sys.stdin:
         if method == "session/new": result["sessionId"] = sid
         send({"id": mid, "result": result})
     elif method == "session/set_config_option":
+        if params.get("configId") == "model": model = params["value"]
         send({"id": mid, "result": {"configOptions": []}})
     elif method == "session/prompt":
         sid = params["sessionId"]
         text = params["prompt"][0]["text"]
         update(sid, {"sessionUpdate": "agent_thought_chunk", "messageId": "th-1", "content": {"type": "text", "text": "Let me look."}})
         update(sid, {"sessionUpdate": "tool_call", "toolCallId": "call-1", "title": "bash", "kind": "execute", "status": "pending", "rawInput": {}})
-        if "wait" in text:
+        if "Return a JSON object with key: branch." in text:
+            # Text generation: the JSON comes wrapped in prose, in pieces.
+            answer = 'Sure: {"branch": "ACP branch %s in %s"} done' % (model, os.path.basename(os.getcwd()))
+            for part in [answer[:12], answer[12:]]:
+                update(sid, {"sessionUpdate": "agent_message_chunk", "messageId": "msg-1", "content": {"type": "text", "text": part}})
+            send({"id": mid, "result": {"stopReason": "end_turn"}})
+        elif "wait" in text:
             waiting = (mid, sid)
         elif "approve" in text:
             pending = (mid, sid)
