@@ -81,6 +81,16 @@ defmodule T3.Web.Socket do
     end
   end
 
+  def handle_info({:t3_git_action, action_id, event}, state) do
+    case state.by_terminal do
+      %{{:git_action, ^action_id} => id} ->
+        {:push, Protocol.encode(%{"t" => "gitAction", "id" => id, "event" => event}), state}
+
+      _ ->
+        {:ok, state}
+    end
+  end
+
   def handle_info({:t3_vcs, cwd, event}, state) do
     case state.by_terminal do
       %{{:vcs, ^cwd} => id} ->
@@ -292,6 +302,22 @@ defmodule T3.Web.Socket do
     end
   end
 
+  # Runs on the checkout's node; its events come straight here.
+  defp subscribe(state, id, {:git_action, node, %{"actionId" => action_id} = input} = shape, _) do
+    case remote(node, T3.GitActions, :start, [input, self()]) do
+      {:ok, :ok} ->
+        {:ok,
+         %{
+           state
+           | subs: Map.put(state.subs, id, shape),
+             by_terminal: Map.put(state.by_terminal, {:git_action, action_id}, id)
+         }}
+
+      {:error, reason} ->
+        {:push, Protocol.encode(error_frame(id, reason)), state}
+    end
+  end
+
   # Calls a node without ever taking this socket down: an unreachable node, or one
   # without the feature (an older version), fails only the one subscription.
   defp remote(node, module, fun, args) do
@@ -315,6 +341,13 @@ defmodule T3.Web.Socket do
       {{:vcs, node, cwd}, subs} ->
         :erpc.cast(node, T3.Vcs.Watch, :unsubscribe, [cwd, self()])
         %{state | subs: subs, by_terminal: Map.delete(state.by_terminal, {:vcs, cwd})}
+
+      {{:git_action, _node, %{"actionId" => action_id}}, subs} ->
+        %{
+          state
+          | subs: subs,
+            by_terminal: Map.delete(state.by_terminal, {:git_action, action_id})
+        }
 
       {{:terminals, node} = shape, subs} ->
         :erpc.cast(node, T3.Terminal.Hub, :unwatch, [self()])
