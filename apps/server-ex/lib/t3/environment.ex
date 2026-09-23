@@ -50,6 +50,8 @@ defmodule T3.Environment do
         "threadRestartContinuation" => true,
         # Themes in `<home>/themes` reach clients (`T3.EnvironmentThemes`).
         "environmentThemes" => true,
+        # Quota from CLIProxyAPI hubs in settings (`T3.UsageLimitSources`).
+        "usageLimitSources" => true,
         "storageCleanup" => true,
         "projectWorktreeCleanup" => true,
         # Thread commands `T3.Orchestration` understands (`@thread_updates`).
@@ -68,9 +70,23 @@ defmodule T3.Environment do
   @doc """
   `server.refreshProviders`: reads models again when the user asks
   (`refreshModels`), for one instance or all, then returns the provider list.
-  A background status refresh only reports what is known.
+  Subscription quota is read again too (`T3.ProviderUsageLimits`), and an untargeted
+  refresh re-reads the usage-limit sources, as the Node server's status probe does;
+  a workspace refresh (with a `cwd`) leaves quota alone.
   """
   def refresh_providers(input) do
+    case input do
+      %{"cwd" => cwd} when is_binary(cwd) ->
+        :ok
+
+      %{"instanceId" => id} when is_binary(id) ->
+        T3.ProviderUsageLimits.refresh([id])
+
+      _ ->
+        T3.ProviderUsageLimits.refresh()
+        T3.UsageLimitSources.refresh()
+    end
+
     if input["refreshModels"] == true do
       case input["instanceId"] do
         nil ->
@@ -128,8 +144,11 @@ defmodule T3.Environment do
 
   @doc "`ServerConfig.providers`: the agents this node can run."
   def providers do
-    Enum.reject([T3.Codex.Provider.entry(), T3.Claude.Provider.entry()], &is_nil/1) ++
-      T3.Acp.entries()
+    for(
+      entry <- [T3.Codex.Provider.entry(), T3.Claude.Provider.entry()],
+      entry != nil,
+      do: T3.ProviderUsageLimits.put(entry)
+    ) ++ T3.Acp.entries()
   end
 
   @spec id() :: String.t()

@@ -525,6 +525,12 @@ defmodule T3.Codex.ThreadRuntime do
 
   # --- notifications ----------------------------------------------------------
 
+  # Quota comes alongside token usage, mostly unchanged; it merges onto the provider entry.
+  defp notification("account/rateLimits/updated", %{"rateLimits" => snapshot}, state) do
+    T3.ProviderUsageLimits.update("codex", T3.ProviderUsageLimits.Codex.windows(snapshot))
+    state
+  end
+
   defp notification(_method, _params, %{turn: nil} = state), do: state
 
   defp notification(

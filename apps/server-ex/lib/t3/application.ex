@@ -43,6 +43,8 @@ defmodule T3.Application do
           T3.Mcp,
           T3.BackgroundPolicy,
           T3.EnvironmentThemes,
+          T3.ProviderUsageLimits,
+          T3.UsageLimitSources,
           T3.StorageCleanup,
           T3.Orchestration.IdleSessions,
           {Registry, keys: :unique, name: T3.ProviderAuth.Registry},

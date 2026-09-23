@@ -126,6 +126,33 @@ for line in sys.stdin:
         # The returned id says how many turns were dropped.
         thread_id = f"native-thread-1-dropped-{params['numTurns']}"
         send({"id": mid, "result": {"thread": {"id": thread_id}}})
+    # Account and quota: FAKE_CODEX_ACCOUNT picks the account type ("none" signs out).
+    # A reset credit redemption logs its idempotency key to FAKE_CODEX_CONSUME_LOG and
+    # fails once while the FAKE_CODEX_CONSUME_FAIL file exists.
+    elif method == "account/read":
+        kind = os.environ.get("FAKE_CODEX_ACCOUNT", "chatgpt")
+        account = None if kind == "none" else {"type": kind, "email": "me@example.com", "planType": "pro"}
+        send({"id": mid, "result": {"account": account, "requiresOpenaiAuth": True}})
+    elif method == "account/rateLimits/read":
+        main = {"limitId": "codex", "planType": "pro",
+                "primary": {"usedPercent": 42, "windowDurationMins": 300, "resetsAt": 1790000000},
+                "secondary": {"usedPercent": 10.5, "resetsAt": 1790500000}}
+        send({"id": mid, "result": {
+            "rateLimits": {"limitId": "codex_spark", "primary": {"usedPercent": 99}},
+            "rateLimitsByLimitId": {"codex": main, "codex_spark": {"limitId": "codex_spark", "primary": {"usedPercent": 99}}},
+            "rateLimitResetCredits": {"availableCount": 2, "credits": [
+                {"status": "available", "expiresAt": 1800000000},
+                {"status": "available", "expiresAt": 1795000000},
+                {"status": "redeemed", "expiresAt": 1700000000}]}}})
+    elif method == "account/rateLimitResetCredit/consume":
+        with open(os.environ["FAKE_CODEX_CONSUME_LOG"], "a") as log:
+            log.write(params["idempotencyKey"] + "\n")
+        flag = os.environ.get("FAKE_CODEX_CONSUME_FAIL", "")
+        if flag and os.path.exists(flag):
+            os.remove(flag)
+            send({"id": mid, "error": {"code": -32000, "message": "upstream unavailable"}})
+        else:
+            send({"id": mid, "result": {"outcome": "reset"}})
     elif method == "turn/interrupt":
         send({"id": mid, "result": {}})
         send({"method": "turn/completed", "params": {"threadId": thread_id, "turn": {"id": params["turnId"], "status": "interrupted"}}})

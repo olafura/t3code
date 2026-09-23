@@ -68,7 +68,10 @@ import {
   TerminalError,
   TerminalSessionLookupError,
   ThreadId,
+  UsageLimitSourceError,
+  UsageLimitSourceSnapshots,
   UsageReadError,
+  type ProviderConsumeResetCreditInput,
   WS_METHODS,
   WorktreeSetupStreamEvent,
   WsRpcGroup,
@@ -129,6 +132,10 @@ const decodeProviders = Schema.decodeUnknownSync(Schema.toCodecJson(ServerProvid
 const decodeEnvironmentThemes = Schema.decodeUnknownSync(
   Schema.toCodecJson(Schema.Array(EnvironmentTheme)),
 );
+const decodeUsageLimitSources = Schema.decodeUnknownSync(
+  Schema.toCodecJson(UsageLimitSourceSnapshots),
+);
+const decodeUsageLimitSourceError = Schema.decodeUnknownOption(UsageLimitSourceError);
 const decodeAuthState = Schema.decodeUnknownSync(Schema.toCodecJson(ProviderAuthState));
 const decodeWorktreeSetup = Schema.decodeUnknownSync(Schema.toCodecJson(WorktreeSetupStreamEvent));
 const decodeScheduledTasks = Schema.decodeUnknownSync(Schema.toCodecJson(ScheduledTaskListResult));
@@ -366,7 +373,10 @@ export function makeV3Session(input: {
     };
 
     // The node's config, then its settings and providers whenever they change.
-    const serverConfig = (request: { readonly environmentThemes?: boolean | undefined }) =>
+    const serverConfig = (request: {
+      readonly environmentThemes?: boolean | undefined;
+      readonly usageLimitSources?: boolean | undefined;
+    }) =>
       shapeStream(
         socket,
         { type: "config", node },
@@ -410,6 +420,14 @@ export function makeV3Session(input: {
                 version: 1 as const,
                 type: "environmentThemesUpdated" as const,
                 payload: { themes: decodeEnvironmentThemes(frame.themes) },
+              },
+            ];
+          if (frame.t === "config.usageLimitSources" && request.usageLimitSources === true)
+            return [
+              {
+                version: 1 as const,
+                type: "usageLimitSourcesUpdated" as const,
+                payload: { sources: decodeUsageLimitSources(frame.sources) },
               },
             ];
           return [];
@@ -814,6 +832,20 @@ export function makeV3Session(input: {
         ),
     );
 
+    // A Codex credit redeems on the node that runs Codex; a hub account's on the node
+    // whose settings name the hub.
+    const consumeResetCredit = forward(
+      WS_METHODS.providerConsumeResetCredit,
+      (request: ProviderConsumeResetCreditInput, message, cause) => {
+        const detail = cause instanceof ClusterRpcError ? cause.detail : undefined;
+        return "sourceId" in request
+          ? decodeUsageLimitSourceError(detail).pipe(
+              Option.getOrElse(() => new UsageLimitSourceError({ detail: message })),
+            )
+          : setupError(request.instanceId, "consume-reset-credit", message, detail);
+      },
+    );
+
     const providerAuthCommand = (tag: string, operation: string) =>
       forward(tag, (request: { readonly instanceId: string }, message, cause) =>
         setupError(
@@ -1115,6 +1147,7 @@ export function makeV3Session(input: {
       ),
       [WS_METHODS.scheduledTasksRunNow]: scheduledTaskCommand(WS_METHODS.scheduledTasksRunNow),
       [WS_METHODS.serverRefreshProviders]: refreshProviders,
+      [WS_METHODS.providerConsumeResetCredit]: consumeResetCredit,
       [WS_METHODS.serverUpdateProvider]: forward(
         WS_METHODS.serverUpdateProvider,
         (request: { readonly provider: string }, message, cause) =>

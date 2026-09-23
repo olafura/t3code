@@ -236,4 +236,27 @@ defmodule T3.Web.SocketTest do
     client = WsClient.send_json(client, %{"t" => "ping"})
     assert {%{"t" => "pong"}, _} = WsClient.recv(client, 1_000)
   end
+
+  test "config sends usage-limit sources after the snapshot, then on every change", %{
+    port: port
+  } do
+    start_supervised!(T3.Settings)
+
+    client =
+      connect(port)
+      |> WsClient.send_json(%{
+        "t" => "sub",
+        "id" => 3,
+        "shape" => %{"type" => "config", "node" => Atom.to_string(node())}
+      })
+
+    {%{"id" => 3, "sources" => []}, [%{"t" => "config"}, %{"t" => "config.themes"}], client} =
+      WsClient.recv_until(client, &(&1["t"] == "config.usageLimitSources"))
+
+    source = %{"id" => "hub", "kind" => "cliproxy", "label" => "Hub", "accounts" => []}
+    T3.Settings.notify_usage_limit_sources([source])
+
+    assert {%{"t" => "config.usageLimitSources", "id" => 3, "sources" => [^source]}, _} =
+             WsClient.recv(client, 1_000)
+  end
 end

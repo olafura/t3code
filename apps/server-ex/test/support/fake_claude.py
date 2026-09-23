@@ -3,7 +3,7 @@
 # A message containing "wait" stays open until an interrupt control request; "approve"
 # asks permission for a command, "ask" asks a question (AskUserQuestion), and "where are we"
 # says which message the session resumed at (--resume-session-at).
-import json, sys
+import json, os, sys
 
 def send(msg):
     sys.stdout.write(json.dumps(msg) + "\n")
@@ -24,6 +24,16 @@ for line in sys.stdin:
         continue
     if msg.get("type") == "control_request":
         sub = msg["request"]["subtype"]
+        # Plan usage; FAKE_CLAUDE_USAGE=unsupported is an account without plan limits.
+        if sub == "get_usage":
+            usage = {"rate_limits_available": False, "rate_limits": None} if os.environ.get("FAKE_CLAUDE_USAGE") == "unsupported" else {
+                "rate_limits_available": True,
+                "rate_limits": {
+                    "five_hour": {"utilization": 30, "resets_at": "2026-09-24T15:00:00.123456+00:00"},
+                    "seven_day": {"utilization": 55.5, "resets_at": None},
+                    "model_scoped": [{"display_name": "Fable 1", "utilization": 12, "resets_at": "2026-09-30T00:00:00Z"}]}}
+            send({"type": "control_response", "response": {"subtype": "success", "request_id": msg["request_id"], "response": usage}})
+            continue
         send({"type": "control_response", "response": {"subtype": "success", "request_id": msg["request_id"], "response": {}}})
         if sub == "interrupt":
             send({"type": "result", "subtype": "error_during_execution", "is_error": True, "session_id": session})

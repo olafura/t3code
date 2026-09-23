@@ -10,6 +10,9 @@ defmodule T3.Settings do
   Watchers (client sockets) get `{:t3_settings, node, settings}` on every change,
   and `{:t3_providers_changed, node}` when something else changes the node's
   provider list (`notify_providers/0`).
+
+  Hub management keys never stay in the document: `T3.UsageLimitSources.seal_keys/2`
+  moves them to the secret store on every write, so nothing a client reads carries one.
   """
 
   use GenServer
@@ -82,11 +85,22 @@ defmodule T3.Settings do
 
   def unwatch(pid), do: GenServer.cast(__MODULE__, {:unwatch, pid})
 
+  @doc "Whether any client watches this node's config; background refreshes wait for one."
+  def watched? do
+    GenServer.call(__MODULE__, :watched?)
+  catch
+    :exit, {:noproc, _} -> false
+  end
+
   @doc "Tells watchers to read the provider list again, such as after a model probe."
   def notify_providers, do: GenServer.cast(__MODULE__, :providers_changed)
 
   @doc "Tells watchers the published themes changed (`T3.EnvironmentThemes`)."
   def notify_themes(themes), do: GenServer.cast(__MODULE__, {:themes_changed, themes})
+
+  @doc "Tells watchers the usage-limit source snapshots changed (`T3.UsageLimitSources`)."
+  def notify_usage_limit_sources(sources),
+    do: GenServer.cast(__MODULE__, {:usage_limit_sources_changed, sources})
 
   @doc "Tells watchers the keybinding rules changed (`T3.Keybindings`)."
   def notify_keybindings(rules), do: GenServer.cast(__MODULE__, {:keybindings_changed, rules})
@@ -108,6 +122,10 @@ defmodule T3.Settings do
           %{}
       end
 
+    # A key written in plain text (by hand, or before keys were sealed) moves out now.
+    {settings, changed} = T3.UsageLimitSources.seal_keys(settings, %{})
+    if changed, do: write!(path, settings)
+
     {:ok, %{path: path, settings: settings, version: 0, watchers: %{}}}
   end
 
@@ -115,13 +133,20 @@ defmodule T3.Settings do
   def handle_call(:get, _from, state), do: {:reply, {state.settings, state.version}, state}
 
   def handle_call({:put, settings, version}, _from, %{version: version} = state) do
+    {settings, keys_changed} = T3.UsageLimitSources.seal_keys(settings, state.settings)
     write!(state.path, settings)
+
+    if keys_changed or settings["usageLimitSources"] != state.settings["usageLimitSources"],
+      do: T3.UsageLimitSources.refresh_async()
+
     for {pid, _} <- state.watchers, do: send(pid, {:t3_settings, node(), settings})
     {:reply, {:ok, version + 1}, %{state | settings: settings, version: version + 1}}
   end
 
   def handle_call({:put, _settings, _version}, _from, state),
     do: {:reply, {:error, :stale}, state}
+
+  def handle_call(:watched?, _from, state), do: {:reply, state.watchers != %{}, state}
 
   def handle_call({:watch, pid}, _from, state) do
     watchers = Map.put_new_lazy(state.watchers, pid, fn -> Process.monitor(pid) end)
@@ -136,6 +161,11 @@ defmodule T3.Settings do
 
   def handle_cast({:keybindings_changed, rules}, state) do
     for {pid, _} <- state.watchers, do: send(pid, {:t3_keybindings, node(), rules})
+    {:noreply, state}
+  end
+
+  def handle_cast({:usage_limit_sources_changed, sources}, state) do
+    for {pid, _} <- state.watchers, do: send(pid, {:t3_usage_limit_sources, node(), sources})
     {:noreply, state}
   end
 

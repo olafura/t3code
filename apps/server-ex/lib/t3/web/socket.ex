@@ -121,6 +121,17 @@ defmodule T3.Web.Socket do
     end
   end
 
+  def handle_info({:t3_usage_limit_sources, node, sources}, state) do
+    case state.by_terminal do
+      %{{:settings, ^node} => id} ->
+        frame = %{"t" => "config.usageLimitSources", "id" => id, "sources" => sources}
+        {:push, Protocol.encode(frame), state}
+
+      _ ->
+        {:ok, state}
+    end
+  end
+
   def handle_info({:t3_keybindings, node, rules}, state) do
     case state.by_terminal do
       %{{:settings, ^node} => id} ->
@@ -404,7 +415,17 @@ defmodule T3.Web.Socket do
 
       themes_frame = %{"t" => "config.themes", "id" => id, "themes" => themes}
 
-      {:push, [Protocol.encode(frame), Protocol.encode(themes_frame)],
+      # So do usage-limit source snapshots.
+      sources =
+        case remote(node, T3.UsageLimitSources, :current, []) do
+          {:ok, sources} when is_list(sources) -> sources
+          _ -> []
+        end
+
+      sources_frame = %{"t" => "config.usageLimitSources", "id" => id, "sources" => sources}
+
+      {:push,
+       [Protocol.encode(frame), Protocol.encode(themes_frame), Protocol.encode(sources_frame)],
        %{
          state
          | subs: Map.put(state.subs, id, shape),

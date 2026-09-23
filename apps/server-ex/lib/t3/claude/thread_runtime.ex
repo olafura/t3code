@@ -419,6 +419,11 @@ defmodule T3.Claude.ThreadRuntime do
 
   # --- messages ------------------------------------------------------------------
 
+  defp message(%{"type" => "rate_limit_event", "rate_limit_info" => %{} = info}, state) do
+    T3.ProviderUsageLimits.claude_event(info)
+    state
+  end
+
   defp message(_message, %{turn: nil} = state), do: state
 
   defp message(%{"type" => "system", "subtype" => "init", "session_id" => session_id}, state) do

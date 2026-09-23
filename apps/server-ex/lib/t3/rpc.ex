@@ -112,6 +112,10 @@ defmodule T3.Rpc do
   def handle("scheduledTasks.runNow", input), do: T3.ScheduledTasks.run_now(input)
   def handle("server.refreshProviders", input), do: T3.Environment.refresh_providers(input)
   def handle("server.updateProvider", input), do: T3.ProviderUpdates.update(input)
+
+  def handle("provider.consumeResetCredit", input),
+    do: T3.ProviderUsageLimits.consume_reset_credit(input)
+
   def handle("t3.upsertKeybinding", input), do: T3.Keybindings.upsert(input)
   def handle("t3.removeKeybinding", input), do: T3.Keybindings.remove(input)
   def handle("projects.searchEntries", input), do: T3.Workspace.search_entries(input)
