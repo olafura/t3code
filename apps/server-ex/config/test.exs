@@ -3,3 +3,6 @@ import Config
 # Tests start the pieces they need under their own supervisors.
 config :t3, start_node: false
 config :logger, level: :warning
+
+# Text generation never reaches a real model; tests that need it set a fake.
+config :t3, text_claude_command: "t3-test-no-claude", text_codex_command: "t3-test-no-codex"

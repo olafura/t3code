@@ -7,8 +7,9 @@ defmodule T3.GitActionsTest do
   @fake_claude Path.expand("../support/fake_claude_text.sh", __DIR__)
 
   setup %{tmp_dir: dir} do
+    previous = Application.get_env(:t3, :text_claude_command)
     Application.put_env(:t3, :text_claude_command, @fake_claude)
-    on_exit(fn -> Application.delete_env(:t3, :text_claude_command) end)
+    on_exit(fn -> Application.put_env(:t3, :text_claude_command, previous) end)
 
     origin = Path.join(dir, "origin.git")
     repo = Path.join(dir, "repo")
