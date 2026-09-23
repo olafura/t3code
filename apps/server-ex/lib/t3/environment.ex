@@ -30,6 +30,8 @@ defmodule T3.Environment do
         # (`T3.PullRequests.Sync`, `T3.PullRequests.Discovery`), and settle on their own
         # (`T3.Orchestration.Settlement`). Stack actions are not served.
         "threadPullRequests" => true,
+        # Stacks merge and rebase as a whole (`T3.PullRequests.GitHubStack`).
+        "pullRequestStackActions" => true,
         "threadPullRequestLinking" => true,
         "threadAutoSettlement" => true,
         # Files besides images upload to `T3.Attachments` too.

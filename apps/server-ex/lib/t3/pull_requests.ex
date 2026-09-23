@@ -491,7 +491,10 @@ defmodule T3.PullRequests do
       capabilities = GitHub.capabilities()
 
       cond do
-        input["stackNumber"] != nil ->
+        input["stackNumber"] != nil and
+            (capabilities["stackActions"] != true or action not in ["merge", "update-branch"] or
+               input["expectedStackHeads"] == nil or
+               (action == "update-branch" and input["updateMethod"] != "rebase")) ->
           refuse(
             "runAction",
             "This stack action is not supported or has no expected head revision."
@@ -507,14 +510,24 @@ defmodule T3.PullRequests do
           refuse("runAction", "This host cannot update a branch by #{input["updateMethod"]}.")
 
         true ->
+          # Rebasing a stack needs write access to its branches, not GitHub's
+          # update-branch button on this one.
+          stack_rebase = input["stackNumber"] != nil and action == "update-branch"
+
           with {:ok, viewer} <- GitHub.viewer_permissions(ctx, action == "update-branch") do
             cond do
-              action not in viewer["actions"] ->
+              if(stack_rebase,
+                do: viewer["stackRebase"] != true,
+                else: action not in viewer["actions"]
+              ) ->
                 refuse("runAction", @action_refusals[action])
 
-              input["updateMethod"] &&
+              (not stack_rebase and input["updateMethod"]) &&
                   input["updateMethod"] not in (viewer["updateMethods"] || []) ->
                 refuse("runAction", @action_refusals["update-branch"])
+
+              input["stackNumber"] != nil ->
+                T3.PullRequests.GitHubStack.run(ctx, input)
 
               true ->
                 GitHub.action(ctx, action, input["mergeMethod"], input["updateMethod"])

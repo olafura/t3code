@@ -298,6 +298,45 @@ defmodule T3.PullRequestsTest do
              PullRequests.run_action(Map.merge(@ref, %{"action" => "merge", "stackNumber" => 3}))
   end
 
+  test "merging a stack layer merges the open layers below it, once GitHub's stack matches",
+       %{dir: dir} do
+    layer = fn number, sha ->
+      %{"number" => number, "state" => "open", "head" => %{"ref" => "l#{number}", "sha" => sha}}
+    end
+
+    stack = %{"number" => 3, "pull_requests" => [layer.(4, "aaa"), layer.(5, "bbb")]}
+
+    rules!(dir, [
+      permissions_rule("WRITE"),
+      %{"args" => ["repos/acme/widgets/stacks?pull_request=5"], "stdout" => [stack]},
+      %{"args" => ["merge-async/job-1"], "stdout" => %{"status" => "merged", "details" => %{}}},
+      %{
+        "args" => ["--method PUT", "repos/acme/widgets/pulls/5/merge-async"],
+        "stdin" => ["\"sha\":\"bbb\""],
+        "stdout" => %{"status" => "pending", "details" => %{"uuid" => "job-1"}}
+      }
+    ])
+
+    Application.put_env(:t3, :stack_merge_backoff_ms, 0)
+    on_exit(fn -> Application.delete_env(:t3, :stack_merge_backoff_ms) end)
+    heads = [%{"number" => 4, "headSha" => "aaa"}, %{"number" => 5, "headSha" => "bbb"}]
+    input = %{"action" => "merge", "stackNumber" => 3, "expectedStackHeads" => heads}
+
+    assert {:ok, nil} = PullRequests.run_action(Map.merge(@ref, input))
+    assert [_] = calls(dir, "merge-async/job-1")
+
+    # A layer that moved since the client looked stops it before anything is sent.
+    File.write!(Path.join(dir, "gh.log"), "")
+
+    stale =
+      Map.put(input, "expectedStackHeads", [hd(heads), %{"number" => 5, "headSha" => "old"}])
+
+    assert {:error, %{"detail" => "The stack changed. Refresh it before trying again."}} =
+             PullRequests.run_action(Map.merge(@ref, stale))
+
+    assert calls(dir, "merge-async") == []
+  end
+
   test "activity joins the conversation with its threads, reactions and dismissals", %{dir: dir} do
     at = &"2026-01-0#{&1}T00:00:00Z"
 

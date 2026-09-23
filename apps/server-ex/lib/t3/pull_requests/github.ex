@@ -45,7 +45,7 @@ defmodule T3.PullRequests.GitHub do
       "reviewers" => %{"request" => true, "listCandidates" => true},
       "edit" => %{"changeRequest" => true, "comment" => true},
       "stacks" => true,
-      "stackActions" => false,
+      "stackActions" => true,
       "labels" => true
     }
 
@@ -404,6 +404,9 @@ defmodule T3.PullRequests.GitHub do
       error -> error
     end
   end
+
+  @doc "A REST call against the repository's own API root (`method`, `input`)."
+  def rest_api(ctx, path, opts \\ []), do: rest(ctx, path, opts)
 
   # A REST call against the repository's own API root.
   defp rest(ctx, path, opts \\ []) do
