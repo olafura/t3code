@@ -347,6 +347,9 @@ defmodule T3.Web.Router do
     _, _ -> {:error, 502, "The node holding this file is unavailable."}
   end
 
+  # Every node's device hub, relayed to the node that owns it (`T3.Devices.Proxy`).
+  match "/api/device-hub/*rest", do: T3.Devices.Proxy.serve(conn, rest)
+
   match _ do
     send_resp(conn, 404, "not found")
   end

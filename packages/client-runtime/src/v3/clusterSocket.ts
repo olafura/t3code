@@ -43,6 +43,8 @@ export type ProjectClonesShape = { readonly type: "projectClones"; readonly node
 export type PreviewShape = { readonly type: "preview"; readonly node: string };
 export type ResourceTelemetryShape = { readonly type: "resourceTelemetry"; readonly node: string };
 export type LocalServersShape = { readonly type: "localServers"; readonly node: string };
+/** A node's simulators, emulators and open device sessions, whole on every change. */
+export type DevicesShape = { readonly type: "devices"; readonly node: string };
 /** This client as a node's browser automation host; the node ends it when it drops the host. */
 export type PreviewAutomationShape = {
   readonly type: "previewAutomation";
@@ -71,6 +73,7 @@ export type Shape =
   | PreviewShape
   | ResourceTelemetryShape
   | LocalServersShape
+  | DevicesShape
   | PreviewAutomationShape
   | PullRequestRefreshesShape
   | GitActionShape

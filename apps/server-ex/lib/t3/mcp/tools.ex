@@ -27,6 +27,7 @@ defmodule T3.Mcp.Tools do
 
   @delegation ~w(delegate_task task_status task_cancel)
   @preview T3.Mcp.Preview.names()
+  @devices T3.Mcp.Devices.names()
 
   @runtime_ranks %{
     "approval-required" => 0,
@@ -38,7 +39,8 @@ defmodule T3.Mcp.Tools do
 
   @doc "The advertised tools (MCP `tools/list`)."
   def list do
-    names = @implemented ++ @delegation ++ @preview ++ Enum.flat_map(@areas, & &1.tools())
+    names =
+      @implemented ++ @delegation ++ @preview ++ @devices ++ Enum.flat_map(@areas, & &1.tools())
 
     for tool <- definitions(), tool["name"] in names do
       Map.take(tool, ["name", "description", "inputSchema"])
@@ -71,6 +73,7 @@ defmodule T3.Mcp.Tools do
     do: T3.Orchestration.Delegation.cancel(caller.thread_id, id)
 
   def call(name, args, caller) when name in @preview, do: T3.Mcp.Preview.call(name, args, caller)
+  def call(name, args, caller) when name in @devices, do: T3.Mcp.Devices.call(name, args, caller)
 
   def call(name, args, caller) do
     area = if name in @implemented, do: __MODULE__, else: Enum.find(@areas, &(name in &1.tools()))

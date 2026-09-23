@@ -15,6 +15,7 @@ const { Tool } = (await import(
 
 const toolkits = [
   "attachment",
+  "device",
   "environment",
   "orchestrator",
   "preview",

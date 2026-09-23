@@ -33,6 +33,7 @@ defmodule T3.Application do
           T3.Preview,
           T3.PreviewAutomation,
           T3.LocalServers,
+          T3.Devices,
           T3.Diagnostics,
           T3.PullRequests.Refreshes,
           T3.PullRequests.Discovery,

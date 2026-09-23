@@ -44,6 +44,9 @@ import {
   OrchestrationV2ThreadLaunchError,
   ORCHESTRATION_V2_WS_METHODS,
   type ResolvedKeybindingsConfig,
+  DeviceError,
+  DeviceOperationError,
+  DeviceServiceState,
   DiscoveredLocalServerList,
   PreviewError,
   ResourceTelemetrySnapshot,
@@ -134,6 +137,8 @@ const decodePreviewAutomationEvent = Schema.decodeUnknownSync(
   Schema.toCodecJson(PreviewAutomationStreamEvent),
 );
 const decodeLocalServers = Schema.decodeUnknownSync(Schema.toCodecJson(DiscoveredLocalServerList));
+const decodeDeviceState = Schema.decodeUnknownSync(Schema.toCodecJson(DeviceServiceState));
+const decodeDeviceError = Schema.decodeUnknownOption(DeviceError);
 const decodeTelemetry = Schema.decodeUnknownSync(Schema.toCodecJson(ResourceTelemetrySnapshot));
 const decodeAuthAccess = Schema.decodeUnknownSync(Schema.toCodecJson(AuthAccessStreamEvent));
 const decodeSetupError = Schema.decodeUnknownOption(ProviderSetupError);
@@ -690,6 +695,26 @@ export function makeV3Session(input: {
         frame.t === "localServers" ? [decodeLocalServers(frame.list)] : [],
       );
 
+    // Devices live on the node's own machine; clients reach its hub through the
+    // connected node at the state's `hubBasePath`.
+    const deviceState = () =>
+      shapeStream(socket, { type: "devices", node }, (frame) =>
+        frame.t === "devices" ? [decodeDeviceState(frame.state)] : [],
+      );
+    const deviceCommand = (tag: string) =>
+      forward(tag, (_request: object, message, cause) =>
+        decodeDeviceError(cause instanceof ClusterRpcError ? cause.detail : undefined).pipe(
+          Option.getOrElse(
+            () =>
+              new DeviceOperationError({
+                operation: tag.replace(/^device\./, ""),
+                reason: "request_failed",
+                cause: message,
+              }),
+          ),
+        ),
+      );
+
     // A client manages the connections of the node it is paired with; other
     // nodes are reached through it without a session of their own.
     const authAccess = () =>
@@ -1028,6 +1053,19 @@ export function makeV3Session(input: {
         (_request: object, _message, cause) => cause,
       ),
       [WS_METHODS.subscribeDiscoveredLocalServers]: localServers,
+      [WS_METHODS.subscribeDeviceState]: deviceState,
+      ...Object.fromEntries(
+        [
+          WS_METHODS.deviceList,
+          WS_METHODS.deviceConfigure,
+          WS_METHODS.deviceTestHost,
+          WS_METHODS.deviceOpen,
+          WS_METHODS.deviceClose,
+          WS_METHODS.deviceShutdown,
+          WS_METHODS.deviceDetail,
+          WS_METHODS.deviceAction,
+        ].map((tag) => [tag, deviceCommand(tag)]),
+      ),
       [WS_METHODS.scheduledTasksList]: scheduledTaskCommand(WS_METHODS.scheduledTasksList),
       [WS_METHODS.scheduledTasksUpsert]: scheduledTaskCommand(WS_METHODS.scheduledTasksUpsert),
       [WS_METHODS.scheduledTasksDelete]: scheduledTaskCommand(WS_METHODS.scheduledTasksDelete),

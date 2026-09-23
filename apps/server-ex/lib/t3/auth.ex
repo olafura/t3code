@@ -102,6 +102,22 @@ defmodule T3.Auth do
     end
   end
 
+  @doc """
+  A WebSocket ticket's session scopes, leaving the ticket usable: `{:ok, scopes}`.
+  The device hub proxy (`T3.Devices.Proxy`) authenticates every stream and image
+  of a Device panel with one ticket, as the Node server does.
+  """
+  @spec ticket_scopes(String.t()) :: {:ok, [String.t()]} | :error
+  def ticket_scopes(ticket) do
+    case :ets.lookup(@tickets, ticket) do
+      [{_, expires_at, session_id}] ->
+        if expires_at > now(), do: GenServer.call(__MODULE__, {:scopes, session_id}), else: :error
+
+      [] ->
+        :error
+    end
+  end
+
   def standard_scopes, do: @standard_scopes
 
   @doc "Called by a socket of `session_id` once open; it counts as connected until it exits."
@@ -191,6 +207,21 @@ defmodule T3.Auth do
             if expires_at > now(),
               do: {:ok, %{id: id, scopes: String.split(scopes), expires_at: expires_at}},
               else: :error
+
+          [] ->
+            :error
+        end
+      end)
+
+    {:reply, reply, state}
+  end
+
+  def handle_call({:scopes, session_id}, _from, state) do
+    reply =
+      with_db(state.path, fn db ->
+        case query(db, "SELECT scopes, expires_at FROM auth_sessions WHERE id = ?1", [session_id]) do
+          [[scopes, expires_at]] ->
+            if expires_at > now(), do: {:ok, String.split(scopes)}, else: :error
 
           [] ->
             :error

@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import { useAtomValue } from "@effect/atom-react";
 import { createDeviceEnvironmentAtoms } from "@t3tools/client-runtime/state/device";
 import {
+  atDeviceHubBasePath,
   type DeviceHubAccess,
   resolveDeviceHubAccess,
 } from "@t3tools/client-runtime/state/deviceHubAccess";
@@ -63,12 +64,16 @@ export function useDeviceHubAccess(
   const result = useAtomValue(
     environmentId === null ? EMPTY_ACCESS_ATOM : deviceHubAccessAtom(environmentId),
   );
+  const { hubBasePath } = useDeviceState(environmentId).state;
   return useMemo(
     () =>
       AsyncResult.isSuccess(result)
-        ? { ...result.value, query: { ...result.value.query, hostId } }
+        ? {
+            ...atDeviceHubBasePath(result.value, hubBasePath),
+            query: { ...result.value.query, hostId },
+          }
         : null,
-    [result, hostId],
+    [result, hostId, hubBasePath],
   );
 }
 

@@ -26,6 +26,8 @@ defmodule T3.Web.Protocol do
       (`PreviewAutomationStreamEvent`) until the node drops the host, which ends it
     * `{"type": "localServers", "node": n}`: web servers listening on that node's
       host (`DiscoveredLocalServerList`), then the list whenever it changes
+    * `{"type": "devices", "node": n}`: that node's simulators, emulators and
+      open device sessions (`DeviceServiceState`), then the whole state on every change
     * `{"type": "projectClones", "node": n}`: that node's project clones in
       progress (`ProjectCloneSnapshot[]`), then the whole list on every change
     * `{"type": "scheduledTasks", "node": n}`: that node's scheduled tasks, then
@@ -76,6 +78,7 @@ defmodule T3.Web.Protocol do
       {"t": "resourceTelemetry", "id", "snapshot"} (ResourceTelemetrySnapshot)
       {"t": "authAccess", "id", "event"} (AuthAccessStreamEvent)
       {"t": "localServers", "id", "list"} (DiscoveredLocalServerList)
+      {"t": "devices", "id", "state"} (DeviceServiceState)
       {"t": "pullRequestRefreshes", "id", "revision"} (non-negative integer)
       {"t": "rpc.result", "id", "result"} / {"t": "rpc.error", "id", "error", "detail"?}
         (`detail` is the contract error as `{"_tag", ...fields}` when there is one)
@@ -183,6 +186,10 @@ defmodule T3.Web.Protocol do
 
   defp decode_shape(%{"type" => "localServers", "node" => node}, nodes) do
     with {:ok, node} <- known_node(node, nodes), do: {:ok, {:local_servers, node}}
+  end
+
+  defp decode_shape(%{"type" => "devices", "node" => node}, nodes) do
+    with {:ok, node} <- known_node(node, nodes), do: {:ok, {:devices, node}}
   end
 
   defp decode_shape(%{"type" => "projectClones", "node" => node}, nodes) do

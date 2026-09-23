@@ -86,6 +86,14 @@ defmodule T3.Rpc do
     {:ok, nil}
   end
 
+  def handle("device.list", input), do: T3.Devices.list(input)
+  def handle("device.configure", input), do: T3.Devices.configure(input)
+  def handle("device.testHost", input), do: T3.Devices.test_host(input)
+  def handle("device.open", input), do: T3.Devices.open(input)
+  def handle("device.close", input), do: T3.Devices.close(input)
+  def handle("device.shutdown", input), do: T3.Devices.shutdown(input)
+  def handle("device.detail", input), do: T3.Devices.detail(input)
+  def handle("device.action", input), do: T3.Devices.action(input)
   def handle("scheduledTasks.list", input), do: T3.ScheduledTasks.list(input)
   def handle("scheduledTasks.upsert", input), do: T3.ScheduledTasks.upsert(input)
   def handle("scheduledTasks.delete", input), do: T3.ScheduledTasks.delete(input)

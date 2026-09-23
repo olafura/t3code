@@ -374,6 +374,141 @@
     }
   },
   {
+    "name": "device_close",
+    "description": "Remove a device from this thread's Device panel. Pass shutdown=true to also power the simulator or emulator off.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "deviceId": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "hostId": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "shutdown": {
+          "anyOf": [
+            {
+              "type": "boolean",
+              "description": "Also power the simulator or emulator off. Defaults to false."
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": true
+    }
+  },
+  {
+    "name": "device_list",
+    "description": "List iOS Simulators and Android Emulators on this environment's device hosts, which platforms each host can run, and which devices are already open in this thread's Device panel. Call this before device_open when you do not know a device id.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "hostId": {
+          "anyOf": [
+            {
+              "type": "string",
+              "description": "Limit to one device host. Defaults to all hosts."
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": true
+    }
+  },
+  {
+    "name": "device_open",
+    "description": "Open a simulator or emulator for this thread: boots it if needed, starts its live stream, and shows it in the user's Device panel so they can watch. Returns the agent-device CLI invocation pinned to the device; drive the device with that CLI afterwards.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "deviceId": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "platform": {
+          "anyOf": [
+            {
+              "type": "string",
+              "enum": ["ios", "android"],
+              "description": "Required when deviceId is omitted and both platforms are available."
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "hostId": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": true,
+      "description": "Boots the device if needed, starts its live stream, and opens the Device panel so the user can watch. Returns how to drive it with the agent-device CLI."
+    }
+  },
+  {
+    "name": "device_screenshot",
+    "description": "Capture the current screen of an open device as a PNG image. Use it to see what the user sees; for taps and text use the agent-device CLI.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "deviceId": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "hostId": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": true
+    }
+  },
+  {
     "name": "link_pull_request",
     "description": "Register every pull request you open for this thread, including each layer of a stack, right after creating it. Links a pull request to this thread so T3 Code tracks it, shows its status beside the thread, and settles the thread when it merges. Pass the URL, or repository plus number. Linking an already-linked pull request succeeds with alreadyLinked=true.",
     "inputSchema": {
