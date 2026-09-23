@@ -142,7 +142,10 @@ defmodule T3.AgentSessionsTest do
     assert String.starts_with?(updated, Date.to_iso8601(Date.add(Date.utc_today(), -3)))
 
     claude = thread("import:claudeAgent:#{@claude_session}")
-    assert %{"title" => "Fix the login bug", "projectId" => "p1"} = thread_entity(claude)
+
+    assert %{"title" => "Fix the login bug", "projectId" => "p1", "activeProviderThreadId" => nil} =
+             thread_entity(claude)
+
     assert texts(claude) == [{"user", "Fix the login bug\nplease"}, {"assistant", "Fixed."}]
 
     assert [%{"nativeThreadRef" => %{"nativeId" => @claude_session}}] =

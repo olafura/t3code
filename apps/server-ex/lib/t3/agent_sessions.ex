@@ -403,7 +403,9 @@ defmodule T3.AgentSessions do
       |> Entities.thread(created)
       |> Map.merge(%{
         "createdBy" => "system",
-        "activeProviderThreadId" => provider_thread_id,
+        # Left unset: clients read a provider thread with no run as idle background
+        # work ("Waiting"). Runs find the provider thread by its derived id.
+        "activeProviderThreadId" => nil,
         "historyOrigin" => "v1_import",
         "settledOverride" => "settled",
         "settledAt" => at,
