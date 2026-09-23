@@ -39,7 +39,7 @@ defmodule T3.Orchestration do
     case T3.Streams.transact(thread_id, :thread, &decide_message(&1, thread_id, command)) do
       {:ok, turn} ->
         :ok = T3.Checkpoint.baseline(turn.cwd, turn.scope_id, turn.run_ordinal - 1)
-        :ok = runtime(turn.ids.instance).start_turn(thread_id, turn)
+        start_turn(thread_id, turn)
         {:ok, %{"sequence" => sequence(thread_id)}}
 
       {:error, _} = error ->
@@ -68,6 +68,22 @@ defmodule T3.Orchestration do
   end
 
   def dispatch(%{"type" => type}), do: {:error, "#{type} is not supported by this node yet"}
+
+  # A runtime that dies while starting the turn must not leave the run "starting"
+  # forever: the run fails and the thread can take the next message.
+  defp start_turn(thread_id, turn) do
+    :ok = runtime(turn.ids.instance).start_turn(thread_id, turn)
+  catch
+    :exit, reason ->
+      require Logger
+      Logger.warning("turn failed to start in #{thread_id}: #{inspect(reason)}")
+
+      T3.Orchestration.TurnWriter.finish(
+        %{thread_id: thread_id, turn: turn},
+        "failed",
+        "The provider stopped while starting the turn."
+      )
+  end
 
   @doc "Creates a thread with its first message (`orchestration.launchThread`)."
   @spec launch_thread(map) :: {:ok, map} | {:error, String.t()}
