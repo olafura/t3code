@@ -155,7 +155,7 @@ defmodule T3.Acp.Auth do
       {:ok, exec_pid, os_pid} ->
         try do
           show(server, flow_id, "", 0)
-          terminal_loop({exec_pid, os_pid}, server, flow_id, "", 0)
+          terminal_loop({exec_pid, os_pid}, server, flow_id, {"", 0, ""})
         after
           :exec.stop(os_pid)
           Process.flag(:trap_exit, false)
@@ -166,13 +166,22 @@ defmodule T3.Acp.Auth do
     end
   end
 
-  defp terminal_loop({exec_pid, os_pid} = process, server, flow_id, transcript, offset) do
+  # `offset` counts UTF-16 code units, as clients (and the Node server) measure the
+  # transcript: a byte count would make a client replay the tail of what it already
+  # showed. A character split across PTY reads waits in `partial`.
+  defp terminal_loop(
+         {exec_pid, os_pid} = process,
+         server,
+         flow_id,
+         {transcript, offset, partial} = out
+       ) do
     receive do
       {:stdout, ^os_pid, data} ->
-        transcript = binary_tail(transcript <> data, @transcript_bytes)
-        offset = offset + byte_size(data)
-        show(server, flow_id, transcript, offset)
-        terminal_loop(process, server, flow_id, transcript, offset)
+        {text, partial} = complete_utf8(partial <> data)
+        transcript = binary_tail(transcript <> text, @transcript_bytes)
+        offset = offset + utf16_length(text)
+        if text != "", do: show(server, flow_id, transcript, offset)
+        terminal_loop(process, server, flow_id, {transcript, offset, partial})
 
       {:auth_response, %{"type" => "terminal"} = response} ->
         case response["size"] do
@@ -183,7 +192,7 @@ defmodule T3.Acp.Auth do
         if is_binary(response["data"]) and response["data"] != "",
           do: :exec.send(os_pid, response["data"])
 
-        terminal_loop(process, server, flow_id, transcript, offset)
+        terminal_loop(process, server, flow_id, out)
 
       # Linked, the command's exit arrives as a signal rather than a monitor message.
       {tag, ^os_pid, :process, _pid, reason} when tag == :DOWN ->
@@ -207,6 +216,31 @@ defmodule T3.Acp.Auth do
 
     send(server, {:auth_interaction, flow_id, interaction, self()})
   end
+
+  @doc false
+  # Splits off an incomplete UTF-8 character at the end, to finish with the next
+  # read; anything else that is not UTF-8 shows as a replacement character.
+  def complete_utf8(data) do
+    cut =
+      Enum.find(1..min(3, byte_size(data))//1, fn n ->
+        <<lead, _::binary>> = binary_part(data, byte_size(data) - n, n)
+        # The lead byte of a sequence longer than what is here.
+        (lead >= 0xC0 and n < 2) or (lead >= 0xE0 and n < 3) or (lead >= 0xF0 and n < 4)
+      end)
+
+    {text, partial} =
+      if cut,
+        do:
+          {binary_part(data, 0, byte_size(data) - cut),
+           binary_part(data, byte_size(data) - cut, cut)},
+        else: {data, ""}
+
+    {String.replace_invalid(text), partial}
+  end
+
+  @doc false
+  def utf16_length(text),
+    do: div(byte_size(:unicode.characters_to_binary(text, :utf8, :utf16)), 2)
 
   # Keeps the last `max` bytes without splitting a UTF-8 character.
   defp binary_tail(text, max) when byte_size(text) <= max, do: text
