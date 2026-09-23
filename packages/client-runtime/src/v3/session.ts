@@ -519,13 +519,11 @@ export function makeV3Session(input: {
           mutation?.operation === "create" &&
           settings.providerInstances[mutation.instanceId] !== undefined
         ) {
-          return yield* Effect.fail(
-            new ServerSettingsError({
-              settingsPath: "settings.json",
-              operation: "create-provider-instance",
-              providerInstanceId: mutation.instanceId,
-            }),
-          );
+          return yield* new ServerSettingsError({
+            settingsPath: "settings.json",
+            operation: "create-provider-instance",
+            providerInstanceId: mutation.instanceId,
+          });
         }
         const patched = applyServerSettingsPatch(settings, request.patch);
         const next = mutation === undefined ? patched : withProviderInstance(patched, mutation);
@@ -557,6 +555,25 @@ export function makeV3Session(input: {
       [WS_METHODS.serverUninstallAcpRegistryManagedBinary]: acpRegistryCommand(
         WS_METHODS.serverUninstallAcpRegistryManagedBinary,
       ),
+      [WS_METHODS.serverListAcpRegistrySessions]: acpRegistryCommand(
+        WS_METHODS.serverListAcpRegistrySessions,
+      ),
+      [WS_METHODS.serverImportAcpRegistrySession]: acpRegistryCommand(
+        WS_METHODS.serverImportAcpRegistrySession,
+      ),
+      [WS_METHODS.serverDeleteAcpRegistrySession]: acpRegistryCommand(
+        WS_METHODS.serverDeleteAcpRegistrySession,
+      ),
+      [WS_METHODS.serverListAcpRegistryProviders]: acpRegistryCommand(
+        WS_METHODS.serverListAcpRegistryProviders,
+      ),
+      [WS_METHODS.serverSetAcpRegistryProvider]: acpRegistryCommand(
+        WS_METHODS.serverSetAcpRegistryProvider,
+      ),
+      [WS_METHODS.serverDisableAcpRegistryProvider]: acpRegistryCommand(
+        WS_METHODS.serverDisableAcpRegistryProvider,
+      ),
+      [WS_METHODS.serverLogoutAcpRegistry]: acpRegistryCommand(WS_METHODS.serverLogoutAcpRegistry),
       [WS_METHODS.agentSessionsScan]: agentSessionCommand(WS_METHODS.agentSessionsScan),
       [WS_METHODS.agentSessionsImport]: agentSessionCommand(WS_METHODS.agentSessionsImport),
       [WS_METHODS.subscribeVcsStatus]: vcsStatus,

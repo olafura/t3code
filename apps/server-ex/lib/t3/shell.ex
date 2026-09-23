@@ -30,6 +30,14 @@ defmodule T3.Shell do
   @spec rows() :: [{{node, String.t()}, {String.t(), map}}]
   def rows, do: :ets.tab2list(@table)
 
+  @doc "One row as `{kind, row}`, or `nil`."
+  def row(node, id) do
+    case :ets.lookup(@table, {node, id}) do
+      [{_, row}] -> row
+      [] -> nil
+    end
+  end
+
   @doc "Every known node's environment descriptor as `{node, descriptor}`."
   @spec environments() :: [{node, map}]
   def environments, do: :ets.tab2list(@nodes)

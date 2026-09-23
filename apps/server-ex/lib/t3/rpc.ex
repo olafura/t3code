@@ -36,6 +36,17 @@ defmodule T3.Rpc do
   def handle("server.uninstallAcpRegistryManagedBinary", input),
     do: T3.Acp.Catalog.uninstall(input)
 
+  def handle("server.listAcpRegistrySessions", input), do: T3.Acp.Sessions.list(input)
+  def handle("server.importAcpRegistrySession", input), do: T3.Acp.Sessions.import(input)
+  def handle("server.deleteAcpRegistrySession", input), do: T3.Acp.Sessions.delete(input)
+  def handle("server.listAcpRegistryProviders", input), do: T3.Acp.Sessions.providers(input)
+  def handle("server.setAcpRegistryProvider", input), do: T3.Acp.Sessions.set_provider(input)
+
+  def handle("server.disableAcpRegistryProvider", input),
+    do: T3.Acp.Sessions.disable_provider(input)
+
+  def handle("server.logoutAcpRegistry", input), do: T3.Acp.Sessions.logout(input)
+
   def handle("agentSessions.scan", input), do: T3.AgentSessions.scan(input)
   def handle("agentSessions.import", input), do: T3.AgentSessions.import_project(input)
   def handle("review.getDiffPreview", input), do: T3.Review.diff_preview(input)

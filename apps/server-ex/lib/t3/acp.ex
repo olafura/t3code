@@ -132,6 +132,8 @@ defmodule T3.Acp do
           "version" => :persistent_term.get({__MODULE__, id, :version}, "unknown"),
           "status" => if(failure, do: "error", else: "ready"),
           "availability" => "available",
+          # Commit messages and titles come from Claude or Codex (`T3.TextGeneration`).
+          "supportsTextGeneration" => false,
           "auth" => %{"status" => "authenticated"},
           "checkedAt" => T3.Orchestration.Entities.now(),
           "models" => models || [],
@@ -141,6 +143,7 @@ defmodule T3.Acp do
         base
       )
       |> then(&if(failure, do: Map.put(&1, "message", failure), else: &1))
+      |> Map.merge(capability_fields(capabilities(id)))
     else
       _ -> nil
     end
@@ -173,6 +176,27 @@ defmodule T3.Acp do
     else
       _ -> :error
     end
+  end
+
+  # What the agent can do with its own sessions and model providers, and logout.
+  defp capability_fields(nil), do: %{}
+
+  defp capability_fields(caps) do
+    sessions = caps["sessionCapabilities"] || %{}
+
+    %{
+      "nativeSessions" => %{
+        "canList" => is_map(sessions["list"]),
+        "canLoad" => caps["loadSession"] == true,
+        "canResume" => is_map(sessions["resume"]),
+        "canDelete" => is_map(sessions["delete"])
+      },
+      "configurableProviders" => is_map(caps["providers"]),
+      "auth" => %{
+        "status" => "authenticated",
+        "canLogout" => is_map(get_in(caps, ["auth", "logout"]))
+      }
+    }
   end
 
   defp setup(url),
@@ -242,9 +266,25 @@ defmodule T3.Acp do
   defp describe(reason), do: inspect(reason)
 
   defp read_agent(id, dir) do
+    with_agent(id, dir, fn conn, init ->
+      with {:ok, session} <-
+             Connection.call(conn, "session/new", %{"cwd" => dir, "mcpServers" => []}, 60_000) do
+        version = get_in(init, ["agentInfo", "version"]) || "unknown"
+        :persistent_term.put({__MODULE__, id, :version}, version)
+        :persistent_term.put({__MODULE__, id, :capabilities}, init["agentCapabilities"] || %{})
+        :persistent_term.put({__MODULE__, id, :models}, models(session))
+      end
+    end)
+  end
+
+  @doc """
+  Starts an instance's agent in `cwd`, initializes it, and calls `fun.(conn,
+  initialize_result)`; the agent stops when `fun` returns.
+  """
+  def with_agent(id, cwd, fun) do
     with {:ok, command, env} <- command(id),
          {:ok, conn} <-
-           Connection.start_link(cmd: command, handler: self(), cd: dir, env: env, dialect: :v2) do
+           Connection.start_link(cmd: command, handler: self(), cd: cwd, env: env, dialect: :v2) do
       try do
         with {:ok, init} <-
                Connection.call(conn, "initialize", %{
@@ -252,18 +292,25 @@ defmodule T3.Acp do
                  "clientCapabilities" => %{
                    "fs" => %{"readTextFile" => false, "writeTextFile" => false},
                    "terminal" => false
-                 }
+                 },
+                 "clientInfo" => %{"name" => "t3code", "version" => "0.1.0"}
                }),
-             {:ok, session} <-
-               Connection.call(conn, "session/new", %{"cwd" => dir, "mcpServers" => []}, 60_000) do
-          version = get_in(init, ["agentInfo", "version"]) || "unknown"
-          :persistent_term.put({__MODULE__, id, :version}, version)
-          :persistent_term.put({__MODULE__, id, :models}, models(session))
-        end
+             do: fun.(conn, init)
       after
         Connection.stop(conn)
       end
     end
+  end
+
+  @doc "The agent capabilities an instance reported when it was last probed, or `nil`."
+  def capabilities(id), do: :persistent_term.get({__MODULE__, id, :capabilities}, nil)
+
+  @doc "Forgets what was read from an instance's agent, so it is probed again."
+  def forget(id) do
+    for key <- [:models, :version, :capabilities, :error, :loading],
+        do: :persistent_term.erase({__MODULE__, id, key})
+
+    :ok
   end
 
   # "Hugging Face/DeepSeek V3" is the model "DeepSeek V3" of the provider "Hugging Face".

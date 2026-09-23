@@ -33,7 +33,9 @@ for line in sys.stdin:
         continue
     if method == "initialize":
         send({"id": mid, "result": {"protocolVersion": 1, "agentInfo": {"name": "Fake", "version": "9.9"},
-              "agentCapabilities": {"loadSession": True, "sessionCapabilities": {"resume": {}}}}})
+              "agentCapabilities": {"loadSession": True,
+                  "sessionCapabilities": {"resume": {}, "list": {}, "delete": {}},
+                  "providers": {}, "auth": {"logout": {}}}}})
     elif method in ("session/new", "session/resume"):
         sessions += 1
         sid = params.get("sessionId") or "acp-%d" % sessions
@@ -58,6 +60,17 @@ for line in sys.stdin:
                               {"optionId": "deny", "name": "Deny", "kind": "reject_once"}]}})
         else:
             finish_turn(mid, sid)
+    elif method == "session/list":
+        send({"id": mid, "result": {"nextCursor": None, "sessions": [
+            {"sessionId": "old-1", "cwd": params["cwd"], "title": "Earlier work", "updatedAt": "2026-09-01T10:00:00Z"},
+            {"sessionId": "old/2", "cwd": params["cwd"]}]}})
+    elif method == "session/delete":
+        send({"id": mid, "result": {}})
+    elif method == "providers/list":
+        send({"id": mid, "result": {"providers": [{"providerId": "openai", "supported": ["openai"], "required": False,
+              "current": {"apiType": "openai", "baseUrl": "https://api.example.com"}}]}})
+    elif method in ("providers/set", "providers/disable", "logout"):
+        send({"id": mid, "result": {}})
     elif method == "session/cancel" and waiting:
         send({"id": waiting[0], "result": {"stopReason": "cancelled"}})
         waiting = None
