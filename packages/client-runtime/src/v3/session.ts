@@ -15,12 +15,18 @@ import {
   OrchestrationV2ThreadLaunchError,
   ORCHESTRATION_V2_WS_METHODS,
   ServerConfig,
+  ServerSettings,
+  ServerSettingsError,
+  type ProviderInstanceMutation,
+  type ServerConfigStreamEvent,
+  type ServerSettingsPatch,
   TerminalError,
   TerminalSessionLookupError,
   ThreadId,
   WS_METHODS,
   WsRpcGroup,
 } from "@t3tools/contracts";
+import { applyServerSettingsPatch } from "@t3tools/shared/serverSettings";
 import * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
@@ -46,6 +52,32 @@ import { ThreadShapeFold, type ShapeEvent, type ShapeRow } from "./threadShape.t
 
 const decodeConfig = Schema.decodeUnknownSync(Schema.toCodecJson(ServerConfig));
 const decodeTerminalError = Schema.decodeUnknownOption(TerminalError);
+const settingsCodec = Schema.toCodecJson(ServerSettings);
+const isServerSettingsError = Schema.is(ServerSettingsError);
+const decodeSettings = Schema.decodeUnknownEffect(settingsCodec);
+const decodeSettingsSync = Schema.decodeUnknownSync(settingsCodec);
+const encodeSettings = Schema.encodeEffect(settingsCodec);
+
+function settingsError(operation: "read-file" | "write-file", cause: unknown) {
+  return new ServerSettingsError({ settingsPath: "settings.json", operation, cause });
+}
+
+function isStaleSettings(cause: unknown): boolean {
+  return (
+    cause instanceof ClusterRpcError &&
+    (cause.detail as { readonly _tag?: string } | undefined)?._tag === "StaleSettings"
+  );
+}
+
+function withProviderInstance(
+  settings: ServerSettings,
+  mutation: ProviderInstanceMutation,
+): ServerSettings {
+  const providerInstances = { ...settings.providerInstances };
+  if (mutation.operation === "remove") delete providerInstances[mutation.instanceId];
+  else providerInstances[mutation.instanceId] = mutation.instance;
+  return { ...settings, providerInstances };
+}
 
 // A node's launch result leaves out the thread projection: nothing reads it, and the
 // thread's stream shape already carries that state.
@@ -199,13 +231,30 @@ export function makeV3Session(input: {
     };
 
     // Settings and config do not change on a node yet, so the stream is its snapshot.
+    // The node's config, then its settings whenever any client changes them.
     const serverConfig = () =>
-      Stream.fromEffect(
-        Effect.map(initialConfig, (value) => ({
-          version: 1 as const,
-          type: "snapshot" as const,
-          config: value,
-        })),
+      shapeStream(
+        socket,
+        { type: "config", node },
+        (frame): ReadonlyArray<ServerConfigStreamEvent> => {
+          if (frame.t === "config")
+            return [
+              {
+                version: 1 as const,
+                type: "snapshot" as const,
+                config: decodeConfig(frame.config),
+              },
+            ];
+          if (frame.t === "config.settings")
+            return [
+              {
+                version: 1 as const,
+                type: "settingsUpdated" as const,
+                payload: { settings: decodeSettingsSync(frame.settings) },
+              },
+            ];
+          return [];
+        },
       );
 
     // A node never bootstraps a project from its cwd, so its welcome is complete at
@@ -421,6 +470,56 @@ export function makeV3Session(input: {
       (_request: object, message) => new OrchestrationGetFullThreadDiffError({ message }),
     );
 
+    // A node stores settings; the patch is applied here with the shared rules, to
+    // the version the node has. A concurrent write sends it round again.
+    const nodeCall = (method: string, payload: unknown) =>
+      Effect.tryPromise({
+        try: () => socket.call(input.environmentId, method, payload),
+        catch: (cause) =>
+          cause instanceof ClusterRpcError ? cause : new ClusterRpcError(String(cause), undefined),
+      });
+
+    const getSettings = forward(WS_METHODS.serverGetSettings, (_request: object, _message, cause) =>
+      settingsError("read-file", cause),
+    );
+
+    const updateSettings = (request: {
+      readonly patch: ServerSettingsPatch;
+      readonly providerInstanceMutation?: ProviderInstanceMutation;
+    }) =>
+      Effect.gen(function* () {
+        const current = (yield* nodeCall("t3.readSettings", {})) as {
+          readonly settings: unknown;
+          readonly version: number;
+        };
+        const settings = yield* decodeSettings(current.settings);
+        const mutation = request.providerInstanceMutation;
+        if (
+          mutation?.operation === "create" &&
+          settings.providerInstances[mutation.instanceId] !== undefined
+        ) {
+          return yield* Effect.fail(
+            new ServerSettingsError({
+              settingsPath: "settings.json",
+              operation: "create-provider-instance",
+              providerInstanceId: mutation.instanceId,
+            }),
+          );
+        }
+        const patched = applyServerSettingsPatch(settings, request.patch);
+        const next = mutation === undefined ? patched : withProviderInstance(patched, mutation);
+        yield* nodeCall("t3.writeSettings", {
+          settings: yield* encodeSettings(next),
+          version: current.version,
+        });
+        return next;
+      }).pipe(
+        Effect.retry({ times: 3, while: isStaleSettings }),
+        Effect.mapError((cause) =>
+          isServerSettingsError(cause) ? cause : settingsError("write-file", cause),
+        ),
+      );
+
     const served: Record<string, (request: never) => unknown> = {
       [WS_METHODS.projectsMutate]: mutateProject,
       [WS_METHODS.filesystemBrowse]: browse,
@@ -452,6 +551,8 @@ export function makeV3Session(input: {
       [WS_METHODS.terminalClear]: terminalCommand(WS_METHODS.terminalClear),
       [WS_METHODS.terminalRestart]: terminalCommand(WS_METHODS.terminalRestart),
       [WS_METHODS.terminalClose]: terminalCommand(WS_METHODS.terminalClose),
+      [WS_METHODS.serverGetSettings]: getSettings,
+      [WS_METHODS.serverUpdateSettings]: updateSettings,
       [WS_METHODS.serverGetConfig]: () => initialConfig,
       [WS_METHODS.serverProbe]: () => Effect.void,
       [WS_METHODS.subscribeServerConfig]: serverConfig,
