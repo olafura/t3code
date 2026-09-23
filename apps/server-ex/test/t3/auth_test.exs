@@ -53,6 +53,15 @@ defmodule T3.AuthTest do
     assert {:error, 401} = WsClient.connect(port, "/ws?wsTicket=#{ticket}")
   end
 
+  test "browsers on other origins may call the node", %{port: port} do
+    {:ok, {{_, 204, _}, headers, _}} =
+      :httpc.request(:options, {"http://127.0.0.1:#{port}/oauth/token", []}, [], [])
+
+    assert {~c"access-control-allow-origin", ~c"*"} in headers
+    assert {_, allowed} = List.keyfind(headers, ~c"access-control-allow-headers", 0)
+    assert to_string(allowed) =~ "authorization"
+  end
+
   defp post_form(url, form) do
     body = URI.encode_query(form)
 

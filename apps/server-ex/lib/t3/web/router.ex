@@ -7,9 +7,25 @@ defmodule T3.Web.Router do
 
   use Plug.Router
 
+  @cors_headers [
+    {"access-control-allow-origin", "*"},
+    {"access-control-allow-methods", "GET, POST, OPTIONS"},
+    {"access-control-allow-headers",
+     "authorization, b3, traceparent, content-type, dpop, x-t3-orchestration-protocol"},
+    {"access-control-max-age", "600"}
+  ]
+
+  plug :cors
   plug :match
   plug Plug.Parsers, parsers: [:urlencoded], pass: ["*/*"]
   plug :dispatch
+
+  # Clients reach a node from other origins (the hosted app, another dev server)
+  # with bearer tokens rather than cookies, so any origin may call it.
+  defp cors(%{method: "OPTIONS"} = conn, _opts),
+    do: conn |> merge_resp_headers(@cors_headers) |> send_resp(204, "") |> halt()
+
+  defp cors(conn, _opts), do: merge_resp_headers(conn, @cors_headers)
 
   get "/.well-known/t3/environment" do
     body =
