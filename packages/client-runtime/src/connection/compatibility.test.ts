@@ -8,6 +8,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   appendOrchestrationProtocol,
   orchestrationProtocolCompatibilityError,
+  SHAPE_PROTOCOL_VERSION,
 } from "./compatibility.ts";
 
 const descriptor = (orchestrationProtocolVersion?: number): ExecutionEnvironmentDescriptor => ({
@@ -45,10 +46,13 @@ describe("orchestration protocol compatibility", () => {
   });
 
   it("blocks a different protocol before connecting", () => {
-    const error = orchestrationProtocolCompatibilityError(
-      descriptor(ORCHESTRATION_PROTOCOL_VERSION + 1),
-    );
+    // 3 is the shape protocol, which this client also speaks.
+    const error = orchestrationProtocolCompatibilityError(descriptor(SHAPE_PROTOCOL_VERSION + 1));
     expect(error).toMatchObject({ reason: "unsupported" });
     expect(error?.message).toContain("This client is not supported");
+  });
+
+  it("accepts shape-protocol (clustered) nodes", () => {
+    expect(orchestrationProtocolCompatibilityError(descriptor(SHAPE_PROTOCOL_VERSION))).toBeNull();
   });
 });

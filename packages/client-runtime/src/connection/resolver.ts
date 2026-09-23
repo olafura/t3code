@@ -39,6 +39,7 @@ import { ConnectionBlockedError, type ConnectionAttemptError } from "./model.ts"
 import * as ConnectionProfileStore from "./profileStore.ts";
 import {
   appendOrchestrationProtocol,
+  SHAPE_PROTOCOL_VERSION,
   orchestrationProtocolCompatibilityError,
 } from "./compatibility.ts";
 import { fetchRemoteEnvironmentDescriptor } from "../environment/descriptor.ts";
@@ -283,9 +284,14 @@ export const make = Effect.gen(function* () {
     if (compatibilityError !== null) {
       return yield* compatibilityError;
     }
+    const protocol = descriptor.orchestrationProtocolVersion;
     return {
       ...prepared,
-      socketUrl: appendOrchestrationProtocol(prepared.socketUrl),
+      socketUrl:
+        protocol === SHAPE_PROTOCOL_VERSION
+          ? prepared.socketUrl
+          : appendOrchestrationProtocol(prepared.socketUrl),
+      ...(protocol === SHAPE_PROTOCOL_VERSION ? { orchestrationProtocolVersion: protocol } : {}),
     };
   });
 

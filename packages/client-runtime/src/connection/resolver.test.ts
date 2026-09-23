@@ -208,7 +208,7 @@ describe("ConnectionResolver", () => {
   it.effect("blocks an incompatible host during discovery before opening orchestration RPC", () =>
     Effect.gen(function* () {
       const brokerLayer = yield* makeDependencies({
-        descriptorProtocolVersion: ORCHESTRATION_PROTOCOL_VERSION + 1,
+        descriptorProtocolVersion: ORCHESTRATION_PROTOCOL_VERSION + 2,
       });
       const broker = yield* ConnectionResolver.ConnectionResolver.pipe(Effect.provide(brokerLayer));
       const target = new PrimaryConnectionTarget({

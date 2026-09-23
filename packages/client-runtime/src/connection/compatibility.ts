@@ -6,12 +6,18 @@ import {
 
 import { ConnectionBlockedError } from "./model.ts";
 
+/** Protocol 3 is the shape-sync protocol served by clustered (Elixir) nodes. */
+export const SHAPE_PROTOCOL_VERSION = 3;
+
 export function orchestrationProtocolCompatibilityError(
   descriptor: ExecutionEnvironmentDescriptor,
 ): ConnectionBlockedError | null {
   // Servers shipped before negotiation use the original wire protocol.
   const serverProtocolVersion = descriptor.orchestrationProtocolVersion ?? 1;
-  if (serverProtocolVersion === ORCHESTRATION_PROTOCOL_VERSION) {
+  if (
+    serverProtocolVersion === ORCHESTRATION_PROTOCOL_VERSION ||
+    serverProtocolVersion === SHAPE_PROTOCOL_VERSION
+  ) {
     return null;
   }
   return new ConnectionBlockedError({

@@ -41,6 +41,8 @@ import {
   withoutEnvironmentThemes,
 } from "../state/serverConfigProjection.ts";
 import { environmentMismatchError } from "../connection/errors.ts";
+import { SHAPE_PROTOCOL_VERSION } from "../connection/compatibility.ts";
+import { connectV3Session } from "../v3/session.ts";
 
 const SOCKET_OPEN_TIMEOUT = "15 seconds";
 
@@ -160,6 +162,9 @@ export const make = Effect.fn("RpcSessionFactory.make")(function* (
   };
 
   const connect = Effect.fnUntraced(function* (connection: PreparedConnection) {
+    if (connection.orchestrationProtocolVersion === SHAPE_PROTOCOL_VERSION) {
+      return yield* connectV3Session(connection);
+    }
     const networkHint =
       connection.target._tag === "RelayConnectionTarget" ? ` ${NETWORK_BLOCKING_HINT}` : "";
     const mapRpcError = (error: Parameters<typeof mapSessionRpcError>[0]) =>

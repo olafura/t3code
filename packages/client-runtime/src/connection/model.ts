@@ -123,6 +123,8 @@ export interface PreparedConnection {
   readonly socketUrl: string;
   readonly httpAuthorization: PreparedHttpAuthorization | null;
   readonly target: ConnectionTarget;
+  /** The server's wire protocol, from its descriptor; absent means the current one. */
+  readonly orchestrationProtocolVersion?: number;
 }
 
 export type SupervisorConnectionPhase =

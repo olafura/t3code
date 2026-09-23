@@ -133,7 +133,7 @@ describe("connection onboarding", () => {
         Effect.provide(
           Layer.mergeAll(
             CLIENT_PRESENTATION_LAYER,
-            pairingHttpLayer(calls, { protocolVersion: ORCHESTRATION_PROTOCOL_VERSION + 1 }),
+            pairingHttpLayer(calls, { protocolVersion: ORCHESTRATION_PROTOCOL_VERSION + 2 }),
           ),
         ),
         Effect.flip,
