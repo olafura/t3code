@@ -25,7 +25,14 @@ export type TerminalShape = {
   readonly input: Readonly<Record<string, unknown>>;
 };
 export type TerminalsShape = { readonly type: "terminals"; readonly node: string };
-export type Shape = ShellShape | StreamShape | ConfigShape | TerminalShape | TerminalsShape;
+export type VcsShape = { readonly type: "vcs"; readonly node: string; readonly cwd: string };
+export type Shape =
+  | ShellShape
+  | StreamShape
+  | ConfigShape
+  | TerminalShape
+  | TerminalsShape
+  | VcsShape;
 
 /** A failed RPC or subscription; `detail` is the contract error as `{_tag, ...fields}`. */
 export class ClusterRpcError extends Error {

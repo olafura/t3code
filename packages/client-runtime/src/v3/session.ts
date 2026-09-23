@@ -4,10 +4,12 @@ import {
   AgentSessionScanError,
   FilesystemBrowseError,
   GitCommandError,
+  GitManagerServiceError,
   OrchestrationGetFullThreadDiffError,
   OrchestrationGetTurnDiffError,
   ProjectMutationError,
   ReviewDiffPreviewError,
+  VcsError,
   OrchestrationV2DispatchCommandError,
   OrchestrationV2ThreadLaunchError,
   ORCHESTRATION_V2_WS_METHODS,
@@ -48,6 +50,16 @@ const decodeTerminalError = Schema.decodeUnknownOption(TerminalError);
 // thread's stream shape already carries that state.
 const UNDECODED_RESULTS: ReadonlySet<string> = new Set([ORCHESTRATION_V2_WS_METHODS.launchThread]);
 const decodeReviewError = Schema.decodeUnknownOption(ReviewDiffPreviewError);
+const decodeVcsError = Schema.decodeUnknownOption(Schema.Union([GitManagerServiceError, VcsError]));
+
+/** A node's git error, or a command error carrying its message. */
+function vcsError(operation: string, cwd: string, detail: unknown, message: string) {
+  return decodeVcsError(detail).pipe(
+    Option.getOrElse(
+      () => new GitCommandError({ operation, command: "git", cwd, detail: message }),
+    ),
+  );
+}
 const decodeAgentSessionError = Schema.decodeUnknownOption(
   Schema.Union([
     AgentSessionImportProjectChangedError,
@@ -340,6 +352,26 @@ export function makeV3Session(input: {
         ),
       );
 
+    // A checkout's git status streams from its node; git actions are forwarded.
+    const vcsStatus = (request: { readonly cwd: string }) =>
+      shapeStream(
+        socket,
+        { type: "vcs", node, cwd: request.cwd },
+        (frame) => (frame.t === "vcs" ? [frame.event] : []),
+        (frame) =>
+          vcsError(WS_METHODS.subscribeVcsStatus, request.cwd, frame.detail, String(frame.reason)),
+      );
+
+    const vcsCommand = (tag: string) =>
+      forward(tag, (request: { readonly cwd: string }, message, cause) =>
+        vcsError(
+          tag,
+          request.cwd,
+          cause instanceof ClusterRpcError ? cause.detail : undefined,
+          message,
+        ),
+      );
+
     const getFullThreadDiff = forward(
       ORCHESTRATION_V2_WS_METHODS.getFullThreadDiff,
       (_request: object, message) => new OrchestrationGetFullThreadDiffError({ message }),
@@ -356,6 +388,15 @@ export function makeV3Session(input: {
       [ORCHESTRATION_V2_WS_METHODS.subscribeThread]: thread,
       [WS_METHODS.agentSessionsScan]: agentSessionCommand(WS_METHODS.agentSessionsScan),
       [WS_METHODS.agentSessionsImport]: agentSessionCommand(WS_METHODS.agentSessionsImport),
+      [WS_METHODS.subscribeVcsStatus]: vcsStatus,
+      [WS_METHODS.vcsRefreshStatus]: vcsCommand(WS_METHODS.vcsRefreshStatus),
+      [WS_METHODS.vcsListRefs]: vcsCommand(WS_METHODS.vcsListRefs),
+      [WS_METHODS.vcsSwitchRef]: vcsCommand(WS_METHODS.vcsSwitchRef),
+      [WS_METHODS.vcsCreateRef]: vcsCommand(WS_METHODS.vcsCreateRef),
+      [WS_METHODS.vcsInit]: vcsCommand(WS_METHODS.vcsInit),
+      [WS_METHODS.vcsPull]: vcsCommand(WS_METHODS.vcsPull),
+      [WS_METHODS.vcsCreateWorktree]: vcsCommand(WS_METHODS.vcsCreateWorktree),
+      [WS_METHODS.vcsRemoveWorktree]: vcsCommand(WS_METHODS.vcsRemoveWorktree),
       [WS_METHODS.reviewGetDiffPreview]: reviewCommand(WS_METHODS.reviewGetDiffPreview),
       [WS_METHODS.reviewGetDiffFileContents]: reviewCommand(WS_METHODS.reviewGetDiffFileContents),
       [WS_METHODS.terminalAttach]: terminalAttach,
