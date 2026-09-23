@@ -40,6 +40,11 @@ import {
   OrchestrationV2ThreadLaunchError,
   ORCHESTRATION_V2_WS_METHODS,
   type ResolvedKeybindingsConfig,
+  DiscoveredLocalServerList,
+  PreviewError,
+  PreviewEvent,
+  PreviewInvalidUrlError,
+  PreviewSessionLookupError,
   ProjectCloneListEvent,
   ScheduledTaskError,
   SourceControlRepositoryError,
@@ -63,6 +68,7 @@ import {
   compileResolvedKeybindingsConfig,
   mergeWithDefaultKeybindings,
 } from "@t3tools/shared/keybindings";
+import { isPreviewUrlNormalizationError, normalizePreviewUrl } from "@t3tools/shared/preview";
 import { applyServerSettingsPatch } from "@t3tools/shared/serverSettings";
 import * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
@@ -113,6 +119,9 @@ const decodeScheduledTaskError = Schema.decodeUnknownOption(ScheduledTaskError);
 const decodeProjectClones = Schema.decodeUnknownSync(Schema.toCodecJson(ProjectCloneListEvent));
 const decodeRepositoryError = Schema.decodeUnknownOption(SourceControlRepositoryError);
 const decodeProviderUpdateError = Schema.decodeUnknownOption(ServerProviderUpdateError);
+const decodePreviewError = Schema.decodeUnknownOption(PreviewError);
+const decodePreviewEvent = Schema.decodeUnknownSync(Schema.toCodecJson(PreviewEvent));
+const decodeLocalServers = Schema.decodeUnknownSync(Schema.toCodecJson(DiscoveredLocalServerList));
 const decodeSetupError = Schema.decodeUnknownOption(ProviderSetupError);
 const decodeTerminalError = Schema.decodeUnknownOption(TerminalError);
 const settingsCodec = Schema.toCodecJson(ServerSettings);
@@ -580,6 +589,51 @@ export function makeV3Session(input: {
         frame.t === "projectClones" ? [decodeProjectClones(frame.clones)] : [],
       );
 
+    // Preview tabs are tracked on the node; URLs are normalized here, as Node does.
+    type PreviewRequest = {
+      readonly threadId: string;
+      readonly tabId?: string;
+      readonly url?: string;
+    };
+    const previewCommand = (tag: string) =>
+      forward(tag, (request: PreviewRequest, _message, cause) =>
+        decodePreviewError(cause instanceof ClusterRpcError ? cause.detail : undefined).pipe(
+          Option.getOrElse(
+            () =>
+              new PreviewSessionLookupError({
+                threadId: request.threadId,
+                tabId: request.tabId ?? "",
+              }),
+          ),
+        ),
+      );
+    const withPreviewUrl =
+      (tag: string) =>
+      (request: PreviewRequest): Effect.Effect<unknown, unknown> => {
+        if (request.url === undefined) return previewCommand(tag)(request);
+        const rawUrl = request.url;
+        return Effect.try({
+          try: () => normalizePreviewUrl(rawUrl),
+          catch: (cause) =>
+            new PreviewInvalidUrlError({
+              inputLength: rawUrl.length,
+              reason: isPreviewUrlNormalizationError(cause) ? cause.reason : "unexpected",
+              ...(isPreviewUrlNormalizationError(cause) && cause.protocol !== undefined
+                ? { protocol: cause.protocol }
+                : {}),
+              cause,
+            }),
+        }).pipe(Effect.flatMap((url) => previewCommand(tag)({ ...request, url })));
+      };
+    const previewEvents = () =>
+      shapeStream(socket, { type: "preview", node }, (frame) =>
+        frame.t === "preview" ? [decodePreviewEvent(frame.event)] : [],
+      );
+    const localServers = () =>
+      shapeStream(socket, { type: "localServers", node }, (frame) =>
+        frame.t === "localServers" ? [decodeLocalServers(frame.list)] : [],
+      );
+
     // A new thread's worktree is prepared on its node.
     const worktreeSetup = (request: { readonly threadId: string }) =>
       shapeStream(socket, { type: "worktreeSetup", node, threadId: request.threadId }, (frame) =>
@@ -838,6 +892,15 @@ export function makeV3Session(input: {
         (_request: object, _message, cause) => cause,
       ),
       [WS_METHODS.subscribeProjectClones]: projectClones,
+      [WS_METHODS.previewOpen]: withPreviewUrl(WS_METHODS.previewOpen),
+      [WS_METHODS.previewNavigate]: withPreviewUrl(WS_METHODS.previewNavigate),
+      [WS_METHODS.previewReportStatus]: previewCommand(WS_METHODS.previewReportStatus),
+      [WS_METHODS.previewResize]: previewCommand(WS_METHODS.previewResize),
+      [WS_METHODS.previewRefresh]: previewCommand(WS_METHODS.previewRefresh),
+      [WS_METHODS.previewClose]: previewCommand(WS_METHODS.previewClose),
+      [WS_METHODS.previewList]: previewCommand(WS_METHODS.previewList),
+      [WS_METHODS.subscribePreviewEvents]: previewEvents,
+      [WS_METHODS.subscribeDiscoveredLocalServers]: localServers,
       [WS_METHODS.scheduledTasksList]: scheduledTaskCommand(WS_METHODS.scheduledTasksList),
       [WS_METHODS.scheduledTasksUpsert]: scheduledTaskCommand(WS_METHODS.scheduledTasksUpsert),
       [WS_METHODS.scheduledTasksDelete]: scheduledTaskCommand(WS_METHODS.scheduledTasksDelete),

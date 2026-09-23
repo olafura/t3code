@@ -16,6 +16,9 @@ defmodule T3.Web.Protocol do
     * `{"type": "vcs", "node": n, "cwd": dir}`: a checkout's git status, then changes
     * `{"type": "worktreeSetup", "node": n, "threadId": id}`: a new thread's worktree
       setup (`WorktreeSetupStreamEvent`: null, or a snapshot), then changes
+    * `{"type": "preview", "node": n}`: that node's preview tab events (`PreviewEvent`)
+    * `{"type": "localServers", "node": n}`: web servers listening on that node's
+      host (`DiscoveredLocalServerList`), then the list whenever it changes
     * `{"type": "projectClones", "node": n}`: that node's project clones in
       progress (`ProjectCloneSnapshot[]`), then the whole list on every change
     * `{"type": "scheduledTasks", "node": n}`: that node's scheduled tasks, then
@@ -58,6 +61,8 @@ defmodule T3.Web.Protocol do
       {"t": "worktreeSetup", "id", "event"} (WorktreeSetupStreamEvent)
       {"t": "scheduledTasks", "id", "tasks"} (ScheduledTask[])
       {"t": "projectClones", "id", "clones"} (ProjectCloneSnapshot[])
+      {"t": "preview", "id", "event"} (PreviewEvent)
+      {"t": "localServers", "id", "list"} (DiscoveredLocalServerList)
       {"t": "rpc.result", "id", "result"} / {"t": "rpc.error", "id", "error", "detail"?}
         (`detail` is the contract error as `{"_tag", ...fields}` when there is one)
       {"t": "pong"}
@@ -142,6 +147,14 @@ defmodule T3.Web.Protocol do
        )
        when is_binary(id) do
     with {:ok, node} <- known_node(node, nodes), do: {:ok, {:git_action, node, input}}
+  end
+
+  defp decode_shape(%{"type" => "preview", "node" => node}, nodes) do
+    with {:ok, node} <- known_node(node, nodes), do: {:ok, {:preview, node}}
+  end
+
+  defp decode_shape(%{"type" => "localServers", "node" => node}, nodes) do
+    with {:ok, node} <- known_node(node, nodes), do: {:ok, {:local_servers, node}}
   end
 
   defp decode_shape(%{"type" => "projectClones", "node" => node}, nodes) do

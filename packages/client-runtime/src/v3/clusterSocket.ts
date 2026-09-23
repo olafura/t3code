@@ -38,6 +38,8 @@ export type WorktreeSetupShape = {
 };
 export type ScheduledTasksShape = { readonly type: "scheduledTasks"; readonly node: string };
 export type ProjectClonesShape = { readonly type: "projectClones"; readonly node: string };
+export type PreviewShape = { readonly type: "preview"; readonly node: string };
+export type LocalServersShape = { readonly type: "localServers"; readonly node: string };
 export type GitActionShape = {
   readonly type: "gitAction";
   readonly node: string;
@@ -52,6 +54,8 @@ export type Shape =
   | VcsShape
   | ScheduledTasksShape
   | ProjectClonesShape
+  | PreviewShape
+  | LocalServersShape
   | GitActionShape
   | ProviderAuthShape
   | WorktreeSetupShape;

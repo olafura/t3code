@@ -125,6 +125,26 @@ defmodule T3.Web.Socket do
     end
   end
 
+  def handle_info({:t3_preview, node, event}, state) do
+    case state.by_terminal do
+      %{{:preview, ^node} => id} ->
+        {:push, Protocol.encode(%{"t" => "preview", "id" => id, "event" => event}), state}
+
+      _ ->
+        {:ok, state}
+    end
+  end
+
+  def handle_info({:t3_local_servers, node, list}, state) do
+    case state.by_terminal do
+      %{{:local_servers, ^node} => id} ->
+        {:push, Protocol.encode(%{"t" => "localServers", "id" => id, "list" => list}), state}
+
+      _ ->
+        {:ok, state}
+    end
+  end
+
   def handle_info({:t3_project_clones, node, clones}, state) do
     case state.by_terminal do
       %{{:project_clones, ^node} => id} ->
@@ -383,6 +403,36 @@ defmodule T3.Web.Socket do
     end
   end
 
+  defp subscribe(state, id, {:preview, node} = shape, _offset) do
+    case remote(node, T3.Preview, :subscribe, [self()]) do
+      {:ok, :ok} ->
+        {:ok,
+         %{
+           state
+           | subs: Map.put(state.subs, id, shape),
+             by_terminal: Map.put(state.by_terminal, {:preview, node}, id)
+         }}
+
+      {:error, reason} ->
+        {:push, Protocol.encode(error_frame(id, reason)), state}
+    end
+  end
+
+  defp subscribe(state, id, {:local_servers, node} = shape, _offset) do
+    case remote(node, T3.LocalServers, :subscribe, [self()]) do
+      {:ok, {:ok, list}} ->
+        {:push, Protocol.encode(%{"t" => "localServers", "id" => id, "list" => list}),
+         %{
+           state
+           | subs: Map.put(state.subs, id, shape),
+             by_terminal: Map.put(state.by_terminal, {:local_servers, node}, id)
+         }}
+
+      {:error, reason} ->
+        {:push, Protocol.encode(error_frame(id, reason)), state}
+    end
+  end
+
   defp subscribe(state, id, {:project_clones, node} = shape, _offset) do
     case remote(node, T3.ProjectClones, :subscribe, [self()]) do
       {:ok, {:ok, clones}} ->
@@ -499,6 +549,14 @@ defmodule T3.Web.Socket do
       {{:config, node}, subs} ->
         :erpc.cast(node, T3.Settings, :unwatch, [self()])
         %{state | subs: subs, by_terminal: Map.delete(state.by_terminal, {:settings, node})}
+
+      {{:preview, node}, subs} ->
+        :erpc.cast(node, T3.Preview, :unsubscribe, [self()])
+        %{state | subs: subs, by_terminal: Map.delete(state.by_terminal, {:preview, node})}
+
+      {{:local_servers, node}, subs} ->
+        :erpc.cast(node, T3.LocalServers, :unsubscribe, [self()])
+        %{state | subs: subs, by_terminal: Map.delete(state.by_terminal, {:local_servers, node})}
 
       {{:project_clones, node}, subs} ->
         :erpc.cast(node, T3.ProjectClones, :unsubscribe, [self()])
