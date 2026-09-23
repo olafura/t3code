@@ -70,7 +70,13 @@ defmodule T3.Rpc do
     do: T3.Diagnostics.telemetry_history(input)
 
   def handle("server.retryResourceTelemetry", input), do: T3.Diagnostics.retry(input)
-  def handle("server.getBackgroundPolicy", input), do: T3.Diagnostics.background_policy(input)
+  def handle("server.getBackgroundPolicy", _input), do: {:ok, T3.BackgroundPolicy.snapshot()}
+
+  def handle("server.reportHostPowerState", snapshot) do
+    :ok = T3.BackgroundPolicy.report_host_power(snapshot)
+    {:ok, nil}
+  end
+
   def handle("server.getUsageSummary", input), do: T3.Usage.summary(input)
   def handle("server.refreshUsageRates", input), do: T3.Usage.refresh_rates(input)
   def handle("preview.open", input), do: T3.Preview.open(input)

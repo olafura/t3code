@@ -5,8 +5,9 @@ defmodule T3.Vcs.Watch do
   A watcher starts with its first subscriber and stops with its last. Subscribers
   get `{:t3_vcs, cwd, event}` messages shaped as `VcsStatusStreamEvent`, only when
   something changed. Local status is read again when told (`refresh/1`: a turn
-  ended, a git action ran); remote status is fetched every `@remote_ms` while
-  anyone watches, as the Node server does.
+  ended, a git action ran); remote status is fetched on the background activity
+  settings' `automaticGitFetchInterval` (never at 0) while a client in front shows
+  this checkout, as the Node server does (`T3.BackgroundPolicy`).
   """
 
   use GenServer, restart: :temporary
@@ -15,7 +16,6 @@ defmodule T3.Vcs.Watch do
 
   @registry T3.Vcs.Registry
   @supervisor T3.Vcs.Supervisor
-  @remote_ms 30_000
 
   @doc "Adds `pid` as a subscriber; returns the snapshot event."
   def subscribe(cwd, pid) do
@@ -63,7 +63,7 @@ defmodule T3.Vcs.Watch do
        subscribers: %{},
        local: Vcs.local_status(cwd),
        remote: Vcs.remote_status(cwd, pr: true),
-       timer: Process.send_after(self(), :fetch, @remote_ms)
+       timer: schedule_fetch()
      }}
   end
 
@@ -100,9 +100,15 @@ defmodule T3.Vcs.Watch do
 
   @impl true
   def handle_info(:fetch, state) do
-    state = update(state, state.local, Vcs.remote_status(state.cwd, fetch: true, pr: true))
-    {:noreply, %{state | timer: Process.send_after(self(), :fetch, @remote_ms)}}
+    state =
+      if T3.BackgroundPolicy.run_scope_work?(%{"type" => "vcs-status", "cwd" => state.cwd}),
+        do: update(state, state.local, Vcs.remote_status(state.cwd, fetch: true, pr: true)),
+        else: state
+
+    {:noreply, %{state | timer: schedule_fetch()}}
   end
+
+  def handle_info(:fetch_off, state), do: {:noreply, %{state | timer: schedule_fetch()}}
 
   def handle_info({:DOWN, ref, :process, pid, _}, state) do
     case state.subscribers do
@@ -130,4 +136,12 @@ defmodule T3.Vcs.Watch do
     do: {:stop, :normal, state}
 
   defp stop_if_idle(state), do: {:noreply, state}
+
+  # Checked again every 30 s while fetching is off, so turning it on takes effect.
+  defp schedule_fetch do
+    case T3.BackgroundPolicy.settings()["automaticGitFetchInterval"] do
+      ms when is_integer(ms) and ms > 0 -> Process.send_after(self(), :fetch, ms)
+      _ -> Process.send_after(self(), :fetch_off, 30_000)
+    end
+  end
 end

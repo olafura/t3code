@@ -1142,8 +1142,15 @@ export function makeV3Session(input: {
         WS_METHODS.serverRefreshUsageRates,
         (_request: object, _message, cause) => cause,
       ),
-      // Nodes have no background policy that client activity would steer.
-      [WS_METHODS.serverReportClientActivity]: () => Effect.void,
+      // The node pauses background work nobody in front is looking at.
+      [WS_METHODS.serverReportClientActivity]: forward(
+        WS_METHODS.serverReportClientActivity,
+        (_request: object, _message, cause) => cause,
+      ),
+      [WS_METHODS.serverReportHostPowerState]: forward(
+        WS_METHODS.serverReportHostPowerState,
+        (_request: object, _message, cause) => cause,
+      ),
       [ORCHESTRATION_V2_WS_METHODS.getArchivedShellSnapshot]: archivedShell,
       [WS_METHODS.serverSearchAcpRegistry]: acpRegistryCommand(WS_METHODS.serverSearchAcpRegistry),
       [WS_METHODS.serverPrepareAcpRegistryAgent]: acpRegistryCommand(

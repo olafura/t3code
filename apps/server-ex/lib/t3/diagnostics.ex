@@ -130,19 +130,6 @@ defmodule T3.Diagnostics do
      }}
   end
 
-  @doc "`server.getBackgroundPolicy`: nodes run background work whenever it is due."
-  def background_policy(_input \\ %{}) do
-    {:ok,
-     %{
-       "hostPower" => power(),
-       "leases" => [],
-       "activeForegroundLeaseCount" => 0,
-       "activeScopeKeys" => [],
-       "shouldRunOpportunisticWork" => true,
-       "updatedAt" => now()
-     }}
-  end
-
   @doc "`server.getProcessResourceHistory`."
   def history(%{"windowMs" => window, "bucketMs" => bucket}),
     do: {:ok, GenServer.call(__MODULE__, {:history, :process, window, bucket})}

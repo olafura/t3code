@@ -41,6 +41,7 @@ defmodule T3.Application do
           T3.Orchestration.Settlement,
           T3.Usage,
           T3.Mcp,
+          T3.BackgroundPolicy,
           T3.EnvironmentThemes,
           T3.StorageCleanup,
           T3.Orchestration.IdleSessions,

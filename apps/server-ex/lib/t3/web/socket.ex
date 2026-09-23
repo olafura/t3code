@@ -326,6 +326,12 @@ defmodule T3.Web.Socket do
           nil ->
             {:error, "unknown environment"}
 
+          # Activity leases belong to this socket and its session.
+          node when method == "server.reportClientActivity" ->
+            args = [state.session, socket, payload || %{}]
+            :erpc.cast(node, T3.BackgroundPolicy, :report_client_activity, args)
+            {:ok, nil}
+
           node ->
             try do
               # Each call runs in its own task; some (a provider update, a
