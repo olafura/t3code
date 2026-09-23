@@ -247,6 +247,23 @@ defmodule T3.OrchestrationTest do
   end
 
   describe "ACP agents (OpenCode)" do
+    test "an agent that cannot start fails its run" do
+      Application.put_env(:t3, :acp_commands, %{"opencode" => ["/nonexistent/agent"]})
+
+      # The runtime settles the turn itself, before creating its provider turn.
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          send(self(), {:state, await_run(launch("hello", "opencode"), "failed")})
+        end)
+
+      assert_received {:state, state}
+      refute log =~ "turn failed to start in"
+
+      assert [%{"status" => "failed"}] = StreamState.list(state, "run-attempt")
+      assert [%{"status" => "idle"}] = StreamState.list(state, "provider-thread")
+      assert StreamState.list(state, "provider-turn") == []
+    end
+
     test "a turn streams thinking, a command, and the answer; the session is recorded" do
       thread_id = launch("list the files", "opencode")
       state = await_run(thread_id, "completed")

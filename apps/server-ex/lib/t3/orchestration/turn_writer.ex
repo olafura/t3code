@@ -11,6 +11,7 @@ defmodule T3.Orchestration.TurnWriter do
 
   alias T3.Orchestration
   alias T3.Orchestration.Entities
+  alias T3.StreamState
 
   @flush_ms 50
 
@@ -265,25 +266,24 @@ defmodule T3.Orchestration.TurnWriter do
     run_done = if checkpoint, do: Map.put(done, "checkpointId", checkpoint["id"]), else: done
 
     commit(state, fn stream ->
+      # A turn that failed while starting has not created all of these yet.
+      settle = fn kind, id, changes ->
+        StreamState.get(stream, kind)[id] &&
+          Orchestration.upsert(stream, kind, id, &Map.merge(&1, changes))
+      end
+
       checkpoint_changes(stream, state.turn, checkpoint, at) ++
         [
-          Map.has_key?(ids, :provider_turn) &&
-            Orchestration.upsert(stream, "provider-turn", ids.provider_turn, &Map.merge(&1, done)),
-          Orchestration.upsert(stream, "run-attempt", ids.attempt, &Map.merge(&1, done)),
-          Orchestration.upsert(stream, "run", ids.run, &Map.merge(&1, run_done)),
-          Orchestration.upsert(stream, "node", ids.root_node, &Map.merge(&1, done)),
-          Orchestration.upsert(
-            stream,
-            "provider-thread",
-            ids.provider_thread,
-            &Map.merge(&1, %{"status" => "idle", "updatedAt" => at})
-          ),
+          Map.has_key?(ids, :provider_turn) && settle.("provider-turn", ids.provider_turn, done),
+          settle.("run-attempt", ids.attempt, done),
+          settle.("run", ids.run, run_done),
+          settle.("node", ids.root_node, done),
+          settle.("provider-thread", ids.provider_thread, %{"status" => "idle", "updatedAt" => at}),
           failure && status == "failed" &&
-            Orchestration.upsert(
-              stream,
+            settle.(
               "provider-session",
               "provider-session:#{Entities.driver(ids)}:#{ids.thread}",
-              &Map.merge(&1, %{"lastError" => failure, "updatedAt" => at})
+              %{"lastError" => failure, "updatedAt" => at}
             )
         ]
     end)
