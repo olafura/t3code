@@ -37,6 +37,24 @@ defmodule T3.Web.Router do
     conn |> put_resp_content_type("application/json") |> send_resp(200, body)
   end
 
+  # A pairing link opened in a browser lands here. The node serves no app, so the
+  # page says where the link goes instead of answering "not found".
+  get "/" do
+    label = T3.Environment.descriptor()["label"]
+
+    conn
+    |> put_resp_content_type("text/html")
+    |> send_resp(200, """
+    <!doctype html><meta charset="utf-8"><title>T3 node #{Plug.HTML.html_escape(label)}</title>
+    <body style="font:15px system-ui;max-width:34em;margin:4em auto;padding:0 1em;line-height:1.5">
+    <h1 style="font-size:1.3em">T3 node: #{Plug.HTML.html_escape(label)}</h1>
+    <p>This is a pairing link for a T3 node. To connect, copy the full address from the
+    address bar and paste it into <b>T3 Code → Settings → Connections → Add environment</b>.</p>
+    <p>Pairing links work once and expire after 5 minutes.</p>
+    </body>
+    """)
+  end
+
   # Pairing: exchange a one-time pairing token for a bearer access token.
   post "/oauth/token" do
     params = conn.body_params

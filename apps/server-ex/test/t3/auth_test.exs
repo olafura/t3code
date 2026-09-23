@@ -62,6 +62,11 @@ defmodule T3.AuthTest do
     assert to_string(allowed) =~ "authorization"
   end
 
+  test "a pairing link opened in a browser explains where to paste it", %{port: port} do
+    {:ok, {{_, 200, _}, _, body}} = :httpc.request(~c"http://127.0.0.1:#{port}/?token=abc")
+    assert :binary.list_to_bin(body) =~ "Settings → Connections"
+  end
+
   defp post_form(url, form) do
     body = URI.encode_query(form)
 

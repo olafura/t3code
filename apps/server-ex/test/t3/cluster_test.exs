@@ -10,7 +10,8 @@ defmodule T3.ClusterTest do
   setup %{tmp_dir: dir} do
     unless Node.alive?() do
       {_, 0} = System.cmd("epmd", ["-daemon"])
-      {:ok, _} = Node.start(:"t3a@127.0.0.1", :longnames)
+      # Unique names, so the test never collides with nodes running on this machine.
+      {:ok, _} = Node.start(:"t3test#{System.unique_integer([:positive])}@127.0.0.1", :longnames)
     end
 
     Application.put_env(:t3, :home, Path.join(dir, "a"))
@@ -23,7 +24,7 @@ defmodule T3.ClusterTest do
 
     {:ok, peer, b} =
       :peer.start_link(%{
-        name: :t3b,
+        name: :"t3peer#{System.unique_integer([:positive])}",
         host: ~c"127.0.0.1",
         longnames: true,
         args: code_path_args()
