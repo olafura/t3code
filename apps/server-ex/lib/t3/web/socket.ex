@@ -114,6 +114,17 @@ defmodule T3.Web.Socket do
     end
   end
 
+  def handle_info({:t3_worktree_setup, thread_id, snapshot}, state) do
+    case state.by_terminal do
+      %{{:worktree_setup, ^thread_id} => id} ->
+        {:push, Protocol.encode(%{"t" => "worktreeSetup", "id" => id, "event" => snapshot}),
+         state}
+
+      _ ->
+        {:ok, state}
+    end
+  end
+
   def handle_info({:t3_provider_auth, instance, auth}, state) do
     case state.by_terminal do
       %{{:provider_auth, ^instance} => id} ->
@@ -339,6 +350,21 @@ defmodule T3.Web.Socket do
     end
   end
 
+  defp subscribe(state, id, {:worktree_setup, node, thread_id} = shape, _offset) do
+    case remote(node, T3.WorktreeSetup, :subscribe, [thread_id, self()]) do
+      {:ok, snapshot} ->
+        {:push, Protocol.encode(%{"t" => "worktreeSetup", "id" => id, "event" => snapshot}),
+         %{
+           state
+           | subs: Map.put(state.subs, id, shape),
+             by_terminal: Map.put(state.by_terminal, {:worktree_setup, thread_id}, id)
+         }}
+
+      {:error, reason} ->
+        {:push, Protocol.encode(error_frame(id, reason)), state}
+    end
+  end
+
   defp subscribe(state, id, {:provider_auth, node, instance} = shape, _offset) do
     case remote(node, T3.ProviderAuth, :subscribe, [instance, self()]) do
       {:ok, {:ok, auth}} ->
@@ -410,6 +436,15 @@ defmodule T3.Web.Socket do
       {{:config, node}, subs} ->
         :erpc.cast(node, T3.Settings, :unwatch, [self()])
         %{state | subs: subs, by_terminal: Map.delete(state.by_terminal, {:settings, node})}
+
+      {{:worktree_setup, node, thread_id}, subs} ->
+        :erpc.cast(node, T3.WorktreeSetup, :unsubscribe, [thread_id, self()])
+
+        %{
+          state
+          | subs: subs,
+            by_terminal: Map.delete(state.by_terminal, {:worktree_setup, thread_id})
+        }
 
       {{:provider_auth, node, instance}, subs} ->
         :erpc.cast(node, T3.ProviderAuth, :unsubscribe, [instance, self()])

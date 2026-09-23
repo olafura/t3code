@@ -245,35 +245,154 @@ defmodule T3.Orchestration do
       )
   end
 
-  @doc "Creates a thread with its first message (`orchestration.launchThread`)."
+  @doc """
+  Creates a thread, in the project root, an existing worktree, or a new worktree,
+  and sends its first message when there is one (`orchestration.launchThread`). A
+  new worktree is prepared first (`T3.WorktreeSetup`), with the message's run
+  waiting as `preparing` until it is ready.
+  """
   @spec launch_thread(map) :: {:ok, map} | {:error, String.t()}
-  def launch_thread(%{"threadId" => thread_id, "initialMessage" => message} = input) do
+  def launch_thread(input) do
+    thread_id = input["threadId"] || T3.Environment.uuid4()
+    strategy = input["workspaceStrategy"] || %{"type" => "root"}
     at = Entities.now()
 
-    {:ok, _} =
+    thread =
+      Entities.thread(Map.put(input, "threadId", thread_id), at)
+      |> Map.merge(workspace_fields(strategy))
+
+    {:ok, created} =
       T3.Streams.transact(thread_id, :thread, fn state ->
         case StreamState.get(state, "thread")[thread_id] do
-          nil ->
-            {[{"thread", thread_id, Patch.diff(nil, Entities.thread(input, at))}],
-             {:ok, :created}}
-
-          _ ->
-            {[], {:ok, :resumed}}
+          nil -> {[{"thread", thread_id, Patch.diff(nil, thread)}], {:ok, :created}}
+          _ -> {[], {:ok, :resumed}}
         end
       end)
 
-    command =
-      Map.merge(message, %{
-        "type" => "message.dispatch",
-        "commandId" => "#{input["commandId"]}:initial-message",
-        "threadId" => thread_id,
-        "createdBy" => "user",
-        "creationSource" => input["creationSource"] || "web",
-        "modelSelection" => input["modelSelection"]
-      })
+    result = %{"threadId" => thread_id, "resumed" => created == :resumed}
 
-    with {:ok, _} <- dispatch(command),
-         do: {:ok, %{"threadId" => thread_id, "resumed" => false}}
+    case input["initialMessage"] do
+      nil ->
+        {:ok, result}
+
+      message ->
+        if input["generateTitle"] == true, do: generate_title(thread_id, message["text"])
+
+        command =
+          Map.merge(message, %{
+            "type" => "message.dispatch",
+            "commandId" => "#{input["commandId"]}:initial-message",
+            "threadId" => thread_id,
+            "createdBy" => "user",
+            "creationSource" => input["creationSource"] || "web",
+            "modelSelection" => input["modelSelection"]
+          })
+
+        launched =
+          if strategy["type"] == "worktree" and created == :created,
+            do: launch_in_worktree(thread_id, thread, strategy, command),
+            else: dispatch(command)
+
+        with {:ok, _} <- launched, do: {:ok, result}
+    end
+  end
+
+  defp workspace_fields(%{"type" => "existing_worktree"} = strategy),
+    do: %{"worktreePath" => strategy["worktreePath"], "branch" => strategy["branch"]}
+
+  defp workspace_fields(%{"type" => "root", "branch" => branch}) when is_binary(branch),
+    do: %{"branch" => branch}
+
+  defp workspace_fields(_strategy), do: %{"branch" => nil}
+
+  defp launch_in_worktree(thread_id, thread, strategy, command) do
+    project =
+      case T3.Shell.row(node(), thread["projectId"]) do
+        {"project", row} -> row
+        _ -> nil
+      end
+
+    with %{"workspaceRoot" => _} <- project || {:error, "The project is not on this node."},
+         {:ok, attachments} <- T3.Attachments.claim(thread_id, command["attachments"] || []),
+         command =
+           Map.merge(command, %{
+             "attachments" => attachments,
+             "dispatchMode" => %{"type" => "defer_start"}
+           }),
+         {:ok, {:prepared, run_id}} <-
+           T3.Streams.transact(thread_id, :thread, &decide_message(&1, thread_id, command)) do
+      :ok = T3.WorktreeSetup.start(thread_id, run_id, project, strategy, command["text"])
+      {:ok, %{"sequence" => sequence(thread_id)}}
+    end
+  end
+
+  # A title from the first message, in the background; the thread keeps its own
+  # until one arrives.
+  defp generate_title(thread_id, text) when is_binary(text) and text != "" do
+    Task.start(fn ->
+      root =
+        case T3.Shell.row(node(), thread_id) do
+          {"thread", row} -> row["worktreePath"] || project_root(row["projectId"])
+          _ -> nil
+        end
+
+      with {:ok, %{"title" => title}} <-
+             T3.TextGeneration.thread_title(root || System.tmp_dir!(), text),
+           title when title != "" <- title |> String.trim() |> String.slice(0, 80) do
+        dispatch(%{"type" => "thread.metadata.update", "threadId" => thread_id, "title" => title})
+      else
+        {:error, reason} ->
+          require Logger
+          Logger.warning("thread title not generated: #{inspect(reason)}")
+
+        _ ->
+          :ok
+      end
+    end)
+  end
+
+  defp generate_title(_thread_id, _text), do: :ok
+
+  @doc "Starts the run a prepared workspace was waiting for."
+  def release_prepared(thread_id, run_id) do
+    decide = fn state ->
+      thread = StreamState.get(state, "thread")[thread_id]
+      runs = StreamState.list(state, "run")
+
+      with %{"status" => "preparing"} = run <- StreamState.get(state, "run")[run_id],
+           %{} = message <- StreamState.get(state, "message")[run["userMessageId"]] do
+        new_run(state, thread, runs, message, run)
+      else
+        _ -> {[], {:error, "the run is not waiting for its workspace"}}
+      end
+    end
+
+    case T3.Streams.transact(thread_id, :thread, decide) do
+      {:ok, turn} ->
+        :ok = T3.Checkpoint.baseline(turn.cwd, turn.scope_id, turn.run_ordinal - 1)
+        start_turn(thread_id, turn)
+
+      {:error, _} = error ->
+        error
+    end
+  end
+
+  @doc "Ends a run whose workspace could not be prepared (`failed` or `cancelled`)."
+  def fail_prepared(thread_id, run_id, status) do
+    T3.Streams.transact(thread_id, :thread, fn state ->
+      change =
+        upsert(state, "run", run_id, fn
+          %{"status" => "preparing"} = run ->
+            Map.merge(run, %{"status" => status, "completedAt" => Entities.now()})
+
+          run ->
+            run
+        end)
+
+      {Enum.reject([change], &is_nil/1), :ok}
+    end)
+
+    start_next(thread_id)
   end
 
   # The provider driver for an instance: its own id for ACP agents.
@@ -544,6 +663,9 @@ defmodule T3.Orchestration do
       thread == nil ->
         {[], {:error, "unknown thread #{thread_id}"}}
 
+      get_in(command, ["dispatchMode", "type"]) == "defer_start" ->
+        prepare_run(state, thread, runs, command)
+
       active = Enum.find(runs, &(&1["status"] in @active_statuses)) ->
         intent = command["deliveryIntent"]
         mode = get_in(command, ["dispatchMode", "type"])
@@ -572,6 +694,15 @@ defmodule T3.Orchestration do
       true ->
         new_run(state, thread, runs, command)
     end
+  end
+
+  # A message whose run waits for its workspace (`release_prepared/2`).
+  defp prepare_run(state, thread, runs, command) do
+    {changes, {:ok, :queued}} = queue_run(state, thread, runs, command, nil)
+
+    [{"run", run_id, %{"s" => run}} | rest] = changes
+    run = Map.merge(run, %{"status" => "preparing", "queuePosition" => nil})
+    {[{"run", run_id, %{"s" => run}} | rest], {:ok, {:prepared, run_id}}}
   end
 
   # A message for later: its run waits in the queue, with the message itself. A
@@ -768,7 +899,11 @@ defmodule T3.Orchestration do
                 "createdBy" => command["createdBy"] || "user",
                 "creationSource" => command["creationSource"] || "web",
                 "messageId" => message_id,
-                "inputIntent" => if(queued, do: "queued_turn", else: "turn_start"),
+                "inputIntent" =>
+                  if(queued && queued["status"] == "queued",
+                    do: "queued_turn",
+                    else: "turn_start"
+                  ),
                 "text" => text,
                 "attachments" => command["attachments"] || []
               }

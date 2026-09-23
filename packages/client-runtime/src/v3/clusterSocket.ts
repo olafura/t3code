@@ -31,6 +31,11 @@ export type ProviderAuthShape = {
   readonly node: string;
   readonly instanceId: string;
 };
+export type WorktreeSetupShape = {
+  readonly type: "worktreeSetup";
+  readonly node: string;
+  readonly threadId: string;
+};
 export type GitActionShape = {
   readonly type: "gitAction";
   readonly node: string;
@@ -44,7 +49,8 @@ export type Shape =
   | TerminalsShape
   | VcsShape
   | GitActionShape
-  | ProviderAuthShape;
+  | ProviderAuthShape
+  | WorktreeSetupShape;
 
 /** A failed RPC or subscription; `detail` is the contract error as `{_tag, ...fields}`. */
 export class ClusterRpcError extends Error {

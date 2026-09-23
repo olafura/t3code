@@ -14,6 +14,8 @@ defmodule T3.Web.Protocol do
       opened if needed; a snapshot, then its events
     * `{"type": "terminals", "node": n}`: that node's terminal summaries, then changes
     * `{"type": "vcs", "node": n, "cwd": dir}`: a checkout's git status, then changes
+    * `{"type": "worktreeSetup", "node": n, "threadId": id}`: a new thread's worktree
+      setup (`WorktreeSetupStreamEvent`: null, or a snapshot), then changes
     * `{"type": "providerAuth", "node": n, "instanceId": id}`: that provider
       instance's sign-in state (`ProviderAuthState`), then changes
     * `{"type": "gitAction", "node": n, "input": GitRunStackedActionInput}`: runs the
@@ -49,6 +51,7 @@ defmodule T3.Web.Protocol do
       {"t": "vcs", "id", "event"}        (VcsStatusStreamEvent)
       {"t": "gitAction", "id", "event"}  (GitActionProgressEvent)
       {"t": "providerAuth", "id", "state"} (ProviderAuthState)
+      {"t": "worktreeSetup", "id", "event"} (WorktreeSetupStreamEvent)
       {"t": "rpc.result", "id", "result"} / {"t": "rpc.error", "id", "error", "detail"?}
         (`detail` is the contract error as `{"_tag", ...fields}` when there is one)
       {"t": "pong"}
@@ -133,6 +136,11 @@ defmodule T3.Web.Protocol do
        )
        when is_binary(id) do
     with {:ok, node} <- known_node(node, nodes), do: {:ok, {:git_action, node, input}}
+  end
+
+  defp decode_shape(%{"type" => "worktreeSetup", "node" => node, "threadId" => id}, nodes)
+       when is_binary(id) do
+    with {:ok, node} <- known_node(node, nodes), do: {:ok, {:worktree_setup, node, id}}
   end
 
   defp decode_shape(%{"type" => "providerAuth", "node" => node, "instanceId" => id}, nodes)

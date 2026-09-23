@@ -77,6 +77,51 @@ defmodule T3.TextGeneration do
     generate(cwd, prompt, ~w(title body))
   end
 
+  @doc "A short branch name for the work a message asks for: `%{\"branch\"}`."
+  def branch_name(cwd, message) do
+    prompt =
+      Enum.join(
+        [
+          "You generate concise git branch names.",
+          "Return a JSON object with key: branch.",
+          "Rules:",
+          "- Branch should describe the requested work from the user message.",
+          "- Keep it short and specific (2-6 words).",
+          "- Use plain words only, no issue prefixes and no punctuation-heavy text.",
+          "",
+          "User message:",
+          limit(message, 8_000)
+        ],
+        "\n"
+      )
+
+    generate(cwd, prompt, ~w(branch))
+  end
+
+  @doc "A title for a new thread from its first message: `%{\"title\"}`."
+  def thread_title(cwd, message) do
+    prompt =
+      Enum.join(
+        [
+          "Generate a title that will help the user recognize this T3 Code thread weeks later.",
+          "Return JSON with key title.",
+          "Title the subject and the outcome the user wants, not how the agent should work.",
+          "Editorial rules:",
+          "- 3-8 words, fewer than 40 characters.",
+          "- Use a compact noun phrase or clear action phrase.",
+          "- Name the product change, not the mock, plan, report, branch, or PR used to produce it.",
+          "- Do not claim the work is complete, and do not copy and truncate the user's message.",
+          "- Avoid quotes, labels, filler, and trailing punctuation.",
+          "",
+          "User message:",
+          limit(message, 8_000)
+        ],
+        "\n"
+      )
+
+    generate(cwd, prompt, ~w(title))
+  end
+
   defp limit(text, max) do
     text = String.trim(text || "")
     if String.length(text) > max, do: String.slice(text, 0, max) <> "\n[truncated]", else: text
@@ -95,27 +140,36 @@ defmodule T3.TextGeneration do
 
     cond do
       selection["instanceId"] == "codex" and System.find_executable(codex_command()) ->
-        codex(cwd, prompt, schema, model)
+        codex(cwd, prompt, schema, model, option(selection, "reasoningEffort") || "low")
 
       selection["instanceId"] == "claudeAgent" and System.find_executable(claude_command()) ->
-        claude(cwd, prompt, schema, model || "haiku")
+        claude(cwd, prompt, schema, model || "haiku", option(selection, "effort"))
 
       System.find_executable(claude_command()) ->
-        claude(cwd, prompt, schema, "haiku")
+        claude(cwd, prompt, schema, "haiku", nil)
 
       System.find_executable(codex_command()) ->
-        codex(cwd, prompt, schema, nil)
+        codex(cwd, prompt, schema, nil, "low")
 
       true ->
         {:error, "Install Claude Code or Codex to generate this text."}
     end
   end
 
-  defp claude(cwd, prompt, schema, model) do
+  defp option(selection, id) do
+    Enum.find_value(selection["options"] || [], fn
+      %{"id" => ^id, "value" => value} when is_binary(value) -> value
+      _ -> nil
+    end)
+  end
+
+  defp claude(cwd, prompt, schema, model, effort) do
     args =
       ~w(-p --output-format json --json-schema) ++
-        [JSON.encode!(schema), "--model", model, "--tools"] ++
-        ["", "--disable-slash-commands", "--strict-mcp-config", "--permission-mode", "dontAsk"]
+        [JSON.encode!(schema), "--model", model] ++
+        if(effort, do: ["--effort", effort], else: []) ++
+        ["--settings", ~s({"disableAllHooks":true}), "--tools", ""] ++
+        ["--disable-slash-commands", "--strict-mcp-config", "--permission-mode", "dontAsk"]
 
     with {:ok, out} <- run([claude_command() | args], cwd, prompt),
          {:ok, decoded} <- JSON.decode(out),
@@ -135,7 +189,7 @@ defmodule T3.TextGeneration do
 
   defp structured(_), do: nil
 
-  defp codex(cwd, prompt, schema, model) do
+  defp codex(cwd, prompt, schema, model, effort) do
     dir = Path.join(System.tmp_dir!(), "t3-text-#{System.unique_integer([:positive])}")
     File.mkdir_p!(dir)
     schema_path = Path.join(dir, "schema.json")
@@ -145,6 +199,7 @@ defmodule T3.TextGeneration do
     args =
       ~w(exec --ephemeral --skip-git-repo-check -s read-only) ++
         if(model, do: ["--model", model], else: []) ++
+        ["--config", ~s(model_reasoning_effort="#{effort}")] ++
         ["--output-schema", schema_path, "--output-last-message", output_path, "-"]
 
     try do
@@ -178,14 +233,23 @@ defmodule T3.TextGeneration do
         {:ok, IO.iodata_to_binary(out)}
 
       {:ok, {_out, err, status}} ->
-        {:error,
-         "#{Path.basename(command)} failed (#{inspect(status)}): #{err |> IO.iodata_to_binary() |> String.trim() |> String.slice(0, 500)}"}
+        {:error, "#{Path.basename(command)} failed (#{inspect(status)}): #{failure(err)}"}
 
       nil ->
         {:error, "#{Path.basename(command)} timed out"}
     end
   rescue
     error -> {:error, Exception.message(error)}
+  end
+
+  # CLIs print a banner first and the reason last; keep the error lines when there are any.
+  defp failure(err) do
+    lines = err |> IO.iodata_to_binary() |> String.split("\n", trim: true)
+    errors = Enum.filter(lines, &String.starts_with?(&1, "ERROR"))
+
+    if(errors == [], do: lines, else: Enum.uniq(errors))
+    |> Enum.join("\n")
+    |> String.slice(-500, 500)
   end
 
   defp claude_command, do: Application.get_env(:t3, :text_claude_command, "claude")

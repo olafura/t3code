@@ -43,6 +43,7 @@ import {
   TerminalSessionLookupError,
   ThreadId,
   WS_METHODS,
+  WorktreeSetupStreamEvent,
   WsRpcGroup,
 } from "@t3tools/contracts";
 import { applyServerSettingsPatch } from "@t3tools/shared/serverSettings";
@@ -72,6 +73,7 @@ import { ThreadShapeFold, type ShapeEvent, type ShapeRow } from "./threadShape.t
 const decodeConfig = Schema.decodeUnknownSync(Schema.toCodecJson(ServerConfig));
 const decodeProviders = Schema.decodeUnknownSync(Schema.toCodecJson(ServerProviders));
 const decodeAuthState = Schema.decodeUnknownSync(Schema.toCodecJson(ProviderAuthState));
+const decodeWorktreeSetup = Schema.decodeUnknownSync(Schema.toCodecJson(WorktreeSetupStreamEvent));
 const decodeSetupError = Schema.decodeUnknownOption(ProviderSetupError);
 const decodeTerminalError = Schema.decodeUnknownOption(TerminalError);
 const settingsCodec = Schema.toCodecJson(ServerSettings);
@@ -462,6 +464,16 @@ export function makeV3Session(input: {
         ),
       );
 
+    // A new thread's worktree is prepared on its node.
+    const worktreeSetup = (request: { readonly threadId: string }) =>
+      shapeStream(socket, { type: "worktreeSetup", node, threadId: request.threadId }, (frame) =>
+        frame.t === "worktreeSetup" ? [decodeWorktreeSetup(frame.event)] : [],
+      );
+    const cancelWorktreeSetup = forward(
+      WS_METHODS.worktreeSetupCancel,
+      (_request: object, _message, cause) => cause,
+    );
+
     // Signing a provider in happens on the node that runs it.
     const setupError = (instanceId: string, operation: string, message: string, detail: unknown) =>
       decodeSetupError(detail).pipe(
@@ -717,6 +729,8 @@ export function makeV3Session(input: {
             failure: "operation_failed",
           }),
       ),
+      [WS_METHODS.subscribeWorktreeSetup]: worktreeSetup,
+      [WS_METHODS.worktreeSetupCancel]: cancelWorktreeSetup,
       [WS_METHODS.providerAuthSubscribe]: providerAuthSubscribe,
       [WS_METHODS.providerAuthStart]: providerAuthCommand(WS_METHODS.providerAuthStart, "start"),
       [WS_METHODS.providerAuthRespond]: providerAuthCommand(
