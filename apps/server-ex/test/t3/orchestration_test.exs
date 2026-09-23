@@ -174,4 +174,75 @@ defmodule T3.OrchestrationTest do
                StreamState.list(await_run(thread_id, "interrupted"), "run-attempt")
     end
   end
+
+  describe "approvals" do
+    for {instance, answer_text} <- [{"codex", nil}, {"claudeAgent", "allowed"}] do
+      test "#{instance}: a prompt becomes a pending request, and accepting it lets the turn go on" do
+        thread_id = launch("approve this", unquote(instance))
+        request = await_request(thread_id)
+        assert %{"status" => "pending", "kind" => "command"} = request
+
+        assert [%{"type" => "approval_request", "status" => "waiting", "prompt" => "touch x"}] =
+                 thread_id
+                 |> current()
+                 |> StreamState.list("turn-item")
+                 |> Enum.filter(&(&1["type"] == "approval_request"))
+
+        assert {:ok, _} =
+                 Orchestration.dispatch(%{
+                   "type" => "runtime-request.respond",
+                   "threadId" => thread_id,
+                   "requestId" => request["id"],
+                   "decision" => "accept"
+                 })
+
+        state = await_run(thread_id, "completed")
+
+        assert [%{"status" => "resolved", "decision" => "accept"}] =
+                 StreamState.list(state, "runtime-request")
+
+        if unquote(answer_text) do
+          assert Enum.any?(
+                   StreamState.list(state, "turn-item"),
+                   &(&1["text"] == unquote(answer_text))
+                 )
+        else
+          assert Enum.any?(
+                   StreamState.list(state, "turn-item"),
+                   &(&1["type"] == "command_execution" and &1["status"] == "completed")
+                 )
+        end
+      end
+    end
+
+    test "declining a Claude prompt is passed on to Claude" do
+      thread_id = launch("approve this", "claudeAgent")
+      request = await_request(thread_id)
+
+      {:ok, _} =
+        Orchestration.dispatch(%{
+          "type" => "runtime-request.respond",
+          "threadId" => thread_id,
+          "requestId" => request["id"],
+          "decision" => "decline"
+        })
+
+      state = await_run(thread_id, "completed")
+      assert Enum.any?(StreamState.list(state, "turn-item"), &(&1["text"] == "denied"))
+    end
+  end
+
+  defp current(thread_id), do: T3.Streams.Server.state(T3.Streams.ensure(thread_id))
+
+  defp await_request(thread_id) do
+    receive do
+      {:t3_stream, ^thread_id, _} ->
+        case thread_id |> current() |> StreamState.list("runtime-request") do
+          [%{"status" => "pending"} = request] -> request
+          _ -> await_request(thread_id)
+        end
+    after
+      5_000 -> flunk("no approval request")
+    end
+  end
 end

@@ -37,6 +37,21 @@ defmodule T3.Orchestration do
          do: {:ok, %{"sequence" => sequence(thread_id)}}
   end
 
+  def dispatch(%{"type" => "runtime-request.respond", "threadId" => thread_id} = command) do
+    decision = command["decision"] || "decline"
+
+    result =
+      Enum.find_value(
+        [T3.Codex.ThreadRuntime, T3.Claude.ThreadRuntime],
+        {:error, "no pending request"},
+        fn runtime ->
+          if runtime.respond(thread_id, command["requestId"], decision) == :ok, do: :ok
+        end
+      )
+
+    with :ok <- result, do: {:ok, %{"sequence" => sequence(thread_id)}}
+  end
+
   def dispatch(%{"type" => type}), do: {:error, "#{type} is not supported by this node yet"}
 
   @doc "Creates a thread with its first message (`orchestration.launchThread`)."

@@ -22,8 +22,8 @@ defmodule T3.Claude.ThreadRuntime do
 
   @state_version 1
 
-  # runtimeMode -> the CLI's permission mode. Prompts are not answered yet, so
-  # modes that would ask are declined in `handle_info/2`.
+  # runtimeMode -> the CLI's permission mode; prompts it raises become approval
+  # requests the user answers in the client.
   @permission_modes %{
     "full-access" => "bypassPermissions",
     "auto-accept-edits" => "acceptEdits",
@@ -45,6 +45,15 @@ defmodule T3.Claude.ThreadRuntime do
     case Registry.lookup(T3.Claude.Registry, thread_id) do
       [{pid, _}] -> GenServer.call(pid, :interrupt, 15_000)
       [] -> {:error, "no active Claude turn in this thread"}
+    end
+  end
+
+  @doc "Answers a permission prompt with a `ProviderApprovalDecision`."
+  @spec respond(String.t(), String.t(), String.t()) :: :ok | {:error, String.t()}
+  def respond(thread_id, request_id, decision) do
+    case Registry.lookup(T3.Claude.Registry, thread_id) do
+      [{pid, _}] -> GenServer.call(pid, {:respond, request_id, decision})
+      [] -> {:error, "no pending request"}
     end
   end
 
@@ -78,7 +87,9 @@ defmodule T3.Claude.ThreadRuntime do
        # Streamed content blocks of the message in flight: index -> native item key.
        blocks: %{},
        message_id: nil,
-       interrupted: false
+       interrupted: false,
+       # Open permission prompts: request id -> the CLI's control request id.
+       requests: %{}
      }}
   end
 
@@ -154,18 +165,46 @@ defmodule T3.Claude.ThreadRuntime do
 
   def handle_call(:interrupt, _from, state), do: {:reply, {:error, "no running turn"}, state}
 
+  def handle_call({:respond, request_id, decision}, _from, state) do
+    case Map.pop(state.requests, request_id) do
+      {nil, _} ->
+        {:reply, {:error, "no pending request #{request_id}"}, state}
+
+      {control_id, requests} ->
+        answer =
+          if decision in ["accept", "acceptForSession", "acceptAlways"],
+            do: :allow,
+            else: {:deny, "The user declined."}
+
+        Session.answer_permission(state.session, control_id, answer)
+        state = resolve_request(%{state | requests: requests}, request_id, decision)
+        {:reply, :ok, state}
+    end
+  end
+
   @impl true
   def handle_info({:claude, _session, {:message, message}}, state),
     do: {:noreply, message(message, state)}
 
-  def handle_info({:claude, session, {:permission, id, tool, _input, _context}}, state) do
-    Session.answer_permission(
-      session,
-      id,
-      {:deny, "#{tool} needs approval, which this node cannot ask for yet."}
-    )
-
+  def handle_info(
+        {:claude, session, {:permission, id, _tool, _input, _context}},
+        %{turn: nil} = state
+      ) do
+    Session.answer_permission(session, id, {:deny, "No turn is running."})
     {:noreply, state}
+  end
+
+  def handle_info({:claude, _session, {:permission, id, tool, input, _context}}, state) do
+    {kind, prompt} =
+      cond do
+        tool == "Bash" -> {"command", input["command"]}
+        tool in @file_tools -> {"file-change", input["file_path"]}
+        tool in ["Read", "Glob", "Grep"] -> {"file-read", input["file_path"] || input["pattern"]}
+        true -> {"permission", tool}
+      end
+
+    {state, request_id} = open_request(flush(state), id, kind, prompt)
+    {:noreply, %{state | requests: Map.put(state.requests, request_id, id)}}
   end
 
   def handle_info({:EXIT, session, _reason}, %{session: session} = state) do
@@ -364,11 +403,14 @@ defmodule T3.Claude.ThreadRuntime do
   defp end_turn(state, status, failure) do
     state = flush(state)
 
-    # Items still open when the turn ends are closed with it.
+    # Items and prompts still open when the turn ends are closed with it.
     state = close_open_items(state, status)
 
+    state =
+      Enum.reduce(Map.keys(state.requests), state, &resolve_request(&2, &1, nil, "cancelled"))
+
     finish(state, status, failure)
-    %{state | turn: nil, items: %{}, blocks: %{}}
+    %{state | turn: nil, items: %{}, blocks: %{}, requests: %{}}
   end
 
   defp block_key(message_id, index), do: "#{message_id}:#{index}"

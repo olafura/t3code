@@ -119,6 +119,106 @@ defmodule T3.Orchestration.TurnWriter do
     state
   end
 
+  @doc """
+  Opens an approval prompt: a pending runtime request, the waiting approval item,
+  and its node. `request_kind` is a `ProviderRequestKind` ("command", "file-change",
+  "file-read", "permission"). Returns `{state, request_id}`; the runtime keeps what
+  it needs to answer the provider under that id.
+  """
+  def open_request(state, native, request_kind, prompt) do
+    ids = state.turn.ids
+    driver = Entities.driver(ids)
+    at = Entities.now()
+    request_id = "runtime-request:#{driver}:#{native}"
+    node_id = "node:approval:#{native}"
+    item_id = "turn-item:approval:#{native}"
+    item_ids = Map.put(ids, :node, node_id)
+
+    commit(state, fn stream ->
+      [
+        Orchestration.create(
+          "node",
+          node_id,
+          Entities.node(ids, node_id, "approval_request", "waiting", at, %{
+            "runtimeRequestId" => request_id
+          })
+        ),
+        Orchestration.create("runtime-request", request_id, %{
+          "id" => request_id,
+          "nodeId" => node_id,
+          "providerTurnId" => Map.get(ids, :provider_turn),
+          "nativeRequestRef" => Entities.provider_ref(native, driver),
+          "kind" => request_kind,
+          "status" => "pending",
+          "responseCapability" => %{
+            "type" => "live",
+            "providerSessionId" => "provider-session:#{driver}:#{ids.thread}"
+          },
+          "createdAt" => at,
+          "resolvedAt" => nil
+        }),
+        Orchestration.create(
+          "turn-item",
+          item_id,
+          Entities.turn_item(
+            item_ids,
+            item_id,
+            "approval_request",
+            Orchestration.next_ordinal(stream),
+            "waiting",
+            at,
+            %{
+              "requestId" => request_id,
+              "requestKind" => request_kind
+            }
+          )
+          |> then(
+            &if(is_binary(prompt) and prompt != "", do: Map.put(&1, "prompt", prompt), else: &1)
+          )
+        )
+      ]
+    end)
+
+    {state, request_id}
+  end
+
+  @doc "Records the decision on a prompt and closes its item and node."
+  def resolve_request(state, request_id, decision, status \\ "resolved") do
+    at = Entities.now()
+
+    native =
+      String.replace_prefix(request_id, "runtime-request:#{Entities.driver(state.turn.ids)}:", "")
+
+    item_status = if status == "resolved", do: "completed", else: "cancelled"
+
+    commit(state, fn stream ->
+      [
+        Orchestration.upsert(
+          stream,
+          "runtime-request",
+          request_id,
+          &(&1
+            |> Map.merge(%{"status" => status, "resolvedAt" => at})
+            |> then(fn r -> if decision, do: Map.put(r, "decision", decision), else: r end))
+        ),
+        Orchestration.upsert(
+          stream,
+          "turn-item",
+          "turn-item:approval:#{native}",
+          &Map.merge(&1, %{"status" => item_status, "completedAt" => at, "updatedAt" => at})
+        ),
+        Orchestration.upsert(
+          stream,
+          "node",
+          "node:approval:#{native}",
+          &Map.merge(&1, %{"status" => "completed", "completedAt" => at})
+        )
+      ]
+    end)
+
+    state
+  end
+
   @doc "Closes this turn's items that are still running (their node too) with `status`."
   def close_open_items(state, status) do
     at = Entities.now()

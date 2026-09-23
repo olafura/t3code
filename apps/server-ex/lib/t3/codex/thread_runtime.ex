@@ -44,6 +44,15 @@ defmodule T3.Codex.ThreadRuntime do
     end
   end
 
+  @doc "Answers an approval prompt with a `ProviderApprovalDecision`."
+  @spec respond(String.t(), String.t(), String.t()) :: :ok | {:error, String.t()}
+  def respond(thread_id, request_id, decision) do
+    case Registry.lookup(T3.Codex.Registry, thread_id) do
+      [{pid, _}] -> GenServer.call(pid, {:respond, request_id, decision})
+      [] -> {:error, "no pending request"}
+    end
+  end
+
   def start_link(thread_id),
     do:
       GenServer.start_link(__MODULE__, thread_id,
@@ -71,7 +80,9 @@ defmodule T3.Codex.ThreadRuntime do
        items: %{},
        buffer: %{},
        flush_timer: nil,
-       failure: nil
+       failure: nil,
+       # Open approval prompts: request id -> the app-server request to answer.
+       requests: %{}
      }}
   end
 
@@ -102,11 +113,49 @@ defmodule T3.Codex.ThreadRuntime do
 
   def handle_call(:interrupt, _from, state), do: {:reply, {:error, "no running turn"}, state}
 
+  def handle_call({:respond, request_id, decision}, _from, state) do
+    case Map.pop(state.requests, request_id) do
+      {nil, _} ->
+        {:reply, {:error, "no pending request #{request_id}"}, state}
+
+      {rpc_id, requests} ->
+        # Codex has no "always"; the closest is for the rest of the session.
+        codex_decision = if decision == "acceptAlways", do: "acceptForSession", else: decision
+        Connection.respond(state.conn, rpc_id, {:ok, %{"decision" => codex_decision}})
+        state = resolve_request(%{state | requests: requests}, request_id, decision)
+        {:reply, :ok, state}
+    end
+  end
+
   @impl true
   def handle_info({:json_rpc, _conn, {:notification, method, params}}, state),
     do: {:noreply, notification(method, params || %{}, state)}
 
-  # Approvals and questions are not wired up yet; decline rather than hang the turn.
+  def handle_info({:json_rpc, _conn, {:request, id, method, params}}, %{turn: turn} = state)
+      when turn != nil and
+             method in [
+               "item/commandExecution/requestApproval",
+               "item/fileChange/requestApproval",
+               "item/permissions/requestApproval"
+             ] do
+    {kind, prompt} =
+      case method do
+        "item/commandExecution/requestApproval" ->
+          {"command", params["reason"] || params["command"]}
+
+        "item/fileChange/requestApproval" ->
+          {"file-change", params["reason"]}
+
+        _ ->
+          {"permission", params["reason"]}
+      end
+
+    native = params["approvalId"] || params["itemId"] || "request-#{id}"
+    {state, request_id} = open_request(flush(state), native, kind, prompt)
+    {:noreply, %{state | requests: Map.put(state.requests, request_id, id)}}
+  end
+
+  # Questions and other requests are not wired up yet; refuse rather than hang the turn.
   def handle_info({:json_rpc, conn, {:request, id, method, _params}}, state) do
     Connection.respond(
       conn,
@@ -302,8 +351,11 @@ defmodule T3.Codex.ThreadRuntime do
         do: turn["status"],
         else: "failed"
 
+    state =
+      Enum.reduce(Map.keys(state.requests), state, &resolve_request(&2, &1, nil, "cancelled"))
+
     finish(state, status, state.failure || get_in(turn, ["error", "message"]))
-    %{state | turn: nil, items: %{}}
+    %{state | turn: nil, items: %{}, requests: %{}}
   end
 
   defp notification(_method, _params, state), do: state

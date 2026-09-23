@@ -13,6 +13,14 @@ for line in sys.stdin:
     method, params, mid = msg.get("method"), msg.get("params") or {}, msg.get("id")
     if mid is None:
         continue
+    # A reply to our approval request: finish the command according to the decision.
+    if "result" in msg and mid == "approval-1":
+        decision = msg["result"]["decision"]
+        ctx = pending_ctx
+        status = "completed" if decision in ("accept", "acceptForSession") else "declined"
+        send({"method": "item/completed", "params": {**ctx, "item": {"type": "commandExecution", "id": "cmd-1", "command": "touch x", "status": status, "aggregatedOutput": "", "exitCode": 0}}})
+        send({"method": "turn/completed", "params": {**ctx, "turn": {"id": ctx["turnId"], "status": "completed"}}})
+        continue
     if method == "initialize":
         send({"id": mid, "result": {"userAgent": "fake", "platformOs": "test"}})
     elif method in ("thread/start", "thread/resume"):
@@ -25,6 +33,11 @@ for line in sys.stdin:
         ctx = {"threadId": thread_id, "turnId": turn_id}
         send({"method": "turn/started", "params": {**ctx, "turn": {"id": turn_id, "status": "inProgress"}}})
         if "wait" in text:
+            continue
+        if "approve" in text:
+            pending_ctx = ctx
+            send({"method": "item/started", "params": {**ctx, "item": {"type": "commandExecution", "id": "cmd-1", "command": "touch x", "status": "inProgress"}}})
+            send({"id": "approval-1", "method": "item/commandExecution/requestApproval", "params": {**ctx, "itemId": "cmd-1", "command": "touch x"}})
             continue
         send({"method": "item/started", "params": {**ctx, "item": {"type": "commandExecution", "id": "cmd-1", "command": "ls", "status": "inProgress"}}})
         send({"method": "item/commandExecution/outputDelta", "params": {**ctx, "itemId": "cmd-1", "delta": "a.txt\n"}})

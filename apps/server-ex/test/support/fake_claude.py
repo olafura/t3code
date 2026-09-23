@@ -11,6 +11,11 @@ session = "fake-session-1"
 turn = 0
 for line in sys.stdin:
     msg = json.loads(line)
+    if msg.get("type") == "control_response":
+        allowed = msg["response"]["response"]["behavior"] == "allow"
+        send({"type": "assistant", "session_id": session, "message": {"id": "m-perm", "role": "assistant", "content": [{"type": "text", "text": "allowed" if allowed else "denied"}]}})
+        send({"type": "result", "subtype": "success", "is_error": False, "result": "done", "session_id": session})
+        continue
     if msg.get("type") == "control_request":
         sub = msg["request"]["subtype"]
         send({"type": "control_response", "response": {"subtype": "success", "request_id": msg["request_id"], "response": {}}})
@@ -23,6 +28,9 @@ for line in sys.stdin:
     text = msg["message"]["content"] if isinstance(msg["message"]["content"], str) else ""
     send({"type": "system", "subtype": "init", "session_id": session, "model": "claude-haiku"})
     if "wait" in text:
+        continue
+    if "approve" in text:
+        send({"type": "control_request", "request_id": "perm-1", "request": {"subtype": "can_use_tool", "tool_name": "Bash", "input": {"command": "touch x"}}})
         continue
     ev = lambda e: send({"type": "stream_event", "session_id": session, "event": e})
     send({"type": "assistant", "session_id": session, "message": {"id": f"m{turn}a", "role": "assistant", "content": [{"type": "thinking", "thinking": "Let me look."}]}})
