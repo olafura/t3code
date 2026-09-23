@@ -269,6 +269,9 @@ describe("DesktopBackendConfiguration", () => {
         assert.deepEqual(config.args, ["start"]);
         assert.equal(config.bootstrapDelivery, "stdin");
         assert.equal(config.env.T3_BOOTSTRAP_STDIN, "1");
+        // Node sidecars run on this Electron binary.
+        assert.equal(config.env.T3_NODE_COMMAND, process.execPath);
+        assert.equal(config.env.T3_NODE_ELECTRON, "1");
         assert.equal(config.bootstrap.port, 4888);
         assert.match(config.bootstrap.desktopBootstrapToken, /^[0-9a-f]{48}$/i);
         // The node has no telemetry fds to write to.

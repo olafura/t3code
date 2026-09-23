@@ -524,7 +524,13 @@ const elixirNodeStartConfig = (
   args: ["start"],
   entryPath: releaseBin,
   cwd: NodeOS.homedir(),
-  env: { ...backendChildEnvPatch(), T3_BOOTSTRAP_STDIN: "1" },
+  // Its Node sidecars (Cursor) run on this Electron binary as Node.
+  env: {
+    ...backendChildEnvPatch(),
+    T3_BOOTSTRAP_STDIN: "1",
+    T3_NODE_COMMAND: process.execPath,
+    T3_NODE_ELECTRON: "1",
+  },
   extendEnv: true,
   bootstrap,
   bootstrapDelivery: "stdin",

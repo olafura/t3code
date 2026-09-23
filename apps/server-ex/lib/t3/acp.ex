@@ -23,7 +23,7 @@ defmodule T3.Acp do
     "pi" => %{binary: "pi", label: "Pi"}
   }
 
-  # The Cursor sidecar: in a release under priv/, in a checkout in packages/.
+  # The Cursor sidecar: bundled under priv/ in a release, from packages/ in a checkout.
   @cursor_checkout Path.expand("../../../../packages/cursor-acp/src/main.ts", __DIR__)
 
   # Instances of this driver run an agent from the ACP Registry (`T3.Acp.Catalog`).
@@ -94,8 +94,10 @@ defmodule T3.Acp do
             "cursor.json"
           ])
 
-        {:ok, ["node", cursor_script(), "--mode", runtime_mode || "approval-required"],
-         [{"T3_CURSOR_CREDENTIALS", credentials} | instance_env(entry)]}
+        {node, node_env} = node_command()
+
+        {:ok, [node, cursor_script(), "--mode", runtime_mode || "approval-required"],
+         [{"T3_CURSOR_CREDENTIALS", credentials} | node_env ++ instance_env(entry)]}
 
       {"pi", entry} ->
         with {:ok, command, env} <- T3.Acp.Catalog.command(%{"agentId" => "pi-acp"}),
@@ -113,8 +115,23 @@ defmodule T3.Acp do
   end
 
   defp cursor_script do
-    released = Application.app_dir(:t3, "priv/cursor-acp/src/main.ts")
+    released = Application.app_dir(:t3, "priv/cursor-acp/main.mjs")
     if File.exists?(released), do: released, else: @cursor_checkout
+  end
+
+  # The desktop app names its own Electron binary, which runs as Node with
+  # ELECTRON_RUN_AS_NODE (set for the sidecar only, never the node's terminals).
+  defp node_command do
+    case System.get_env("T3_NODE_COMMAND") do
+      command when command in [nil, ""] ->
+        {"node", []}
+
+      command ->
+        electron =
+          if System.get_env("T3_NODE_ELECTRON") == "1", do: [{"ELECTRON_RUN_AS_NODE", "1"}]
+
+        {command, electron || []}
+    end
   end
 
   # Variables set on the instance in settings, such as an API key.

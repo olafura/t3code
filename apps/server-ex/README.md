@@ -22,9 +22,14 @@ State lives in the repo's `.t3/elixir` during development; set `T3_HOME` elsewhe
 ## Release
 
 ```sh
-MIX_ENV=prod mix release        # _build/prod/rel/t3, about 31 MB with ERTS
+MIX_ENV=prod mix release        # _build/prod/rel/t3, about 80 MB with ERTS
 _build/prod/rel/t3/bin/t3 start # foreground; state in $T3_HOME (default ~/.t3/elixir)
 ```
+
+The release carries the Cursor sidecar (`packages/cursor-acp`, bundled with its
+dependencies for the build machine's platform), so building one needs `pnpm`, and
+running Cursor needs Node 22+ on the machine. The desktop app runs it on its own
+Electron binary instead (`T3_NODE_COMMAND`).
 
 A machine that has joined a cluster boots clustered: joining writes
 `$T3_HOME/cluster/vm.args`, which the release reads at start.
