@@ -828,8 +828,123 @@ defmodule T3.OrchestrationTest do
 
       assert Enum.any?(
                StreamState.list(state, "message"),
-               &(&1["text"] == "resumed at uuid-1")
+               &(&1["text"] == "resumed at uuid-1 fork False history False")
              )
+    end
+  end
+
+  describe "forks and handoffs" do
+    defp fork(source_id, run_id) do
+      fork_id = "thread-#{System.unique_integer([:positive])}"
+      :ok = T3.Streams.subscribe(fork_id, self(), nil)
+
+      {:ok, _} =
+        Orchestration.dispatch(%{
+          "type" => "thread.fork",
+          "commandId" => "cmd-fork-#{fork_id}",
+          "createdBy" => "user",
+          "creationSource" => "web",
+          "sourceThreadId" => source_id,
+          "targetThreadId" => fork_id,
+          "sourcePoint" => %{"type" => "run", "runId" => run_id}
+        })
+
+      fork_id
+    end
+
+    defp replies(state),
+      do: for(m <- StreamState.list(state, "message"), m["role"] == "assistant", do: m["text"])
+
+    defp claude, do: %{"modelSelection" => %{"instanceId" => "claudeAgent", "model" => "haiku"}}
+
+    test "a fork starts with its source's history and continues the native Codex thread" do
+      source_id = launch("hello")
+      [run] = runs(await_statuses(source_id, ["completed"]))
+      fork_id = fork(source_id, run["id"])
+
+      state = current(fork_id)
+
+      assert %{
+               "title" => "Try codex fork",
+               "lineage" => %{"parentThreadId" => ^source_id, "relationshipToParent" => "fork"},
+               "forkedFrom" => %{"threadId" => ^source_id}
+             } = StreamState.get(state, "thread")[fork_id]
+
+      assert [%{"status" => "completed", "threadId" => ^fork_id}] = runs(state)
+      assert "Hello from codex" in replies(state)
+
+      assert [%{"type" => "fork", "status" => "pending"}] =
+               StreamState.list(state, "context-transfer")
+
+      {:ok, _} = send_message(fork_id, "msg-fork-1", "where are we")
+      state = await_statuses(fork_id, ["completed", "completed"])
+
+      assert "on forked-native-thread-1-at-native-turn-1 history False merged False" in replies(
+               state
+             )
+
+      assert [%{"status" => "consumed", "resolution" => %{"strategy" => "native_fork"}}] =
+               StreamState.list(state, "context-transfer")
+    end
+
+    test "a fork on another provider gets the history as a transcript" do
+      source_id = launch("hello")
+      [run] = runs(await_statuses(source_id, ["completed"]))
+      fork_id = fork(source_id, run["id"])
+
+      {:ok, _} = send_message(fork_id, "msg-fork-1", "where are we", claude())
+      state = await_statuses(fork_id, ["completed", "completed"])
+
+      assert "resumed at None fork False history True" in replies(state)
+
+      assert [%{"resolution" => %{"strategy" => "portable_context"}}] =
+               StreamState.list(state, "context-transfer")
+
+      assert [%{"strategy" => "full_thread_summary", "summaryText" => summary}] =
+               StreamState.list(state, "context-handoff")
+
+      assert summary =~ "User: hello"
+      assert summary =~ "Assistant: Hello from codex"
+    end
+
+    test "switching provider mid-thread hands the conversation over" do
+      thread_id = launch("hello")
+      await_statuses(thread_id, ["completed"])
+
+      {:ok, _} = send_message(thread_id, "msg-user-2", "where are we", claude())
+      state = await_statuses(thread_id, ["completed", "completed"])
+
+      assert "resumed at None fork False history True" in replies(state)
+    end
+
+    test "merging a fork back brings its newer work to the parent's next run" do
+      source_id = launch("hello")
+      [run] = runs(await_statuses(source_id, ["completed"]))
+      fork_id = fork(source_id, run["id"])
+      {:ok, _} = send_message(fork_id, "msg-fork-1", "write fork.txt")
+      [_, fork_run] = runs(await_statuses(fork_id, ["completed", "completed"]))
+
+      {:ok, _} =
+        Orchestration.dispatch(%{
+          "type" => "thread.merge_back",
+          "commandId" => "cmd-merge",
+          "createdBy" => "user",
+          "sourceThreadId" => fork_id,
+          "targetThreadId" => source_id,
+          "sourcePoint" => %{"type" => "run", "runId" => fork_run["id"]}
+        })
+
+      {:ok, _} = send_message(source_id, "msg-user-2", "where are we")
+      state = await_statuses(source_id, ["completed", "completed"])
+
+      assert "on native-thread-1 history False merged True" in replies(state)
+
+      assert [%{"strategy" => "fork_delta_summary", "summaryText" => summary}] =
+               StreamState.list(state, "context-handoff")
+
+      # Only the fork's own work, not the history it started with.
+      assert summary =~ "User: write fork.txt"
+      refute summary =~ "User: hello"
     end
   end
 

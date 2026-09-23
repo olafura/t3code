@@ -55,6 +55,33 @@ defmodule T3.Orchestration do
     end
   end
 
+  def dispatch(%{"type" => "thread.fork", "targetThreadId" => thread_id} = command) do
+    with :ok <- T3.Orchestration.Fork.fork(command),
+         do: {:ok, %{"sequence" => sequence(thread_id)}}
+  end
+
+  def dispatch(%{"type" => "thread.merge_back", "targetThreadId" => thread_id} = command) do
+    with :ok <- T3.Orchestration.Fork.merge_back(command),
+         do: {:ok, %{"sequence" => sequence(thread_id)}}
+  end
+
+  # An empty thread; launch_thread also sends a first message.
+  def dispatch(%{"type" => "thread.create", "threadId" => thread_id} = command) do
+    thread =
+      command
+      |> Entities.thread(Entities.now())
+      |> Map.merge(Map.take(command, ~w(branch worktreePath)))
+
+    created =
+      T3.Streams.transact(thread_id, :thread, fn state ->
+        if StreamState.get(state, "thread")[thread_id],
+          do: {[], {:error, "Thread #{thread_id} already exists."}},
+          else: {[create("thread", thread_id, thread)], :ok}
+      end)
+
+    with :ok <- created, do: {:ok, %{"sequence" => sequence(thread_id)}}
+  end
+
   def dispatch(%{"type" => "checkpoint.rollback", "threadId" => thread_id} = command) do
     with :ok <- T3.Orchestration.Rollback.run(command),
          do: {:ok, %{"sequence" => sequence(thread_id)}}
@@ -814,14 +841,20 @@ defmodule T3.Orchestration do
       end
 
     # An imported thread has a provider thread (its native session) but no session yet.
+    fresh_session =
+      Entities.provider_session(session_id, cwd, selection["model"], at, driver, instance)
+
+    # A session made by an older server takes on what this one can do.
     session_change =
-      unless StreamState.get(state, "provider-session")[session_id] do
-        create(
-          "provider-session",
-          session_id,
-          Entities.provider_session(session_id, cwd, selection["model"], at, driver, instance)
-        )
-      end
+      if StreamState.get(state, "provider-session")[session_id],
+        do:
+          upsert(
+            state,
+            "provider-session",
+            session_id,
+            &Map.put(&1, "capabilities", fresh_session["capabilities"])
+          ),
+        else: create("provider-session", session_id, fresh_session)
 
     provider_changes =
       if provider_thread do
@@ -924,10 +957,14 @@ defmodule T3.Orchestration do
         |> Enum.reject(&is_nil/1)
       )
 
+    handoff = T3.Orchestration.Handoff.plan(state, provider_thread, driver, ids.run, ordinal, at)
+
     turn = %{
       ids: ids,
       run_ordinal: ordinal,
-      text: text,
+      text: T3.Orchestration.Handoff.prompt(handoff.context, text),
+      # A fork's first run continues the source's native thread from the fork point.
+      fork: handoff.fork,
       cwd: cwd,
       scope_id: scope_id,
       model: selection["model"],
@@ -949,7 +986,7 @@ defmodule T3.Orchestration do
       head: get_in(provider_thread || %{}, ["nativeConversationHeadRef", "nativeId"])
     }
 
-    {changes, {:ok, turn}}
+    {changes ++ handoff.changes, {:ok, turn}}
   end
 
   # A message that implements a proposed plan of this thread completes it.

@@ -75,15 +75,15 @@ defmodule T3.Orchestration.Entities do
     "context" => %{
       "acceptsSystemContext" => false,
       "acceptsDeveloperContext" => false,
-      "acceptsSyntheticUserContext" => false,
+      "acceptsSyntheticUserContext" => true,
       "canGenerateSummaries" => false,
-      "canConsumeHandoffSummaries" => false,
-      "supportsDeltaHandoff" => false,
-      "supportsFullThreadHandoff" => false,
-      "maxRecommendedHandoffChars" => nil
+      "canConsumeHandoffSummaries" => true,
+      "supportsDeltaHandoff" => true,
+      "supportsFullThreadHandoff" => true,
+      "maxRecommendedHandoffChars" => 60_000
     },
     "checkpointing" => %{
-      "appCanCheckpointFilesystem" => false,
+      "appCanCheckpointFilesystem" => true,
       "supportsNestedCheckpointScopes" => false,
       "providerCanRollbackConversation" => true,
       "providerRollbackReturnsSnapshot" => false,
@@ -110,13 +110,15 @@ defmodule T3.Orchestration.Entities do
   def driver(ids), do: Map.get(ids, :driver, "codex")
   def instance(ids), do: Map.get(ids, :instance, driver(ids))
 
-  # Codex (turn/steer) and Claude (a "now" message) take a message mid-turn.
+  # Codex (turn/steer) and Claude (a "now" message) take a message mid-turn, and
+  # fork their own threads; other agents fork through a transcript.
   defp capabilities(driver) do
-    put_in(
-      @codex_capabilities,
-      ["turns", "supportsActiveSteering"],
-      driver in ["codex", "claudeAgent"]
-    )
+    native = driver in ["codex", "claudeAgent"]
+
+    @codex_capabilities
+    |> put_in(["turns", "supportsActiveSteering"], native)
+    |> put_in(["threads", "canForkThread"], native)
+    |> put_in(["threads", "canForkFromTurn"], native)
   end
 
   def provider_session(id, cwd, model, at, driver \\ "codex", instance \\ "codex") do

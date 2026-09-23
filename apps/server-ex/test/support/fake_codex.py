@@ -1,7 +1,8 @@
 # Fake `codex app-server` for tests: answers the handshake and plays a scripted turn.
 # A turn whose text contains "wait" stays running until turn/interrupt; "approve" asks
 # to run a command, "ask" asks a question (item/tool/requestUserInput), and "write NAME"
-# creates the file NAME.
+# creates the file NAME. "where are we" says which native thread the turn ran on and whether
+# handed-off history or merged work came with the message.
 import json, os, sys
 
 def send(msg):
@@ -48,6 +49,12 @@ for line in sys.stdin:
         send({"method": "turn/started", "params": {**ctx, "turn": {"id": turn_id, "status": "inProgress"}}})
         if "wait" in text:
             waiting_ctx = ctx
+            continue
+        if "where are we" in text:
+            where = f"on {thread_id} history {'<conversation_history>' in text} merged {'<merged_work>' in text}"
+            send({"method": "item/started", "params": {**ctx, "item": {"type": "agentMessage", "id": "msg-where", "text": ""}}})
+            send({"method": "item/completed", "params": {**ctx, "item": {"type": "agentMessage", "id": "msg-where", "text": where}}})
+            send({"method": "turn/completed", "params": {**ctx, "turn": {"id": turn_id, "status": "completed"}}})
             continue
         if text.startswith("write "):
             open(text.split()[1], "w").write(text + "\n")
@@ -100,6 +107,9 @@ for line in sys.stdin:
         send({"method": "item/started", "params": {**ctx, "item": {"type": "agentMessage", "id": "msg-steer", "text": ""}}})
         send({"method": "item/completed", "params": {**ctx, "item": {"type": "agentMessage", "id": "msg-steer", "text": text}}})
         send({"method": "turn/completed", "params": {**ctx, "turn": {"id": ctx["turnId"], "status": "completed"}}})
+    elif method == "thread/fork":
+        thread_id = f"forked-{params['threadId']}-at-{params.get('lastTurnId')}"
+        send({"id": mid, "result": {"thread": {"id": thread_id}}})
     elif method == "thread/revert" and paginated:
         thread_id = f"native-thread-1-before-{params['beforeTurnId']}"
         send({"id": mid, "result": {"thread": {"id": thread_id, "turns": []}}})

@@ -411,6 +411,21 @@ defmodule T3.Codex.ThreadRuntime do
   defp ensure_native_thread(%{native_thread_id: id} = state, _turn) when is_binary(id),
     do: {:ok, state}
 
+  # A fork's first turn starts from a copy of the source thread, cut after its turn.
+  defp ensure_native_thread(state, %{fork: %{thread: source, turn: last}} = turn) do
+    params = %{
+      "threadId" => source,
+      "lastTurnId" => last,
+      "cwd" => turn.cwd,
+      "model" => turn.model
+    }
+
+    case Connection.call(state.conn, "thread/fork", params) do
+      {:ok, %{"thread" => %{"id" => id}}} -> {:ok, %{state | native_thread_id: id}}
+      {:error, reason} -> {:error, reason, state}
+    end
+  end
+
   defp ensure_native_thread(state, turn) do
     params = %{"cwd" => turn.cwd, "model" => turn.model}
 

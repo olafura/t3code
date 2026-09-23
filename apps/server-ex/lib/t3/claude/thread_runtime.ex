@@ -394,8 +394,9 @@ defmodule T3.Claude.ThreadRuntime do
       cd: turn.cwd,
       model: turn.model,
       permission_mode: permission_mode(turn),
-      resume: turn.native_thread_id,
-      resume_at: Map.get(turn, :head),
+      resume: fork_or(turn, :thread, turn.native_thread_id),
+      resume_at: fork_or(turn, :turn, Map.get(turn, :head)),
+      fork_session: Map.get(turn, :fork) != nil,
       partial_messages: true
     ]
 
@@ -410,6 +411,10 @@ defmodule T3.Claude.ThreadRuntime do
       {:error, reason} -> {:error, reason}
     end
   end
+
+  # A fork's first turn resumes the source session at the fork point, as a new session.
+  defp fork_or(%{fork: %{} = fork}, key, _default), do: Map.fetch!(fork, key)
+  defp fork_or(_turn, _key, default), do: default
 
   # --- messages ------------------------------------------------------------------
 

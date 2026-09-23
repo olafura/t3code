@@ -40,6 +40,7 @@ defmodule T3.Claude.Protocol do
         do: ["--resume-session-at=#{opts[:resume_at]}"],
         else: []
       ) ++
+      if(opts[:resume] && opts[:fork_session], do: ["--fork-session"], else: []) ++
       if(opts[:persist_session] == false, do: ["--no-session-persistence"], else: []) ++
       if(opts[:partial_messages] == true, do: ["--include-partial-messages"], else: [])
   end

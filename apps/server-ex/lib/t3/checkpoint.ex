@@ -146,12 +146,11 @@ defmodule T3.Checkpoint do
           do: {checkpoint["appRunOrdinal"], checkpoint}
 
     scopes = T3.StreamState.get(state, "checkpoint-scope")
-    root = Enum.find(Map.values(scopes), &(&1["kind"] == "root_run"))
 
     with {:to, %{} = to_checkpoint} <- {:to, ready[to]},
          {:scope, %{"cwd" => cwd}} <- {:scope, scopes[to_checkpoint["scopeId"]]},
          {:from, from_ref} when is_binary(from_ref) <-
-           {:from, if(from == 0, do: root && ref(root["id"], 0), else: ready[from]["ref"])},
+           {:from, if(from == 0, do: start_ref(state, cwd), else: ready[from]["ref"])},
          {:ok, diff} <-
            git(
              cwd,
@@ -167,6 +166,16 @@ defmodule T3.Checkpoint do
       {:from, _} -> {:error, "turn #{from} has no checkpoint"}
       {:error, reason} -> {:error, "git diff failed: #{inspect(reason)}"}
     end
+  end
+
+  # The workspace before the thread's first run: ordinal 0 of its first root scope.
+  # A fork holds its source's scope before its own, whose ordinal 0 was never taken.
+  defp start_ref(state, cwd) do
+    state
+    |> T3.StreamState.list("checkpoint-scope")
+    |> Enum.filter(&(&1["kind"] == "root_run"))
+    |> Enum.map(&ref(&1["id"], 0))
+    |> Enum.find(&exists?(cwd, &1))
   end
 
   defp diff_result(thread_id, from, to, diff),
