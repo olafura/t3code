@@ -5,6 +5,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import { HttpClient } from "effect/unstable/http";
 
+import { SHAPE_PROTOCOL_VERSION } from "../connection/compatibility.ts";
 import { RemoteEnvironmentAuthorization } from "../authorization/service.ts";
 import type { PreparedConnection } from "../connection/model.ts";
 import { environmentEndpointUrl } from "../environment/endpoint.ts";
@@ -67,16 +68,22 @@ export const boundedThreadSnapshotLoaderLayer: Layer.Layer<
     const remoteAuthorization = yield* Effect.serviceOption(RemoteEnvironmentAuthorization);
     return ThreadSnapshotLoader.of({
       load: (prepared: PreparedConnection, threadId: ThreadId) => {
+        // Protocol 3 servers stream threads over the socket and have no HTTP route.
+        if (prepared.orchestrationProtocolVersion === SHAPE_PROTOCOL_VERSION) {
+          return Effect.succeed({ _tag: "unavailable" } satisfies ThreadSnapshotLoadResult);
+        }
         const loadFullFallback = fetchEnvironmentThreadSnapshot({
           prepared,
           threadId,
           signer,
           remoteAuthorization,
         }).pipe(
-          Effect.map((snapshot): ThreadSnapshotLoadResult => ({
-            _tag: "present",
-            snapshot,
-          })),
+          Effect.map(
+            (snapshot): ThreadSnapshotLoadResult => ({
+              _tag: "present",
+              snapshot,
+            }),
+          ),
           Effect.provideService(HttpClient.HttpClient, httpClient),
           Effect.catchTags({
             EnvironmentResourceNotFoundError: () =>
@@ -103,19 +110,21 @@ export const boundedThreadSnapshotLoaderLayer: Layer.Layer<
           signer,
           remoteAuthorization,
         }).pipe(
-          Effect.map((bounded): ThreadSnapshotLoadResult => ({
-            _tag: "present",
-            snapshot: {
-              snapshotSequence: bounded.snapshotSequence,
-              projection: bounded.projection,
-              latestLocalTurnOrdinal: bounded.latestLocalTurnOrdinal,
-            },
-            history: {
-              historyCursor: bounded.historyCursor,
-              hasMoreHistory: bounded.hasMoreHistory,
-              latestLocalTurnOrdinal: bounded.latestLocalTurnOrdinal,
-            },
-          })),
+          Effect.map(
+            (bounded): ThreadSnapshotLoadResult => ({
+              _tag: "present",
+              snapshot: {
+                snapshotSequence: bounded.snapshotSequence,
+                projection: bounded.projection,
+                latestLocalTurnOrdinal: bounded.latestLocalTurnOrdinal,
+              },
+              history: {
+                historyCursor: bounded.historyCursor,
+                hasMoreHistory: bounded.hasMoreHistory,
+                latestLocalTurnOrdinal: bounded.latestLocalTurnOrdinal,
+              },
+            }),
+          ),
           Effect.provideService(HttpClient.HttpClient, httpClient),
           Effect.catchTags({
             EnvironmentResourceNotFoundError: () =>

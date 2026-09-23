@@ -8,6 +8,7 @@ import { HttpClient } from "effect/unstable/http";
 
 import { RemoteEnvironmentAuthorization } from "../authorization/service.ts";
 import type { PreparedConnection } from "../connection/model.ts";
+import { SHAPE_PROTOCOL_VERSION } from "../connection/compatibility.ts";
 import { environmentEndpointUrl } from "../environment/endpoint.ts";
 import { ManagedRelayDpopSigner } from "../relay/managedRelay.ts";
 import {
@@ -73,18 +74,21 @@ export const shellSnapshotLoaderLayer: Layer.Layer<
     const remoteAuthorization = yield* Effect.serviceOption(RemoteEnvironmentAuthorization);
     return ShellSnapshotLoader.of({
       load: (prepared: PreparedConnection) =>
-        fetchEnvironmentShellSnapshot({ prepared, signer, remoteAuthorization }).pipe(
-          Effect.map(Option.some<OrchestrationV2ShellSnapshot>),
-          Effect.provideService(HttpClient.HttpClient, httpClient),
-          Effect.catchCause((cause) =>
-            Effect.logWarning(
-              "Could not load the environment shell snapshot over HTTP; using the socket snapshot instead.",
-            ).pipe(
-              Effect.annotateLogs({ cause: Cause.pretty(cause) }),
-              Effect.as(Option.none<OrchestrationV2ShellSnapshot>()),
+        // Protocol 3 servers send the shell over the socket and have no HTTP route.
+        prepared.orchestrationProtocolVersion === SHAPE_PROTOCOL_VERSION
+          ? Effect.succeedNone
+          : fetchEnvironmentShellSnapshot({ prepared, signer, remoteAuthorization }).pipe(
+              Effect.map(Option.some<OrchestrationV2ShellSnapshot>),
+              Effect.provideService(HttpClient.HttpClient, httpClient),
+              Effect.catchCause((cause) =>
+                Effect.logWarning(
+                  "Could not load the environment shell snapshot over HTTP; using the socket snapshot instead.",
+                ).pipe(
+                  Effect.annotateLogs({ cause: Cause.pretty(cause) }),
+                  Effect.as(Option.none<OrchestrationV2ShellSnapshot>()),
+                ),
+              ),
             ),
-          ),
-        ),
     });
   }),
 );
