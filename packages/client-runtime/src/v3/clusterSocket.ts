@@ -19,7 +19,22 @@ export type StreamShape = {
 export type ConfigShape =
   | { readonly type: "config"; readonly node: string }
   | { readonly type: "config"; readonly environment: string };
-export type Shape = ShellShape | StreamShape | ConfigShape;
+export type TerminalShape = {
+  readonly type: "terminal";
+  readonly node: string;
+  readonly input: Readonly<Record<string, unknown>>;
+};
+export type TerminalsShape = { readonly type: "terminals"; readonly node: string };
+export type Shape = ShellShape | StreamShape | ConfigShape | TerminalShape | TerminalsShape;
+
+/** A failed RPC or subscription; `detail` is the contract error as `{_tag, ...fields}`. */
+export class ClusterRpcError extends Error {
+  readonly detail: unknown;
+  constructor(message: string, detail: unknown) {
+    super(message);
+    this.detail = detail;
+  }
+}
 
 /** A server frame addressed to one subscription (`id` already stripped of meaning). */
 export type ShapeFrame = Record<string, unknown> & { readonly t: string };
@@ -81,8 +96,9 @@ export class ClusterSocket {
   }
 
   /**
-   * Runs an RPC on the node that serves `environment`. Rejects with the node's error
-   * message, or when the socket is not connected or drops before the reply.
+   * Runs an RPC on the node that serves `environment`. Rejects with a
+   * `ClusterRpcError` from the node, or when the socket is not connected or drops
+   * before the reply.
    */
   call(environment: string, method: string, payload: unknown): Promise<unknown> {
     if (!this.ready) return Promise.reject(new Error("not connected"));
@@ -141,7 +157,7 @@ export class ClusterSocket {
       const call = this.calls.get(id);
       this.calls.delete(id);
       if (frame.t === "rpc.result") call?.resolve(frame.result);
-      else call?.reject(new Error(String(frame.error)));
+      else call?.reject(new ClusterRpcError(String(frame.error), frame.detail));
       return;
     }
     const subscription = id === null ? undefined : this.subscriptions.get(id);

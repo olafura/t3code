@@ -7,12 +7,16 @@ import {
   OrchestrationV2ThreadLaunchError,
   ORCHESTRATION_V2_WS_METHODS,
   ServerConfig,
+  TerminalError,
+  TerminalSessionLookupError,
   ThreadId,
   WS_METHODS,
   WsRpcGroup,
 } from "@t3tools/contracts";
+import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
@@ -27,26 +31,51 @@ import {
 } from "../connection/model.ts";
 import type { RpcSession } from "../rpc/session.ts";
 import type { WsRpcProtocolClient } from "../rpc/protocol.ts";
-import { ClusterSocket, type Shape, type ShapeFrame } from "./clusterSocket.ts";
+import { ClusterRpcError, ClusterSocket, type Shape, type ShapeFrame } from "./clusterSocket.ts";
 import { ShellShapeFold, type ShellRow } from "./shellShape.ts";
 import { ThreadShapeFold, type ShapeEvent, type ShapeRow } from "./threadShape.ts";
 
 const decodeConfig = Schema.decodeUnknownSync(Schema.toCodecJson(ServerConfig));
+const decodeTerminalError = Schema.decodeUnknownOption(TerminalError);
 
-/** Streams one shape's frames, folded into items, for as long as it is consumed. */
-function shapeStream<A>(
+/**
+ * Streams one shape's frames, folded into items, for as long as it is consumed. An
+ * `error` frame fails the stream when `toError` is given.
+ */
+function shapeStream<A, E = never>(
   socket: ClusterSocket,
   shape: Shape,
   fold: (frame: ShapeFrame) => ReadonlyArray<A>,
-): Stream.Stream<A> {
-  return Stream.callback<A>((queue) =>
+  toError?: (frame: ShapeFrame) => E,
+): Stream.Stream<A, E> {
+  return Stream.callback<A, E>((queue) =>
     Effect.acquireRelease(
       Effect.sync(() =>
         socket.subscribe(shape, (frame) => {
+          if (frame.t === "error" && toError !== undefined) {
+            Queue.failCauseUnsafe(queue, Cause.fail(toError(frame)));
+            return;
+          }
           Queue.offerAllUnsafe(queue, fold(frame));
         }),
       ),
       (unsubscribe) => Effect.sync(unsubscribe),
+    ),
+  );
+}
+
+/** A node's terminal error, or a lookup error when it sent none that decodes. */
+function terminalError(
+  request: { readonly threadId: string; readonly terminalId?: string | undefined },
+  detail: unknown,
+): TerminalError {
+  return decodeTerminalError(detail).pipe(
+    Option.getOrElse(
+      () =>
+        new TerminalSessionLookupError({
+          threadId: request.threadId,
+          terminalId: request.terminalId ?? "",
+        }),
     ),
   );
 }
@@ -202,6 +231,26 @@ export function makeV3Session(input: {
       (_request: object, message) => new OrchestrationGetTurnDiffError({ message }),
     );
 
+    // Terminals live on the thread's node; attach and metadata are shapes there.
+    type TerminalRequest = { readonly threadId: string; readonly terminalId?: string };
+    const terminalCommand = (tag: string) =>
+      forward(tag, (request: TerminalRequest, _message, cause) =>
+        terminalError(request, cause instanceof ClusterRpcError ? cause.detail : undefined),
+      );
+
+    const terminalAttach = (request: TerminalRequest) =>
+      shapeStream(
+        socket,
+        { type: "terminal", node, input: request },
+        (frame) => (frame.t === "terminal" ? [frame.event] : []),
+        (frame) => terminalError(request, frame.detail),
+      );
+
+    const terminalMetadata = () =>
+      shapeStream(socket, { type: "terminals", node }, (frame) =>
+        frame.t === "terminals" ? [frame.event] : [],
+      );
+
     const getFullThreadDiff = forward(
       ORCHESTRATION_V2_WS_METHODS.getFullThreadDiff,
       (_request: object, message) => new OrchestrationGetFullThreadDiffError({ message }),
@@ -216,6 +265,14 @@ export function makeV3Session(input: {
       [ORCHESTRATION_V2_WS_METHODS.getFullThreadDiff]: getFullThreadDiff,
       [ORCHESTRATION_V2_WS_METHODS.subscribeShell]: shell,
       [ORCHESTRATION_V2_WS_METHODS.subscribeThread]: thread,
+      [WS_METHODS.terminalAttach]: terminalAttach,
+      [WS_METHODS.subscribeTerminalMetadata]: terminalMetadata,
+      [WS_METHODS.terminalOpen]: terminalCommand(WS_METHODS.terminalOpen),
+      [WS_METHODS.terminalWrite]: terminalCommand(WS_METHODS.terminalWrite),
+      [WS_METHODS.terminalResize]: terminalCommand(WS_METHODS.terminalResize),
+      [WS_METHODS.terminalClear]: terminalCommand(WS_METHODS.terminalClear),
+      [WS_METHODS.terminalRestart]: terminalCommand(WS_METHODS.terminalRestart),
+      [WS_METHODS.terminalClose]: terminalCommand(WS_METHODS.terminalClose),
       [WS_METHODS.serverGetConfig]: () => initialConfig,
       [WS_METHODS.serverProbe]: () => Effect.void,
       [WS_METHODS.subscribeServerConfig]: serverConfig,
