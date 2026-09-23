@@ -76,6 +76,56 @@ defmodule T3.AuthTest do
     assert {400, _} = post_form(base <> "/oauth/token", %{form | "subject_token" => "other"})
   end
 
+  test "an administrator makes pairing links, and sees and revokes paired clients", %{port: port} do
+    :ok = stop_supervised(T3.Auth)
+    :ok = T3.Desktop.apply_bootstrap(%{"desktopBootstrapToken" => "desk-token"})
+    on_exit(fn -> Application.delete_env(:t3, :desktop_token) end)
+    start_supervised!(T3.Auth)
+    base = "http://127.0.0.1:#{port}"
+
+    exchange = fn token, label ->
+      post_form(base <> "/oauth/token", %{
+        "grant_type" => "urn:ietf:params:oauth:grant-type:token-exchange",
+        "subject_token" => token,
+        "subject_token_type" => "urn:t3:params:oauth:token-type:environment-bootstrap",
+        "client_label" => label
+      })
+    end
+
+    {200, %{"access_token" => admin}} = exchange.("desk-token", "T3 Code Desktop")
+
+    assert {200, %{"id" => link_id, "credential" => credential, "label" => "Phone"}} =
+             request(:post, base <> "/api/auth/pairing-token", admin, %{"label" => "Phone"})
+
+    assert {200, [%{"id" => ^link_id, "label" => "Phone"}]} =
+             request(:get, base <> "/api/auth/pairing-links", admin)
+
+    # Using the link removes it and pairs a client with standard scopes.
+    {200, %{"access_token" => phone}} = exchange.(credential, "Phone")
+    assert {200, []} = request(:get, base <> "/api/auth/pairing-links", admin)
+
+    assert {200, clients} = request(:get, base <> "/api/auth/clients", admin)
+    assert [%{"current" => true}, %{"current" => false, "sessionId" => phone_session}] = clients
+
+    # A standard client cannot manage access, and nobody can revoke themselves.
+    assert {403, %{"_tag" => "EnvironmentScopeRequiredError"}} =
+             request(:get, base <> "/api/auth/clients", phone)
+
+    [%{"sessionId" => admin_session} | _] = clients
+
+    assert {403, %{"reason" => "current_session_revoke_not_allowed"}} =
+             request(:post, base <> "/api/auth/clients/revoke", admin, %{
+               "sessionId" => admin_session
+             })
+
+    assert {200, %{"revoked" => true}} =
+             request(:post, base <> "/api/auth/clients/revoke", admin, %{
+               "sessionId" => phone_session
+             })
+
+    assert {200, %{"authenticated" => false}} = request(:get, base <> "/api/auth/session", phone)
+  end
+
   test "a desktop bootstrap line sets where the node listens and keeps its state" do
     on_exit(fn -> Application.delete_env(:t3, :host) end)
 
@@ -115,12 +165,12 @@ defmodule T3.AuthTest do
     {status, JSON.decode!(to_string(resp))}
   end
 
-  defp request(method, url, bearer) do
+  defp request(method, url, bearer, body \\ nil) do
     headers = if bearer, do: [{~c"authorization", ~c"Bearer " ++ to_charlist(bearer)}], else: []
 
     req =
       if method == :post,
-        do: {url, headers, ~c"application/json", ""},
+        do: {url, headers, ~c"application/json", if(body, do: JSON.encode!(body), else: "")},
         else: {url, headers}
 
     {:ok, {{_, status, _}, _, resp}} = :httpc.request(method, req, [], [])

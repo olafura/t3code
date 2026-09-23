@@ -62,7 +62,12 @@ defmodule T3.Web.Router do
     with "urn:ietf:params:oauth:grant-type:token-exchange" <- params["grant_type"],
          "urn:t3:params:oauth:token-type:environment-bootstrap" <- params["subject_token_type"],
          {:ok, access, expires_in, scopes} <-
-           T3.Auth.exchange(params["subject_token"] || "", params["client_label"]) do
+           T3.Auth.exchange(params["subject_token"] || "", %{
+             label: params["client_label"],
+             device_type: params["client_device_type"],
+             os: params["client_os"],
+             user_agent: conn |> get_req_header("user-agent") |> List.first()
+           }) do
       json(conn, 200, %{
         "access_token" => access,
         "issued_token_type" => "urn:ietf:params:oauth:token-type:access_token",
@@ -103,13 +108,74 @@ defmodule T3.Web.Router do
     end
   end
 
+  # Settings → Connections: pairing links and the clients paired with this node.
+  post "/api/auth/pairing-token" do
+    with_scope(conn, "access:write", fn _session ->
+      with {:ok, body} <- json_body(conn),
+           {:ok, link} <- T3.Auth.create_pairing_link(body),
+           do: {200, link}
+    end)
+  end
+
+  get "/api/auth/pairing-links" do
+    with_scope(conn, "access:read", fn _session -> {200, T3.Auth.pairing_links()} end)
+  end
+
+  post "/api/auth/pairing-links/revoke" do
+    with_scope(conn, "access:write", fn _session ->
+      with {:ok, %{"id" => id}} <- json_body(conn),
+           do: {200, %{"revoked" => T3.Auth.revoke_pairing_link(id)}}
+    end)
+  end
+
+  get "/api/auth/clients" do
+    with_scope(conn, "access:read", fn session ->
+      {200,
+       for(
+         client <- T3.Auth.clients(),
+         do: %{client | "current" => client["sessionId"] == session.id}
+       )}
+    end)
+  end
+
+  post "/api/auth/clients/revoke" do
+    with_scope(conn, "access:write", fn session ->
+      case json_body(conn) do
+        {:ok, %{"sessionId" => id}} when id == session.id ->
+          {403,
+           %{
+             "_tag" => "EnvironmentOperationForbiddenError",
+             "code" => "operation_forbidden",
+             "reason" => "current_session_revoke_not_allowed",
+             "traceId" => trace_id()
+           }}
+
+        {:ok, %{"sessionId" => id}} ->
+          {200, %{"revoked" => T3.Auth.revoke_client(id)}}
+
+        error ->
+          error
+      end
+    end)
+  end
+
+  post "/api/auth/clients/revoke-others" do
+    with_scope(conn, "access:write", fn session ->
+      {200, %{"revokedCount" => T3.Auth.revoke_other_clients(session.id)}}
+    end)
+  end
+
   get "/ws" do
     conn = fetch_query_params(conn)
 
-    if authorized_socket?(conn.query_params) do
-      conn |> WebSockAdapter.upgrade(T3.Web.Socket, [], timeout: 60_000) |> halt()
-    else
-      send_resp(conn, 401, "unauthorized")
+    case socket_session(conn.query_params) do
+      {:ok, session} ->
+        conn
+        |> WebSockAdapter.upgrade(T3.Web.Socket, %{session: session}, timeout: 60_000)
+        |> halt()
+
+      :error ->
+        send_resp(conn, 401, "unauthorized")
     end
   end
 
@@ -119,13 +185,55 @@ defmodule T3.Web.Router do
         do: Map.take(descriptor, ["environmentId", "label"])
   end
 
-  defp authorized_socket?(%{"wsTicket" => ticket}), do: T3.Auth.take_ticket(ticket) == :ok
+  # The session a socket opens for, or nil for one opened with the node's own token.
+  defp socket_session(%{"wsTicket" => ticket}), do: T3.Auth.take_ticket(ticket)
 
   # The node's own access token, for local tools and development.
-  defp authorized_socket?(%{"token" => token}),
-    do: Plug.Crypto.secure_compare(token, T3.Web.token())
+  defp socket_session(%{"token" => token}),
+    do: if(Plug.Crypto.secure_compare(token, T3.Web.token()), do: {:ok, nil}, else: :error)
 
-  defp authorized_socket?(_), do: false
+  defp socket_session(_), do: :error
+
+  # Runs `fun.(session)` for a bearer whose session has `scope`; `fun` returns
+  # `{status, body}` or `{:error, reason}`.
+  defp with_scope(conn, scope, fun) do
+    case bearer_session(conn) do
+      {:ok, session} ->
+        if scope in session.scopes do
+          case fun.(session) do
+            {status, body} when is_integer(status) ->
+              json(conn, status, body)
+
+            {:error, _} ->
+              json(conn, 400, %{
+                "_tag" => "EnvironmentRequestInvalidError",
+                "traceId" => trace_id()
+              })
+          end
+        else
+          json(conn, 403, %{
+            "_tag" => "EnvironmentScopeRequiredError",
+            "code" => "insufficient_scope",
+            "requiredScope" => scope,
+            "traceId" => trace_id()
+          })
+        end
+
+      :error ->
+        json(conn, 401, %{"_tag" => "EnvironmentAuthorizationError", "message" => "unauthorized"})
+    end
+  end
+
+  defp json_body(conn) do
+    with {:ok, body, _conn} <- read_body(conn),
+         {:ok, %{} = decoded} <- JSON.decode(if(body == "", do: "{}", else: body)) do
+      {:ok, decoded}
+    else
+      _ -> {:error, :invalid_body}
+    end
+  end
+
+  defp trace_id, do: Base.encode16(:crypto.strong_rand_bytes(8), case: :lower)
 
   defp bearer_session(conn) do
     case get_req_header(conn, "authorization") do

@@ -17,8 +17,13 @@ defmodule T3.Web.Socket do
   @max_buffered 8 * 1024 * 1024
 
   @impl true
-  def init(_opts) do
+  def init(opts) do
+    # A socket opened with a ticket belongs to that client's session.
+    session = opts[:session]
+    if session, do: T3.Auth.connected(session)
+
     state = %{
+      session: session,
       subs: %{},
       by_stream: %{},
       by_terminal: %{},
@@ -122,6 +127,17 @@ defmodule T3.Web.Socket do
       {:push, Protocol.encode(frame), state}
     else
       _ -> {:ok, state}
+    end
+  end
+
+  def handle_info({:t3_auth_access, event}, state) do
+    case state.by_terminal do
+      %{:auth_access => id} ->
+        {:push, Protocol.encode(%{"t" => "authAccess", "id" => id, "event" => own(event, state)}),
+         state}
+
+      _ ->
+        {:ok, state}
     end
   end
 
@@ -415,6 +431,36 @@ defmodule T3.Web.Socket do
     end
   end
 
+  # Only an administrative session (or the node's own token) sees who is paired.
+  defp subscribe(state, id, :auth_access, _offset) do
+    allowed =
+      state.session == nil or
+        Enum.any?(
+          T3.Auth.clients(),
+          &(&1["sessionId"] == state.session and "access:read" in &1["scopes"])
+        )
+
+    if allowed do
+      {:ok, revision, snapshot} = T3.Auth.subscribe(self())
+
+      event = %{
+        "version" => 1,
+        "revision" => revision,
+        "type" => "snapshot",
+        "payload" => snapshot
+      }
+
+      {:push, Protocol.encode(%{"t" => "authAccess", "id" => id, "event" => own(event, state)}),
+       %{
+         state
+         | subs: Map.put(state.subs, id, :auth_access),
+           by_terminal: Map.put(state.by_terminal, :auth_access, id)
+       }}
+    else
+      {:push, Protocol.encode(error_frame(id, "access:read is required")), state}
+    end
+  end
+
   defp subscribe(state, id, {:resource_telemetry, node} = shape, _offset) do
     case remote(node, T3.Diagnostics, :subscribe, [self()]) do
       {:ok, {:ok, snapshot}} ->
@@ -555,6 +601,22 @@ defmodule T3.Web.Socket do
       {:error, "#{node} cannot serve this: #{Exception.format_banner(kind, reason)}"}
   end
 
+  # Marks this socket's own session in an access event.
+  defp own(%{"type" => "snapshot", "payload" => payload} = event, state),
+    do:
+      put_in(
+        event,
+        ["payload", "clientSessions"],
+        Enum.map(payload["clientSessions"], &mark(&1, state))
+      )
+
+  defp own(%{"type" => "clientUpserted", "payload" => client} = event, state),
+    do: %{event | "payload" => mark(client, state)}
+
+  defp own(event, _state), do: event
+
+  defp mark(client, state), do: %{client | "current" => client["sessionId"] == state.session}
+
   defp error_frame(id, reason), do: %{"t" => "error", "id" => id, "reason" => to_string(reason)}
 
   defp unsubscribe(state, id) do
@@ -577,6 +639,10 @@ defmodule T3.Web.Socket do
       {{:config, node}, subs} ->
         :erpc.cast(node, T3.Settings, :unwatch, [self()])
         %{state | subs: subs, by_terminal: Map.delete(state.by_terminal, {:settings, node})}
+
+      {:auth_access, subs} ->
+        T3.Auth.unsubscribe(self())
+        %{state | subs: subs, by_terminal: Map.delete(state.by_terminal, :auth_access)}
 
       {{:resource_telemetry, node}, subs} ->
         :erpc.cast(node, T3.Diagnostics, :unsubscribe, [self()])

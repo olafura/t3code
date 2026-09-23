@@ -6,6 +6,8 @@ import {
   PersistChatAttachmentsError,
   type AssetCreateUrlInput,
   AgentSessionImportProjectChangedError,
+  AuthAccessStreamError,
+  AuthAccessStreamEvent,
   AgentSessionImportProjectNotFoundError,
   AgentSessionScanError,
   ExternalLauncherError,
@@ -124,6 +126,7 @@ const decodePreviewError = Schema.decodeUnknownOption(PreviewError);
 const decodePreviewEvent = Schema.decodeUnknownSync(Schema.toCodecJson(PreviewEvent));
 const decodeLocalServers = Schema.decodeUnknownSync(Schema.toCodecJson(DiscoveredLocalServerList));
 const decodeTelemetry = Schema.decodeUnknownSync(Schema.toCodecJson(ResourceTelemetrySnapshot));
+const decodeAuthAccess = Schema.decodeUnknownSync(Schema.toCodecJson(AuthAccessStreamEvent));
 const decodeSetupError = Schema.decodeUnknownOption(ProviderSetupError);
 const decodeTerminalError = Schema.decodeUnknownOption(TerminalError);
 const settingsCodec = Schema.toCodecJson(ServerSettings);
@@ -636,6 +639,22 @@ export function makeV3Session(input: {
         frame.t === "localServers" ? [decodeLocalServers(frame.list)] : [],
       );
 
+    // A client manages the connections of the node it is paired with; other
+    // nodes are reached through it without a session of their own.
+    const authAccess = () =>
+      socket.connectedNode() === node
+        ? shapeStream(
+            socket,
+            { type: "authAccess" },
+            (frame) => (frame.t === "authAccess" ? [decodeAuthAccess(frame.event)] : []),
+            (frame) => new AuthAccessStreamError({ message: String(frame.reason) }),
+          )
+        : Stream.fail(
+            new AuthAccessStreamError({
+              message: "Manage this node's connections from a client paired with it directly.",
+            }),
+          );
+
     // The node samples its processes faster while this is subscribed.
     const resourceTelemetry = () =>
       shapeStream(socket, { type: "resourceTelemetry", node }, (frame) =>
@@ -916,6 +935,7 @@ export function makeV3Session(input: {
         ].map((tag) => [tag, forward(tag, (_request: object, _message, cause) => cause)]),
       ),
       [WS_METHODS.subscribeResourceTelemetry]: resourceTelemetry,
+      [WS_METHODS.subscribeAuthAccess]: authAccess,
       [WS_METHODS.serverGetBackgroundPolicy]: backgroundPolicy,
       // Nodes have no client-driven policy, so it never changes after the first read.
       [WS_METHODS.subscribeBackgroundPolicy]: (request: object) =>

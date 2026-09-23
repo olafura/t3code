@@ -16,6 +16,8 @@ defmodule T3.Web.Protocol do
     * `{"type": "vcs", "node": n, "cwd": dir}`: a checkout's git status, then changes
     * `{"type": "worktreeSetup", "node": n, "threadId": id}`: a new thread's worktree
       setup (`WorktreeSetupStreamEvent`: null, or a snapshot), then changes
+    * `{"type": "authAccess"}`: this node's pairing links and paired clients
+      (`AuthAccessStreamEvent`), for a session with `access:read`
     * `{"type": "resourceTelemetry", "node": n}`: that node's resource monitor
       (`ResourceTelemetrySnapshot`), sampled every few seconds while subscribed
     * `{"type": "preview", "node": n}`: that node's preview tab events (`PreviewEvent`)
@@ -65,6 +67,7 @@ defmodule T3.Web.Protocol do
       {"t": "projectClones", "id", "clones"} (ProjectCloneSnapshot[])
       {"t": "preview", "id", "event"} (PreviewEvent)
       {"t": "resourceTelemetry", "id", "snapshot"} (ResourceTelemetrySnapshot)
+      {"t": "authAccess", "id", "event"} (AuthAccessStreamEvent)
       {"t": "localServers", "id", "list"} (DiscoveredLocalServerList)
       {"t": "rpc.result", "id", "result"} / {"t": "rpc.error", "id", "error", "detail"?}
         (`detail` is the contract error as `{"_tag", ...fields}` when there is one)
@@ -151,6 +154,8 @@ defmodule T3.Web.Protocol do
        when is_binary(id) do
     with {:ok, node} <- known_node(node, nodes), do: {:ok, {:git_action, node, input}}
   end
+
+  defp decode_shape(%{"type" => "authAccess"}, _nodes), do: {:ok, :auth_access}
 
   defp decode_shape(%{"type" => "resourceTelemetry", "node" => node}, nodes) do
     with {:ok, node} <- known_node(node, nodes), do: {:ok, {:resource_telemetry, node}}

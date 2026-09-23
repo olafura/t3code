@@ -37,6 +37,8 @@ export type WorktreeSetupShape = {
   readonly threadId: string;
 };
 export type ScheduledTasksShape = { readonly type: "scheduledTasks"; readonly node: string };
+/** Pairing links and clients of the node the socket is connected to. */
+export type AuthAccessShape = { readonly type: "authAccess" };
 export type ProjectClonesShape = { readonly type: "projectClones"; readonly node: string };
 export type PreviewShape = { readonly type: "preview"; readonly node: string };
 export type ResourceTelemetryShape = { readonly type: "resourceTelemetry"; readonly node: string };
@@ -54,6 +56,7 @@ export type Shape =
   | TerminalsShape
   | VcsShape
   | ScheduledTasksShape
+  | AuthAccessShape
   | ProjectClonesShape
   | PreviewShape
   | ResourceTelemetryShape
@@ -142,6 +145,11 @@ export class ClusterSocket {
       this.calls.set(id, { resolve, reject });
       this.send({ t: "rpc", id, environment, method, payload });
     });
+  }
+
+  /** The node this socket is connected to, once it said hello. */
+  connectedNode(): string | null {
+    return this.node;
   }
 
   /** Subscribes to a shape; returns the unsubscribe function. */
