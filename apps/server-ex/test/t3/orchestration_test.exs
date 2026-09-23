@@ -284,6 +284,9 @@ defmodule T3.OrchestrationTest do
       assert %{"text" => "Hello from acp", "streaming" => false} =
                Enum.find(items, &(&1["type"] == "assistant_message"))
 
+      assert [%{"text" => "Hello from acp", "streaming" => false}] =
+               Enum.filter(StreamState.list(state, "message"), &(&1["role"] == "assistant"))
+
       assert [%{"driver" => "opencode", "nativeThreadRef" => %{"nativeId" => "acp-1"}}] =
                StreamState.list(state, "provider-thread")
 

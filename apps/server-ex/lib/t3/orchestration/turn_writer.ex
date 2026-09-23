@@ -225,7 +225,7 @@ defmodule T3.Orchestration.TurnWriter do
     at = Entities.now()
 
     commit(state, fn stream ->
-      for {_native, %{id: item_id, node: node_id}} <- state.items,
+      for {_native, %{id: item_id, node: node_id} = item} <- state.items,
           stream.entities["turn-item"][item_id]["status"] == "running",
           change <- [
             Orchestration.upsert(
@@ -244,8 +244,17 @@ defmodule T3.Orchestration.TurnWriter do
               "node",
               node_id,
               &Map.merge(&1, %{"status" => status, "completedAt" => at})
-            )
+            ),
+            # An assistant item's message stops streaming with it.
+            item[:message] &&
+              Orchestration.upsert(
+                stream,
+                "message",
+                item.message,
+                &Map.merge(&1, %{"streaming" => false, "updatedAt" => at})
+              )
           ],
+          change,
           do: change
     end)
 
