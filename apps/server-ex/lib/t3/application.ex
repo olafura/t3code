@@ -52,7 +52,9 @@ defmodule T3.Application do
           Supervisor.child_spec({Task, &T3.Acp.load/0}, id: :acp_models),
           T3.Web,
           # Turns the restart cut off go on, where the user asked for that.
-          Supervisor.child_spec({Task, &T3.Orchestration.Recovery.continue/0}, id: :continue)
+          Supervisor.child_spec({Task, &T3.Orchestration.Recovery.continue/0}, id: :continue),
+          # Projects that ask for it are brought up to date.
+          Supervisor.child_spec({Task, &T3.Projects.auto_pull/0}, id: :auto_pull)
         ] ++ discovery(home)
       else
         []

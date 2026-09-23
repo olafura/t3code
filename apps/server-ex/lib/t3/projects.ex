@@ -103,6 +103,37 @@ defmodule T3.Projects do
   end
 
   @doc """
+  Brings projects whose settings say `defaultAutoPull` up to date at boot, as the
+  Node server does: only a clean checkout on its default branch with an upstream,
+  nothing of its own to push, and something new to pull. Each checkout is pulled
+  once however many projects share it; a failure is logged and skipped.
+  """
+  def auto_pull do
+    roots =
+      for {{node, _id}, {"project", project}} <- T3.Shell.rows(),
+          node == node(),
+          project["deletedAt"] == nil,
+          T3.Settings.for_project(project["id"])["defaultAutoPull"] == true,
+          uniq: true,
+          do: project["workspaceRoot"]
+
+    for root <- roots do
+      local = T3.Vcs.local_status(root)
+
+      with %{"isRepo" => true, "isDefaultRef" => true, "hasWorkingTreeChanges" => false} <-
+             local,
+           %{"hasUpstream" => true, "aheadCount" => 0, "behindCount" => behind} when behind > 0 <-
+             T3.Vcs.remote_status(root, fetch: true),
+           {:error, error} <- T3.Vcs.pull(%{"cwd" => root}) do
+        require Logger
+        Logger.warning("automatic pull of #{root} failed: #{inspect(error)}")
+      end
+    end
+
+    :ok
+  end
+
+  @doc """
   The id of this node's project a directory belongs to: a thread's worktree, or
   the project whose workspace holds it (the deepest one). Nil when none does.
   """
