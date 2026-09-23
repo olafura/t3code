@@ -45,6 +45,7 @@ import {
   SourceControlRepositoryError,
   ScheduledTaskListResult,
   ServerConfig,
+  ServerProviderUpdateError,
   ServerProviders,
   ServerSettings,
   ServerSettingsError,
@@ -111,6 +112,7 @@ const decodeScheduledTasks = Schema.decodeUnknownSync(Schema.toCodecJson(Schedul
 const decodeScheduledTaskError = Schema.decodeUnknownOption(ScheduledTaskError);
 const decodeProjectClones = Schema.decodeUnknownSync(Schema.toCodecJson(ProjectCloneListEvent));
 const decodeRepositoryError = Schema.decodeUnknownOption(SourceControlRepositoryError);
+const decodeProviderUpdateError = Schema.decodeUnknownOption(ServerProviderUpdateError);
 const decodeSetupError = Schema.decodeUnknownOption(ProviderSetupError);
 const decodeTerminalError = Schema.decodeUnknownOption(TerminalError);
 const settingsCodec = Schema.toCodecJson(ServerSettings);
@@ -844,6 +846,21 @@ export function makeV3Session(input: {
       ),
       [WS_METHODS.scheduledTasksRunNow]: scheduledTaskCommand(WS_METHODS.scheduledTasksRunNow),
       [WS_METHODS.serverRefreshProviders]: refreshProviders,
+      [WS_METHODS.serverUpdateProvider]: forward(
+        WS_METHODS.serverUpdateProvider,
+        (request: { readonly provider: string }, message, cause) =>
+          decodeProviderUpdateError(
+            cause instanceof ClusterRpcError ? cause.detail : undefined,
+          ).pipe(
+            Option.getOrElse(
+              () =>
+                new ServerProviderUpdateError({
+                  provider: request.provider as ServerProviderUpdateError["provider"],
+                  reason: message,
+                }),
+            ),
+          ),
+      ),
       // Nodes have no background policy that client activity would steer.
       [WS_METHODS.serverReportClientActivity]: () => Effect.void,
       [ORCHESTRATION_V2_WS_METHODS.getArchivedShellSnapshot]: archivedShell,

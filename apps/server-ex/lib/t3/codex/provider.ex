@@ -24,6 +24,7 @@ defmodule T3.Codex.Provider do
         "enabled" => true,
         "installed" => true,
         "version" => version(path),
+        "versionAdvisory" => T3.ProviderUpdates.advisory("codex", path, version(path)),
         "status" => "ready",
         "availability" => "available",
         "auth" => %{"status" => "authenticated"},

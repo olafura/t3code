@@ -6,3 +6,6 @@ config :logger, level: :warning
 
 # Text generation never reaches a real model; tests that need it set a fake.
 config :t3, text_claude_command: "t3-test-no-claude", text_codex_command: "t3-test-no-codex"
+
+# Provider update checks never reach the npm registry.
+config :t3, provider_update_checks: false

@@ -233,7 +233,9 @@ defmodule T3.Web.Socket do
 
           node ->
             try do
-              :erpc.call(node, T3.Rpc, :handle, [method, payload || %{}], 60_000)
+              # Each call runs in its own task; some (a provider update, a
+              # scheduled task run) take minutes.
+              :erpc.call(node, T3.Rpc, :handle, [method, payload || %{}], :timer.minutes(10))
             catch
               :error, {:erpc, reason} -> {:error, "node unavailable: #{reason}"}
               kind, reason -> {:error, Exception.format(kind, reason)}

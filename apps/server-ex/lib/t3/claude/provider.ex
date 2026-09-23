@@ -21,6 +21,7 @@ defmodule T3.Claude.Provider do
         "enabled" => true,
         "installed" => true,
         "version" => version(path),
+        "versionAdvisory" => T3.ProviderUpdates.advisory("claudeAgent", path, version(path)),
         "status" => "ready",
         "availability" => "available",
         "auth" => %{"status" => "authenticated"},
