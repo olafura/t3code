@@ -61,6 +61,10 @@ const OPEN = 1;
 export class ClusterSocket {
   private socket: SocketLike | null = null;
   private readonly subscriptions = new Map<number, Subscription>();
+  private readonly calls = new Map<
+    number,
+    { readonly resolve: (value: unknown) => void; readonly reject: (error: Error) => void }
+  >();
   private nextId = 1;
   private attempt = 0;
   private node: string | null = null;
@@ -74,6 +78,19 @@ export class ClusterSocket {
   constructor(options: ClusterSocketOptions) {
     this.options = options;
     this.connect();
+  }
+
+  /**
+   * Runs an RPC on the node that serves `environment`. Rejects with the node's error
+   * message, or when the socket is not connected or drops before the reply.
+   */
+  call(environment: string, method: string, payload: unknown): Promise<unknown> {
+    if (!this.ready) return Promise.reject(new Error("not connected"));
+    const id = this.nextId++;
+    return new Promise((resolve, reject) => {
+      this.calls.set(id, { resolve, reject });
+      this.send({ t: "rpc", id, environment, method, payload });
+    });
   }
 
   /** Subscribes to a shape; returns the unsubscribe function. */
@@ -120,6 +137,13 @@ export class ClusterSocket {
     }
     if (frame.t === "pong") return;
     const id = typeof frame.id === "number" ? frame.id : null;
+    if ((frame.t === "rpc.result" || frame.t === "rpc.error") && id !== null) {
+      const call = this.calls.get(id);
+      this.calls.delete(id);
+      if (frame.t === "rpc.result") call?.resolve(frame.result);
+      else call?.reject(new Error(String(frame.error)));
+      return;
+    }
     const subscription = id === null ? undefined : this.subscriptions.get(id);
     if (subscription === undefined || id === null) return;
     if (frame.t === "resync") {
@@ -137,6 +161,8 @@ export class ClusterSocket {
     if (socket !== this.socket) return;
     this.socket = null;
     this.ready = false;
+    for (const call of this.calls.values()) call.reject(new Error("disconnected"));
+    this.calls.clear();
     this.stopPing();
     this.options.onStatus?.({ connected: false, node: this.node });
     if (this.closed || this.options.reconnect === false) return;
