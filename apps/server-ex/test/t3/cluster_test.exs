@@ -86,7 +86,28 @@ defmodule T3.ClusterTest do
     {events, _, client} = WsClient.recv_until(client, &(&1["t"] == "events" and &1["id"] == 2))
     assert [[^seq, "turn-item", "i1", %{"s" => %{"text" => "from b"}}, _at]] = events["events"]
 
-    # When node b goes away its rows stay and are reported offline.
+    # Node a describes the whole cluster and serves node b's config by environment id.
+    {:ok, _} = Application.ensure_all_started(:inets)
+
+    {:ok, {{_, 200, _}, _, body}} =
+      :httpc.request(~c"http://127.0.0.1:#{port}/.well-known/t3/environment")
+
+    b_env = :erpc.call(b, T3.Environment, :id, [])
+    assert %{"cluster" => cluster} = JSON.decode!(to_string(body))
+    assert Enum.any?(cluster, &(&1["environmentId"] == b_env))
+
+    client =
+      WsClient.send_json(client, %{
+        "t" => "sub",
+        "id" => 3,
+        "shape" => %{"type" => "config", "environment" => b_env}
+      })
+
+    {config, _, client} = WsClient.recv_until(client, &(&1["t"] == "config"))
+
+    assert %{"node" => ^b_name, "config" => %{"environment" => %{"environmentId" => ^b_env}}} =
+             config
+
     :peer.stop(peer)
     {down, _, _client} = WsClient.recv_until(client, &(&1["t"] == "shell.node"), 5_000)
     assert down == %{"t" => "shell.node", "id" => 1, "node" => b_name, "online" => false}

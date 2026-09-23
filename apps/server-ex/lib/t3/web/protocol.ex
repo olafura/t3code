@@ -8,7 +8,8 @@ defmodule T3.Web.Protocol do
     * `{"type": "shell"}`: every node's environment and every project and thread
       summary on it
     * `{"type": "stream", "node": n, "stream": id}`: one project or thread
-    * `{"type": "config", "node": n}`: that node's `ServerConfig`, sent once
+    * `{"type": "config", "node": n}` or `{"type": "config", "environment": id}`:
+      that node's `ServerConfig` and name, sent once
 
   Client to server:
 
@@ -28,7 +29,7 @@ defmodule T3.Web.Protocol do
       {"t": "live", "id", "offset"}     (caught up; later events are live)
       {"t": "resync", "id", "offset"}   (fell behind: resubscribe from offset)
       {"t": "error", "id", "reason"}
-      {"t": "config", "id", "config"}
+      {"t": "config", "id", "node", "config"}
       {"t": "pong"}
 
   Shell rows are `OrchestrationV2ThreadShell` (`kind` "thread") or
@@ -79,6 +80,10 @@ defmodule T3.Web.Protocol do
       node -> {:ok, {:stream, node, id}}
     end
   end
+
+  defp decode_shape(%{"type" => "config", "environment" => environment_id}, _nodes)
+       when is_binary(environment_id),
+       do: {:ok, {:config_for, environment_id}}
 
   defp decode_shape(%{"type" => "config", "node" => node}, nodes) do
     case Enum.find(nodes, &(Atom.to_string(&1) == node)) do

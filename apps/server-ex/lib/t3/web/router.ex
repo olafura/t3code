@@ -29,7 +29,10 @@ defmodule T3.Web.Router do
 
   get "/.well-known/t3/environment" do
     body =
-      JSON.encode_to_iodata!(Map.put(T3.Environment.descriptor(), "node", Atom.to_string(node())))
+      T3.Environment.descriptor()
+      |> Map.put("node", Atom.to_string(node()))
+      |> Map.put("cluster", cluster())
+      |> JSON.encode_to_iodata!()
 
     conn |> put_resp_content_type("application/json") |> send_resp(200, body)
   end
@@ -90,6 +93,12 @@ defmodule T3.Web.Router do
     else
       send_resp(conn, 401, "unauthorized")
     end
+  end
+
+  # Every node this one knows, so a client paired here can reach all of them.
+  defp cluster do
+    for {_node, descriptor} <- T3.Shell.environments(),
+        do: Map.take(descriptor, ["environmentId", "label"])
   end
 
   defp authorized_socket?(%{"wsTicket" => ticket}), do: T3.Auth.take_ticket(ticket) == :ok

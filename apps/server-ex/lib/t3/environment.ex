@@ -82,9 +82,16 @@ defmodule T3.Environment do
     end
   end
 
+  # The machine's host name, unless T3_LABEL names it.
   defp label do
-    {:ok, host} = :inet.gethostname()
-    List.to_string(host)
+    case System.get_env("T3_LABEL") do
+      nil ->
+        {:ok, host} = :inet.gethostname()
+        List.to_string(host)
+
+      label ->
+        label
+    end
   end
 
   defp os do

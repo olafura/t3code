@@ -89,12 +89,26 @@ defmodule T3.Web.Socket do
   end
 
   # A node's ServerConfig, fetched once; it is small and changes with settings.
+  defp subscribe(state, id, {:config_for, environment_id}, offset) do
+    case Enum.find(T3.Shell.environments(), fn {_node, d} ->
+           d["environmentId"] == environment_id
+         end) do
+      {node, _} ->
+        subscribe(state, id, {:config, node}, offset)
+
+      nil ->
+        {:push, Protocol.encode(%{"t" => "error", "id" => id, "reason" => "unknown environment"}),
+         state}
+    end
+  end
+
   defp subscribe(state, id, {:config, node}, _offset) do
     frame =
       try do
         %{
           "t" => "config",
           "id" => id,
+          "node" => Atom.to_string(node),
           "config" => :erpc.call(node, T3.Environment, :server_config, [], 15_000)
         }
       catch

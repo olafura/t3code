@@ -23,26 +23,21 @@ defmodule T3.Application do
     Supervisor.start_link(children, strategy: :one_for_one, name: T3.Supervisor)
   end
 
-  # Clustered nodes find peers on the tailnet, plus any listed in T3_PEERS
-  # (comma-separated node names such as t3@192.168.1.20).
+  # Named nodes find peers listed in T3_PEERS (node names such as t3@192.168.1.20);
+  # nodes with cluster certificates also search the tailnet.
   defp discovery(home) do
-    if Node.alive?() and T3.Cluster.address(home) do
-      static =
-        case System.get_env("T3_PEERS") do
-          nil ->
-            []
+    static =
+      case System.get_env("T3_PEERS") do
+        nil -> []
+        peers -> [static: [strategy: Cluster.Strategy.Epmd, config: [hosts: parse_peers(peers)]]]
+      end
 
-          peers ->
-            [static: [strategy: Cluster.Strategy.Epmd, config: [hosts: parse_peers(peers)]]]
-        end
+    tailnet =
+      if T3.Cluster.address(home), do: [tailnet: [strategy: T3.Cluster.Tailscale]], else: []
 
-      [
-        {Cluster.Supervisor,
-         [[tailnet: [strategy: T3.Cluster.Tailscale]] ++ static, [name: T3.ClusterSupervisor]]}
-      ]
-    else
-      []
-    end
+    if Node.alive?() and static ++ tailnet != [],
+      do: [{Cluster.Supervisor, [static ++ tailnet, [name: T3.ClusterSupervisor]]}],
+      else: []
   end
 
   defp parse_peers(peers),
