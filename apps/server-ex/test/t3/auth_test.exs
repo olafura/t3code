@@ -53,6 +53,45 @@ defmodule T3.AuthTest do
     assert {:error, 401} = WsClient.connect(port, "/ws?wsTicket=#{ticket}")
   end
 
+  test "the desktop app's bootstrap token signs its window in, as often as needed", %{
+    port: port
+  } do
+    :ok = stop_supervised(T3.Auth)
+    :ok = T3.Desktop.apply_bootstrap(%{"desktopBootstrapToken" => "desk-token"})
+    on_exit(fn -> Application.delete_env(:t3, :desktop_token) end)
+    start_supervised!(T3.Auth)
+
+    form = %{
+      "grant_type" => "urn:ietf:params:oauth:grant-type:token-exchange",
+      "subject_token" => "desk-token",
+      "subject_token_type" => "urn:t3:params:oauth:token-type:environment-bootstrap",
+      "client_label" => "T3 Code Desktop"
+    }
+
+    base = "http://127.0.0.1:#{port}"
+    assert {200, %{"scope" => scope}} = post_form(base <> "/oauth/token", form)
+    assert scope =~ "access:write"
+    # A reloaded window exchanges it again.
+    assert {200, %{"access_token" => _}} = post_form(base <> "/oauth/token", form)
+    assert {400, _} = post_form(base <> "/oauth/token", %{form | "subject_token" => "other"})
+  end
+
+  test "a desktop bootstrap line sets where the node listens and keeps its state" do
+    on_exit(fn -> Application.delete_env(:t3, :host) end)
+
+    :ok =
+      T3.Desktop.apply_bootstrap(%{
+        "port" => 4123,
+        "host" => "0.0.0.0",
+        "t3Home" => "/home/me/.t3",
+        "noBrowser" => true
+      })
+
+    assert Application.get_env(:t3, :port) == 4123
+    assert Application.get_env(:t3, :host) == "0.0.0.0"
+    assert Application.get_env(:t3, :home) == "/home/me/.t3/elixir"
+  end
+
   test "browsers on other origins may call the node", %{port: port} do
     {:ok, {{_, 204, _}, headers, _}} =
       :httpc.request(:options, {"http://127.0.0.1:#{port}/oauth/token", []}, [], [])

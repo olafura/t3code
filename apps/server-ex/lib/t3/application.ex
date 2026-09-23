@@ -7,6 +7,7 @@ defmodule T3.Application do
   def start(_type, _args) do
     children =
       if Application.fetch_env!(:t3, :start_node) do
+        :ok = T3.Desktop.configure()
         home = Application.fetch_env!(:t3, :home)
 
         [

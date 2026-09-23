@@ -1,10 +1,12 @@
 defmodule T3.Web do
   @moduledoc "Client-facing HTTP and WebSocket listener."
 
-  @doc "Bandit child spec for the configured port, loopback only."
+  @doc "Bandit child spec for the configured port and host (loopback by default)."
   def child_spec(_opts) do
     port = Application.get_env(:t3, :port, 3780)
-    Bandit.child_spec(plug: T3.Web.Router, ip: {127, 0, 0, 1}, port: port, startup_log: false)
+    host = Application.get_env(:t3, :host, "127.0.0.1")
+    {:ok, ip} = :inet.parse_address(String.to_charlist(host))
+    Bandit.child_spec(plug: T3.Web.Router, ip: ip, port: port, startup_log: false)
   end
 
   @doc """

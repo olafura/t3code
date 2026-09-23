@@ -5,6 +5,9 @@ defmodule T3.Auth do
 
     * A pairing token (5 minutes, single use) is exchanged at `/oauth/token` for a
       bearer access token (30 days).
+    * The desktop app's bootstrap token (`T3.Desktop`) is exchanged the same way,
+      as often as its window needs, for 24 hours from boot, with administrative
+      scopes.
     * A bearer token buys a WebSocket ticket (5 minutes, single use), which the
       client puts in the socket URL so the long-lived token never appears there.
 
@@ -21,6 +24,8 @@ defmodule T3.Auth do
   @session_ttl :timer.hours(24 * 30)
   @ticket_ttl :timer.minutes(5)
   @standard_scopes ~w(orchestration:read orchestration:operate terminal:operate review:write relay:read)
+  @admin_scopes @standard_scopes ++ ~w(access:read access:write relay:write)
+  @desktop_ttl :timer.hours(24)
   @tickets __MODULE__.Tickets
 
   @schema [
@@ -89,36 +94,42 @@ defmodule T3.Auth do
     :ets.new(@tickets, [:named_table, :public, write_concurrency: true])
     path = T3.Store.path()
     with_db(path, &ensure_schema/1)
-    {:ok, %{path: path}}
+
+    desktop =
+      case Application.get_env(:t3, :desktop_token) do
+        nil -> nil
+        token -> %{hash: hash(token), expires_at: now() + @desktop_ttl}
+      end
+
+    {:ok, %{path: path, desktop: desktop}}
   end
 
   @impl true
-  def handle_call({:exchange, token, label}, _from, state) do
+  def handle_call({:exchange, token, label}, _from, %{desktop: desktop} = state) do
     reply =
       with_db(state.path, fn db ->
-        case query(db, "DELETE FROM auth_pairing WHERE token_hash = ?1 RETURNING expires_at", [
-               hash(token)
-             ]) do
-          [[expires_at]] ->
-            if expires_at > now() do
-              access = random_token()
-              expires = now() + @session_ttl
+        cond do
+          desktop != nil and :crypto.hash_equals(hash(token), desktop.hash) ->
+            if desktop.expires_at > now(),
+              do: create_session(db, @admin_scopes, label),
+              else: :error
 
-              exec(db, "INSERT INTO auth_sessions VALUES (?1, ?2, ?3, ?4, ?5)", [
-                hash(access),
-                Enum.join(@standard_scopes, " "),
-                label,
-                now(),
-                expires
-              ])
+          true ->
+            case query(
+                   db,
+                   "DELETE FROM auth_pairing WHERE token_hash = ?1 RETURNING expires_at",
+                   [
+                     hash(token)
+                   ]
+                 ) do
+              [[expires_at]] ->
+                if expires_at > now(),
+                  do: create_session(db, @standard_scopes, label),
+                  else: :error
 
-              {:ok, access, div(@session_ttl, 1000), @standard_scopes}
-            else
-              :error
+              _ ->
+                :error
             end
-
-          _ ->
-            :error
         end
       end)
 
@@ -142,6 +153,20 @@ defmodule T3.Auth do
       end)
 
     {:reply, reply, state}
+  end
+
+  defp create_session(db, scopes, label) do
+    access = random_token()
+
+    exec(db, "INSERT INTO auth_sessions VALUES (?1, ?2, ?3, ?4, ?5)", [
+      hash(access),
+      Enum.join(scopes, " "),
+      label,
+      now(),
+      now() + @session_ttl
+    ])
+
+    {:ok, access, div(@session_ttl, 1000), scopes}
   end
 
   defp ensure_schema(db), do: Enum.each(@schema, &(:ok = Sqlite3.execute(db, &1)))
