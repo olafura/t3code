@@ -34,6 +34,7 @@ defmodule T3.MixProject do
       {:exqlite, "~> 0.41"},
       {:libcluster, "~> 3.5"},
       {:mint_web_socket, "~> 1.0", only: :test},
+      {:tz, "~> 0.28"},
       {:websock_adapter, "~> 0.6"},
       {:x509, "~> 0.9"}
     ]

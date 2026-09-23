@@ -65,6 +65,7 @@ import {
   TerminalError,
   TerminalSessionLookupError,
   ThreadId,
+  UsageReadError,
   WS_METHODS,
   WorktreeSetupStreamEvent,
   WsRpcGroup,
@@ -124,6 +125,7 @@ const decodeScheduledTaskError = Schema.decodeUnknownOption(ScheduledTaskError);
 const decodeProjectClones = Schema.decodeUnknownSync(Schema.toCodecJson(ProjectCloneListEvent));
 const decodeRepositoryError = Schema.decodeUnknownOption(SourceControlRepositoryError);
 const decodeProviderUpdateError = Schema.decodeUnknownOption(ServerProviderUpdateError);
+const decodeUsageReadError = Schema.decodeUnknownOption(UsageReadError);
 const decodePreviewError = Schema.decodeUnknownOption(PreviewError);
 const decodePreviewEvent = Schema.decodeUnknownSync(Schema.toCodecJson(PreviewEvent));
 const decodeLocalServers = Schema.decodeUnknownSync(Schema.toCodecJson(DiscoveredLocalServerList));
@@ -1028,6 +1030,18 @@ export function makeV3Session(input: {
                 }),
             ),
           ),
+      ),
+      // Usage is read from the node's own provider transcripts.
+      [WS_METHODS.serverGetUsageSummary]: forward(
+        WS_METHODS.serverGetUsageSummary,
+        (_request: object, message, cause) =>
+          decodeUsageReadError(cause instanceof ClusterRpcError ? cause.detail : undefined).pipe(
+            Option.getOrElse(() => new UsageReadError({ reason: "scanFailed", detail: message })),
+          ),
+      ),
+      [WS_METHODS.serverRefreshUsageRates]: forward(
+        WS_METHODS.serverRefreshUsageRates,
+        (_request: object, _message, cause) => cause,
       ),
       // Nodes have no background policy that client activity would steer.
       [WS_METHODS.serverReportClientActivity]: () => Effect.void,

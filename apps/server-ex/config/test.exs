@@ -9,3 +9,6 @@ config :t3, text_claude_command: "t3-test-no-claude", text_codex_command: "t3-te
 
 # Provider update checks never reach the npm registry.
 config :t3, provider_update_checks: false
+
+# Usage pricing never fetches the LiteLLM table; tests that price point this at a file.
+config :t3, usage_rates_url: "t3-test-no-usage-rates.json"

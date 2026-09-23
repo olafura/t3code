@@ -62,6 +62,8 @@ defmodule T3.Rpc do
 
   def handle("server.retryResourceTelemetry", input), do: T3.Diagnostics.retry(input)
   def handle("server.getBackgroundPolicy", input), do: T3.Diagnostics.background_policy(input)
+  def handle("server.getUsageSummary", input), do: T3.Usage.summary(input)
+  def handle("server.refreshUsageRates", input), do: T3.Usage.refresh_rates(input)
   def handle("preview.open", input), do: T3.Preview.open(input)
   def handle("preview.navigate", input), do: T3.Preview.navigate(input)
   def handle("preview.reportStatus", input), do: T3.Preview.report_status(input)
