@@ -18,6 +18,8 @@ for line in sys.stdin:
         decision = msg["result"]["decision"]
         ctx = pending_ctx
         status = "completed" if decision in ("accept", "acceptForSession") else "declined"
+        if status == "completed":
+            open("x", "w").write("approved\n")
         send({"method": "item/completed", "params": {**ctx, "item": {"type": "commandExecution", "id": "cmd-1", "command": "touch x", "status": status, "aggregatedOutput": "", "exitCode": 0}}})
         send({"method": "turn/completed", "params": {**ctx, "turn": {"id": ctx["turnId"], "status": "completed"}}})
         continue

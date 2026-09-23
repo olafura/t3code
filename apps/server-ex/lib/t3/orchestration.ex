@@ -1,7 +1,8 @@
 defmodule T3.Orchestration do
   @moduledoc """
-  Client commands on this node's threads: start a thread, send a message, and
-  interrupt a run, for threads whose provider is Codex or Claude.
+  Client commands on this node's threads: start a thread, send a message, answer
+  an approval, and interrupt a run, for threads whose provider is Codex or Claude;
+  plus the diffs of their checkpoints.
 
   Each command is decided inside the thread's stream process (`T3.Streams.transact/3`),
   so reading the thread and writing its new entities is atomic. Starting the provider
@@ -18,12 +19,25 @@ defmodule T3.Orchestration do
   @spec handle(String.t(), map) :: {:ok, term} | {:error, String.t()}
   def handle("orchestration.dispatchCommand", command), do: dispatch(command)
   def handle("orchestration.launchThread", input), do: launch_thread(input)
+
+  def handle("orchestration.getTurnDiff", %{"threadId" => thread_id} = input),
+    do: turn_diff(thread_id, input["fromTurnCount"], input["toTurnCount"], input)
+
+  def handle("orchestration.getFullThreadDiff", %{"threadId" => thread_id} = input),
+    do: turn_diff(thread_id, 0, input["toTurnCount"], input)
+
   def handle(method, _payload), do: {:error, "#{method} is not served by this node yet"}
+
+  defp turn_diff(thread_id, from, to, input) do
+    state = T3.Streams.Server.state(T3.Streams.ensure(thread_id))
+    T3.Checkpoint.turn_diff(state, thread_id, from, to, input["ignoreWhitespace"] != false)
+  end
 
   @spec dispatch(map) :: {:ok, map} | {:error, String.t()}
   def dispatch(%{"type" => "message.dispatch", "threadId" => thread_id} = command) do
     case T3.Streams.transact(thread_id, :thread, &decide_message(&1, thread_id, command)) do
       {:ok, turn} ->
+        :ok = T3.Checkpoint.baseline(turn.cwd, turn.scope_id, turn.run_ordinal - 1)
         :ok = runtime(turn.ids.instance).start_turn(thread_id, turn)
         {:ok, %{"sequence" => sequence(thread_id)}}
 
@@ -144,6 +158,24 @@ defmodule T3.Orchestration do
     }
 
     provider_thread = StreamState.get(state, "provider-thread")[provider_thread_id]
+    scope_id = T3.Checkpoint.scope_id(thread_id)
+
+    # One root checkpoint scope per thread; it follows the latest run.
+    scope_change =
+      if StreamState.get(state, "checkpoint-scope")[scope_id] do
+        upsert(
+          state,
+          "checkpoint-scope",
+          scope_id,
+          &Map.merge(&1, %{"runId" => ids.run, "nodeId" => ids.root_node, "cwd" => cwd})
+        )
+      else
+        create(
+          "checkpoint-scope",
+          scope_id,
+          T3.Checkpoint.scope(thread_id, ids.run, ids.root_node, provider_thread_id, cwd, at)
+        )
+      end
 
     provider_changes =
       if provider_thread do
@@ -181,14 +213,16 @@ defmodule T3.Orchestration do
     text = command["text"] || ""
 
     changes =
-      Enum.reject(provider_changes, &is_nil/1) ++
+      Enum.reject(provider_changes ++ [scope_change], &is_nil/1) ++
         [
           create("run", ids.run, Entities.run(ids, ordinal, selection, at)),
           create("run-attempt", ids.attempt, Entities.attempt(ids)),
           create(
             "node",
             ids.root_node,
-            Entities.node(ids, ids.root_node, "root_turn", "pending", at)
+            Entities.node(ids, ids.root_node, "root_turn", "pending", at, %{
+              "checkpointScopeId" => scope_id
+            })
           ),
           create(
             "message",
@@ -222,6 +256,7 @@ defmodule T3.Orchestration do
       run_ordinal: ordinal,
       text: text,
       cwd: cwd,
+      scope_id: scope_id,
       model: selection["model"],
       runtime_mode: thread["runtimeMode"] || "full-access",
       native_thread_id: get_in(provider_thread || %{}, ["nativeThreadRef", "nativeId"])

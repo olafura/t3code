@@ -8,6 +8,14 @@ defmodule T3.OrchestrationTest do
   @fake_claude Path.expand("../support/fake_claude.py", __DIR__)
 
   setup %{tmp_dir: dir} do
+    # Threads without a project run in the node's cwd; make that a repo of its own so
+    # checkpoints land there and not in this checkout.
+    work = Path.join(dir, "work")
+    File.mkdir_p!(work)
+    {_, 0} = System.cmd("git", ~w(init -q -b main), cd: work)
+    previous_cwd = File.cwd!()
+    File.cd!(work)
+    on_exit(fn -> File.cd!(previous_cwd) end)
     Application.put_env(:t3, :home, dir)
     Application.put_env(:t3, :codex_command, ["python3", "-u", @fake_codex])
     Application.put_env(:t3, :claude_command, ["python3", "-u", @fake_claude])
@@ -23,7 +31,7 @@ defmodule T3.OrchestrationTest do
     start_supervised!({Registry, keys: :unique, name: T3.Codex.Registry})
     start_supervised!({Registry, keys: :unique, name: T3.Claude.Registry}, id: :claude_registry)
     start_supervised!({DynamicSupervisor, name: T3.Codex.Supervisor, strategy: :one_for_one})
-    :ok
+    %{work: work}
   end
 
   defp launch(text, instance \\ "codex") do
@@ -74,12 +82,13 @@ defmodule T3.OrchestrationTest do
     assert Enum.map(items, & &1["type"]) == [
              "user_message",
              "command_execution",
-             "assistant_message"
+             "assistant_message",
+             "checkpoint"
            ]
 
-    assert Enum.map(items, & &1["ordinal"]) == [0, 1, 2]
+    assert Enum.map(items, & &1["ordinal"]) == [0, 1, 2, 3]
 
-    [_user, command, answer] = items
+    [_user, command, answer, _checkpoint] = items
 
     assert %{"input" => "ls", "output" => "a.txt\n", "exitCode" => 0, "status" => "completed"} =
              command
@@ -142,10 +151,11 @@ defmodule T3.OrchestrationTest do
                "user_message",
                "reasoning",
                "command_execution",
-               "assistant_message"
+               "assistant_message",
+               "checkpoint"
              ]
 
-      [_, thinking, command, answer] = items
+      [_, thinking, command, answer, _checkpoint] = items
       assert %{"text" => "Let me look.", "status" => "completed"} = thinking
       assert %{"input" => "ls", "output" => "a.txt\n", "status" => "completed"} = command
 
@@ -229,6 +239,55 @@ defmodule T3.OrchestrationTest do
 
       state = await_run(thread_id, "completed")
       assert Enum.any?(StreamState.list(state, "turn-item"), &(&1["text"] == "denied"))
+    end
+  end
+
+  describe "checkpoints" do
+    test "a completed run records what it changed, and its diff is served", %{work: dir} do
+      File.write!(Path.join(dir, "before.txt"), "already here\n")
+      thread_id = launch("approve the command")
+      request = await_request(thread_id)
+
+      {:ok, _} =
+        Orchestration.dispatch(%{
+          "type" => "runtime-request.respond",
+          "threadId" => thread_id,
+          "requestId" => request["id"],
+          "decision" => "accept"
+        })
+
+      state = await_run(thread_id, "completed")
+      scope_id = T3.Checkpoint.scope_id(thread_id)
+
+      assert [%{"id" => ^scope_id, "kind" => "root_run", "cwd" => ^dir}] =
+               StreamState.list(state, "checkpoint-scope")
+
+      assert [%{"status" => "ready", "appRunOrdinal" => 1, "files" => files} = checkpoint] =
+               StreamState.list(state, "checkpoint")
+
+      # The baseline was taken before the turn, so only the turn's own file shows.
+      assert [%{"path" => "x", "additions" => 1}] = files
+      assert [%{"checkpointId" => checkpoint_id}] = StreamState.list(state, "run")
+      assert checkpoint_id == checkpoint["id"]
+
+      assert %{"type" => "checkpoint", "files" => ^files} =
+               state |> StreamState.list("turn-item") |> List.last()
+
+      assert {:ok, %{"diff" => diff, "toTurnCount" => 1}} =
+               Orchestration.handle("orchestration.getTurnDiff", %{
+                 "threadId" => thread_id,
+                 "fromTurnCount" => 0,
+                 "toTurnCount" => 1
+               })
+
+      assert diff =~ "+++ b/x"
+      refute diff =~ "before.txt"
+
+      assert {:ok, %{"diff" => ^diff}} =
+               Orchestration.handle("orchestration.getFullThreadDiff", %{
+                 "threadId" => thread_id,
+                 "toTurnCount" => 1
+               })
     end
   end
 

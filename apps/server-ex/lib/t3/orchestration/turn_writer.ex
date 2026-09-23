@@ -251,34 +251,82 @@ defmodule T3.Orchestration.TurnWriter do
     state
   end
 
-  @doc "Ends the run: provider turn, attempt, run, root node, and provider thread."
+  @doc """
+  Ends the run: provider turn, attempt, run, root node, and provider thread. A
+  completed run also captures its workspace checkpoint (`T3.Checkpoint`).
+  """
   def finish(state, status, failure) do
     ids = state.turn.ids
     at = Entities.now()
     done = %{"status" => status, "completedAt" => at}
+    checkpoint = if status == "completed", do: capture_checkpoint(state.turn, at)
+    run_done = if checkpoint, do: Map.put(done, "checkpointId", checkpoint["id"]), else: done
 
     commit(state, fn stream ->
-      [
-        Map.has_key?(ids, :provider_turn) &&
-          Orchestration.upsert(stream, "provider-turn", ids.provider_turn, &Map.merge(&1, done)),
-        Orchestration.upsert(stream, "run-attempt", ids.attempt, &Map.merge(&1, done)),
-        Orchestration.upsert(stream, "run", ids.run, &Map.merge(&1, done)),
-        Orchestration.upsert(stream, "node", ids.root_node, &Map.merge(&1, done)),
-        Orchestration.upsert(
-          stream,
-          "provider-thread",
-          ids.provider_thread,
-          &Map.merge(&1, %{"status" => "idle", "updatedAt" => at})
-        ),
-        failure && status == "failed" &&
+      checkpoint_changes(stream, state.turn, checkpoint, at) ++
+        [
+          Map.has_key?(ids, :provider_turn) &&
+            Orchestration.upsert(stream, "provider-turn", ids.provider_turn, &Map.merge(&1, done)),
+          Orchestration.upsert(stream, "run-attempt", ids.attempt, &Map.merge(&1, done)),
+          Orchestration.upsert(stream, "run", ids.run, &Map.merge(&1, run_done)),
+          Orchestration.upsert(stream, "node", ids.root_node, &Map.merge(&1, done)),
           Orchestration.upsert(
             stream,
-            "provider-session",
-            "provider-session:#{Entities.driver(ids)}:#{ids.thread}",
-            &Map.merge(&1, %{"lastError" => failure, "updatedAt" => at})
-          )
-      ]
+            "provider-thread",
+            ids.provider_thread,
+            &Map.merge(&1, %{"status" => "idle", "updatedAt" => at})
+          ),
+          failure && status == "failed" &&
+            Orchestration.upsert(
+              stream,
+              "provider-session",
+              "provider-session:#{Entities.driver(ids)}:#{ids.thread}",
+              &Map.merge(&1, %{"lastError" => failure, "updatedAt" => at})
+            )
+        ]
     end)
+  end
+
+  defp capture_checkpoint(%{scope_id: scope_id} = turn, at) do
+    T3.Checkpoint.capture_run(
+      turn.cwd,
+      scope_id,
+      turn.run_ordinal,
+      turn.ids.run,
+      turn.ids.root_node,
+      turn.ids.thread,
+      at
+    )
+  end
+
+  defp capture_checkpoint(_turn, _at), do: nil
+
+  # The checkpoint and the turn item that shows its changed files.
+  defp checkpoint_changes(_stream, _turn, nil, _at), do: []
+
+  defp checkpoint_changes(stream, turn, checkpoint, at) do
+    item_id = item_id(turn.ids, "checkpoint:#{checkpoint["id"]}")
+
+    [
+      Orchestration.create("checkpoint", checkpoint["id"], checkpoint),
+      Orchestration.create(
+        "turn-item",
+        item_id,
+        Entities.turn_item(
+          turn.ids,
+          item_id,
+          "checkpoint",
+          Orchestration.next_ordinal(stream),
+          "completed",
+          at,
+          %{
+            "checkpointId" => checkpoint["id"],
+            "scopeId" => checkpoint["scopeId"],
+            "files" => checkpoint["files"]
+          }
+        )
+      )
+    ]
   end
 
   @doc "Buffers streamed `delta` for an item's `field`; written as an append on flush."
