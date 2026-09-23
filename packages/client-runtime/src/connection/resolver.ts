@@ -40,6 +40,7 @@ import * as ConnectionProfileStore from "./profileStore.ts";
 import {
   appendOrchestrationProtocol,
   SHAPE_PROTOCOL_VERSION,
+  descriptorServesEnvironment,
   orchestrationProtocolCompatibilityError,
 } from "./compatibility.ts";
 import { fetchRemoteEnvironmentDescriptor } from "../environment/descriptor.ts";
@@ -274,7 +275,7 @@ export const make = Effect.gen(function* () {
       Effect.mapError(mapRemoteEnvironmentError),
       Effect.provideService(HttpClient.HttpClient, httpClient),
     );
-    if (descriptor.environmentId !== target.environmentId) {
+    if (!descriptorServesEnvironment(descriptor, target.environmentId)) {
       return yield* environmentMismatchError({
         expected: target.environmentId,
         actual: descriptor.environmentId,

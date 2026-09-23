@@ -16,7 +16,9 @@ export type StreamShape = {
   readonly node: string;
   readonly stream: string;
 };
-export type ConfigShape = { readonly type: "config"; readonly node: string };
+export type ConfigShape =
+  | { readonly type: "config"; readonly node: string }
+  | { readonly type: "config"; readonly environment: string };
 export type Shape = ShellShape | StreamShape | ConfigShape;
 
 /** A server frame addressed to one subscription (`id` already stripped of meaning). */

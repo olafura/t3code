@@ -1,4 +1,8 @@
-import type { DesktopSshEnvironmentTarget, EnvironmentId } from "@t3tools/contracts";
+import type {
+  DesktopSshEnvironmentTarget,
+  EnvironmentId,
+  ExecutionEnvironmentDescriptor,
+} from "@t3tools/contracts";
 import { resolveRemotePairingTarget } from "@t3tools/shared/remote";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -31,7 +35,10 @@ import {
 } from "./model.ts";
 import * as Persistence from "../platform/persistence.ts";
 import * as EnvironmentRegistry from "./registry.ts";
-import { orchestrationProtocolCompatibilityError } from "./compatibility.ts";
+import {
+  orchestrationProtocolCompatibilityError,
+  SHAPE_PROTOCOL_VERSION,
+} from "./compatibility.ts";
 
 export interface PairingConnectionInput {
   readonly pairingUrl?: string;
@@ -84,8 +91,9 @@ const resolvePairingTarget = Effect.fn("clientRuntime.connection.onboarding.reso
   },
 );
 
-export const preparePairingRegistration = Effect.fn(
-  "clientRuntime.connection.onboarding.preparePairingRegistration",
+/** The paired environment's registration, plus the rest of its cluster (protocol 3). */
+export const preparePairingRegistrations = Effect.fn(
+  "clientRuntime.connection.onboarding.preparePairingRegistrations",
 )(function* (input: PairingConnectionInput) {
   const target = yield* resolvePairingTarget(input);
   const presentation = yield* ClientCapabilities.ClientPresentation;
@@ -102,33 +110,71 @@ export const preparePairingRegistration = Effect.fn(
   }).pipe(Effect.mapError(mapRemoteEnvironmentError));
   const connectionId = `bearer:${descriptor.environmentId}`;
 
-  return new BearerConnectionRegistration({
+  const profile = new BearerConnectionProfile({
+    connectionId,
+    environmentId: descriptor.environmentId,
+    label: descriptor.label,
+    httpBaseUrl: target.httpBaseUrl,
+    wsBaseUrl: target.wsBaseUrl,
+  });
+  const credential = new BearerConnectionCredential({ token: access.access_token });
+  const registration = new BearerConnectionRegistration({
     target: new BearerConnectionTarget({
       environmentId: descriptor.environmentId,
       label: descriptor.label,
       connectionId,
     }),
-    profile: new BearerConnectionProfile({
-      connectionId,
-      environmentId: descriptor.environmentId,
-      label: descriptor.label,
-      httpBaseUrl: target.httpBaseUrl,
-      wsBaseUrl: target.wsBaseUrl,
-    }),
-    credential: new BearerConnectionCredential({
-      token: access.access_token,
-    }),
+    profile,
+    credential,
   });
+  return { registration, cluster: clusterRegistrations(descriptor, profile, credential) };
 });
+
+export const preparePairingRegistration = (input: PairingConnectionInput) =>
+  Effect.map(preparePairingRegistrations(input), ({ registration }) => registration);
 
 const registerPairingConnection = Effect.fn(
   "clientRuntime.connection.onboarding.registerPairingConnection",
 )(function* (input: PairingConnectionInput) {
-  const registration = yield* preparePairingRegistration(input);
+  const { registration, cluster } = yield* preparePairingRegistrations(input);
   const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
   yield* registry.register(registration);
+  for (const member of cluster) yield* registry.register(member);
   return registration.target.environmentId;
 });
+
+/**
+ * Registrations for the other environments of a protocol-3 cluster. They reach
+ * their nodes through the node just paired, with the same URLs and credential,
+ * so pairing once brings in every machine of the cluster.
+ */
+function clusterRegistrations(
+  descriptor: ExecutionEnvironmentDescriptor,
+  paired: BearerConnectionProfile,
+  credential: BearerConnectionCredential,
+): ReadonlyArray<BearerConnectionRegistration> {
+  if (descriptor.orchestrationProtocolVersion !== SHAPE_PROTOCOL_VERSION) return [];
+  return (descriptor.cluster ?? [])
+    .filter((member) => member.environmentId !== descriptor.environmentId)
+    .map((member) => {
+      const connectionId = `bearer:${member.environmentId}`;
+      return new BearerConnectionRegistration({
+        target: new BearerConnectionTarget({
+          environmentId: member.environmentId,
+          label: member.label,
+          connectionId,
+        }),
+        profile: new BearerConnectionProfile({
+          connectionId,
+          environmentId: member.environmentId,
+          label: member.label,
+          httpBaseUrl: paired.httpBaseUrl,
+          wsBaseUrl: paired.wsBaseUrl,
+        }),
+        credential,
+      });
+    });
+}
 
 const isBearerCredential = Schema.is(BearerConnectionCredential);
 const isBearerProfile = Schema.is(BearerConnectionProfile);

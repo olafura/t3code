@@ -17,6 +17,7 @@ import {
   mapRemoteDpopEnvironmentError,
   mapRemoteEnvironmentError,
 } from "../connection/errors.ts";
+import { descriptorServesEnvironment } from "../connection/compatibility.ts";
 import {
   ConnectionBlockedError,
   ConnectionTransientError,
@@ -152,7 +153,7 @@ export const make = Effect.gen(function* () {
         : yield* fetchDescriptor(input.httpBaseUrl, input.connectionMethod).pipe(
             Effect.provideService(HttpClient.HttpClient, httpClient),
           );
-      if (descriptor.environmentId !== input.expectedEnvironmentId) {
+      if (!descriptorServesEnvironment(descriptor, input.expectedEnvironmentId)) {
         return yield* environmentMismatchError({
           expected: input.expectedEnvironmentId,
           actual: descriptor.environmentId,
@@ -179,9 +180,13 @@ export const make = Effect.gen(function* () {
         Effect.mapError(mapRemoteEnvironmentError),
         Effect.provideService(HttpClient.HttpClient, httpClient),
       );
+      // The environment asked for, which may be a cluster member the node serves.
+      const member = descriptor.cluster?.find(
+        (entry) => entry.environmentId === input.expectedEnvironmentId,
+      );
       return {
-        environmentId: descriptor.environmentId,
-        label: descriptor.label,
+        environmentId: input.expectedEnvironmentId,
+        label: member?.label ?? descriptor.label,
         httpBaseUrl: input.httpBaseUrl,
         socketUrl,
         httpAuthorization: {

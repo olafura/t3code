@@ -264,6 +264,39 @@ describe("RemoteEnvironmentAuthorization", () => {
     }),
   );
 
+  it.effect("authorizes a cluster member through the node that serves it", () =>
+    Effect.gen(function* () {
+      const memberId = EnvironmentId.make("environment-laptop");
+      const harness = yield* makeHarness({
+        responses: [
+          Response.json({
+            ...DESCRIPTOR,
+            orchestrationProtocolVersion: 3,
+            cluster: [
+              { environmentId: ENVIRONMENT_ID, label: DESCRIPTOR.label },
+              { environmentId: memberId, label: "laptop" },
+            ],
+          }),
+          websocketTicket("member-ticket"),
+        ],
+      });
+
+      const prepared = yield* Effect.gen(function* () {
+        const remote = yield* RemoteEnvironmentAuthorization.RemoteEnvironmentAuthorization;
+        return yield* remote.authorizeBearer({
+          expectedEnvironmentId: memberId,
+          httpBaseUrl: ENDPOINT.httpBaseUrl,
+          wsBaseUrl: ENDPOINT.wsBaseUrl,
+          bearerToken: "bearer-token",
+          connectionMethod: "direct",
+        });
+      }).pipe(Effect.provide(harness.layer));
+
+      // The connection is for the member, not the node that carries it.
+      expect(prepared).toMatchObject({ environmentId: memberId, label: "laptop" });
+    }),
+  );
+
   it.effect("revalidates a bearer descriptor after the cache expires", () =>
     Effect.gen(function* () {
       const reassignedEnvironmentId = EnvironmentId.make("environment-2");

@@ -15,6 +15,7 @@ import { BearerConnectionTarget } from "./model.ts";
 import {
   prepareBearerConnectionUpdate,
   preparePairingRegistration,
+  preparePairingRegistrations,
   prepareSshRegistration,
 } from "./onboarding.ts";
 
@@ -32,7 +33,11 @@ const CLIENT_PRESENTATION_LAYER = Layer.succeed(
 
 function pairingHttpLayer(
   calls: Array<{ readonly url: string; readonly init: RequestInit }>,
-  options?: { readonly failDescriptor?: boolean; readonly protocolVersion?: number },
+  options?: {
+    readonly failDescriptor?: boolean;
+    readonly protocolVersion?: number;
+    readonly cluster?: ReadonlyArray<{ readonly environmentId: string; readonly label: string }>;
+  },
 ) {
   const fetchFn = ((input, init = {}) => {
     const url = String(input);
@@ -57,6 +62,7 @@ function pairingHttpLayer(
           capabilities: {
             repositoryIdentity: true,
           },
+          ...(options?.cluster ? { cluster: options.cluster } : {}),
         }),
       );
     }
@@ -80,6 +86,55 @@ function pairingHttpLayer(
 }
 
 describe("connection onboarding", () => {
+  it.effect("pairing one clustered node registers every machine in its cluster", () =>
+    Effect.gen(function* () {
+      const calls: Array<{ readonly url: string; readonly init: RequestInit }> = [];
+      const { registration, cluster } = yield* preparePairingRegistrations({
+        host: "gateway.example.test",
+        pairingCode: "pairing-token",
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            CLIENT_PRESENTATION_LAYER,
+            pairingHttpLayer(calls, {
+              protocolVersion: 3,
+              cluster: [
+                { environmentId: "environment-paired", label: "Paired environment" },
+                { environmentId: "environment-laptop", label: "laptop" },
+              ],
+            }),
+          ),
+        ),
+      );
+
+      expect(registration.target.environmentId).toBe("environment-paired");
+      // The sibling is reached through the paired node, with the same credential.
+      expect(cluster).toHaveLength(1);
+      expect(cluster[0]).toMatchObject({
+        target: {
+          environmentId: "environment-laptop",
+          label: "laptop",
+          connectionId: "bearer:environment-laptop",
+        },
+        profile: {
+          httpBaseUrl: "https://gateway.example.test/",
+          wsBaseUrl: "wss://gateway.example.test/",
+        },
+        credential: { token: "bearer-token" },
+      });
+    }),
+  );
+
+  it.effect("a protocol-2 environment brings no cluster", () =>
+    Effect.gen(function* () {
+      const { cluster } = yield* preparePairingRegistrations({
+        host: "remote.example.test",
+        pairingCode: "pairing-token",
+      }).pipe(Effect.provide(Layer.mergeAll(CLIENT_PRESENTATION_LAYER, pairingHttpLayer([]))));
+      expect(cluster).toEqual([]);
+    }),
+  );
+
   it.effect("prepares a persisted bearer registration from pairing details", () =>
     Effect.gen(function* () {
       const calls: Array<{ readonly url: string; readonly init: RequestInit }> = [];

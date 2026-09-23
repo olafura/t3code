@@ -81,6 +81,10 @@ const makeDependencies = Effect.fn("TestConnectionResolver.makeDependencies")((o
   readonly primaryBearerToken?: string;
   readonly prepareSsh?: ClientCapabilities.SshEnvironmentGateway["Service"]["prepare"];
   readonly descriptorProtocolVersion?: number | null | undefined;
+  readonly descriptorCluster?: ReadonlyArray<{
+    readonly environmentId: string;
+    readonly label: string;
+  }>;
 }) => {
   const profiles = new Map(
     (options?.profiles ?? []).map((profile) => [profile.connectionId, profile]),
@@ -159,6 +163,7 @@ const makeDependencies = Effect.fn("TestConnectionResolver.makeDependencies")((o
               ? {}
               : { orchestrationProtocolVersion: options.descriptorProtocolVersion }),
           capabilities: { repositoryIdentity: true },
+          ...(options?.descriptorCluster ? { cluster: options.descriptorCluster } : {}),
         }),
       )) satisfies typeof fetch),
     Layer.succeed(
@@ -222,6 +227,38 @@ describe("ConnectionResolver", () => {
 
       expect(error).toMatchObject({ reason: "unsupported" });
       expect(error.message).toContain("This client is not supported");
+    }),
+  );
+
+  it.effect("reaches a cluster member through the node it was paired with", () =>
+    Effect.gen(function* () {
+      const cluster = [
+        { environmentId: ENVIRONMENT_ID, label: "Compatible environment" },
+        { environmentId: "environment-laptop", label: "laptop" },
+      ];
+      const target = (environmentId: string) =>
+        new PrimaryConnectionTarget({
+          environmentId: EnvironmentId.make(environmentId),
+          label: "Member",
+          httpBaseUrl: "http://127.0.0.1:3780",
+          wsBaseUrl: "ws://127.0.0.1:3780",
+        });
+      const brokerLayer = yield* makeDependencies({
+        descriptorProtocolVersion: 3,
+        descriptorCluster: cluster,
+      });
+      const broker = yield* ConnectionResolver.ConnectionResolver.pipe(Effect.provide(brokerLayer));
+
+      const member = yield* broker.prepare(catalogEntry(target("environment-laptop")));
+      expect(member).toMatchObject({
+        environmentId: "environment-laptop",
+        orchestrationProtocolVersion: 3,
+      });
+
+      const stranger = yield* Effect.flip(
+        broker.prepare(catalogEntry(target("environment-other"))),
+      );
+      expect(stranger).toBeDefined();
     }),
   );
 

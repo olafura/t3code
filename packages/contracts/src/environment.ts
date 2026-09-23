@@ -201,6 +201,13 @@ export const ExecutionEnvironmentDescriptor = Schema.Struct({
   /** Absent on hosts from before explicit orchestration protocol negotiation. */
   orchestrationProtocolVersion: Schema.optionalKey(Schema.Int),
   capabilities: ExecutionEnvironmentCapabilities,
+  /**
+   * Protocol-3 nodes list every environment in their cluster, this one included.
+   * A client paired with any member reaches the others through it.
+   */
+  cluster: Schema.optionalKey(
+    Schema.Array(Schema.Struct({ environmentId: EnvironmentId, label: TrimmedNonEmptyString })),
+  ),
 });
 export type ExecutionEnvironmentDescriptor = typeof ExecutionEnvironmentDescriptor.Type;
 

@@ -62,18 +62,40 @@ function unsupported(tag: string): RpcClientError.RpcClientError {
  */
 export function makeV3Session(input: {
   readonly socket: ClusterSocket;
-  readonly node: string;
-}): Effect.Effect<RpcSession> {
+  readonly environmentId: string;
+}): Effect.Effect<RpcSession, ConnectionTransientError> {
   return Effect.gen(function* () {
-    const { socket, node } = input;
-    const config = yield* Deferred.make<ServerConfig>();
-    const unsubscribeConfig = socket.subscribe({ type: "config", node }, (frame) => {
-      if (frame.t === "config")
-        Deferred.doneUnsafe(config, Effect.succeed(decodeConfig(frame.config)));
-    });
-    const initialConfig = Deferred.await(config).pipe(
+    const { socket } = input;
+    // The environment may live on another node of the cluster; its config reply
+    // names the node that this session's shapes are addressed to.
+    const reply = yield* Deferred.make<
+      { readonly node: string; readonly config: ServerConfig },
+      ConnectionTransientError
+    >();
+    const unsubscribeConfig = socket.subscribe(
+      { type: "config", environment: input.environmentId },
+      (frame) => {
+        if (frame.t === "config")
+          Deferred.doneUnsafe(
+            reply,
+            Effect.succeed({ node: String(frame.node), config: decodeConfig(frame.config) }),
+          );
+        if (frame.t === "error")
+          Deferred.doneUnsafe(
+            reply,
+            Effect.fail(
+              new ConnectionTransientError({
+                reason: "remote-unavailable",
+                detail: String(frame.reason),
+              }),
+            ),
+          );
+      },
+    );
+    const { node, config } = yield* Deferred.await(reply).pipe(
       Effect.ensuring(Effect.sync(unsubscribeConfig)),
     );
+    const initialConfig = Effect.succeed(config);
 
     const shell = () => {
       const fold = new ShellShapeFold(node);
@@ -140,20 +162,11 @@ export function makeV3Session(input: {
       },
     }) as unknown as WsRpcProtocolClient;
 
-    const connected = Effect.mapError(
-      initialConfig,
-      () =>
-        new ConnectionTransientError({
-          reason: "transport",
-          detail: "protocol-3 node unavailable",
-        }),
-    );
-
     return {
       client,
-      initialConfig: connected,
+      initialConfig,
       subscribeServerConfig: serverConfig,
-      ready: Effect.asVoid(connected),
+      ready: Effect.void,
       probe: Effect.void,
       closed: Effect.never,
     } satisfies RpcSession;
@@ -193,7 +206,7 @@ export const connectV3Session = (
       ),
       (socket) => Effect.sync(() => socket.close()),
     );
-    const node = yield* Deferred.await(hello).pipe(
+    yield* Deferred.await(hello).pipe(
       Effect.timeoutOrElse({
         duration: "15 seconds",
         orElse: () =>
@@ -205,6 +218,6 @@ export const connectV3Session = (
           ),
       }),
     );
-    const session = yield* makeV3Session({ socket, node });
+    const session = yield* makeV3Session({ socket, environmentId: connection.environmentId });
     return { ...session, closed: Deferred.await(closed) } satisfies RpcSession;
   });
