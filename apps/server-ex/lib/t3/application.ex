@@ -16,6 +16,8 @@ defmodule T3.Application do
           T3.Settings,
           T3.Streams,
           T3.Shell,
+          # Turns this node was running when it stopped end as interrupted.
+          Supervisor.child_spec({Task, &T3.Orchestration.Recovery.run/0}, id: :recovery),
           {Registry, keys: :unique, name: T3.Codex.Registry},
           {Registry, keys: :unique, name: T3.Claude.Registry},
           {DynamicSupervisor, name: T3.Codex.Supervisor, strategy: :one_for_one},
