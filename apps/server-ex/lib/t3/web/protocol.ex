@@ -21,6 +21,9 @@ defmodule T3.Web.Protocol do
     * `{"type": "resourceTelemetry", "node": n}`: that node's resource monitor
       (`ResourceTelemetrySnapshot`), sampled every few seconds while subscribed
     * `{"type": "preview", "node": n}`: that node's preview tab events (`PreviewEvent`)
+    * `{"type": "previewAutomation", "node": n, "host": PreviewAutomationHost}`: this
+      client as that node's browser automation host; agents' browser actions
+      (`PreviewAutomationStreamEvent`) until the node drops the host, which ends it
     * `{"type": "localServers", "node": n}`: web servers listening on that node's
       host (`DiscoveredLocalServerList`), then the list whenever it changes
     * `{"type": "projectClones", "node": n}`: that node's project clones in
@@ -68,6 +71,8 @@ defmodule T3.Web.Protocol do
       {"t": "scheduledTasks", "id", "tasks"} (ScheduledTask[])
       {"t": "projectClones", "id", "clones"} (ProjectCloneSnapshot[])
       {"t": "preview", "id", "event"} (PreviewEvent)
+      {"t": "previewAutomation", "id", "event"} (PreviewAutomationStreamEvent)
+      {"t": "end", "id"}   (the shape is over; unsubscribed)
       {"t": "resourceTelemetry", "id", "snapshot"} (ResourceTelemetrySnapshot)
       {"t": "authAccess", "id", "event"} (AuthAccessStreamEvent)
       {"t": "localServers", "id", "list"} (DiscoveredLocalServerList)
@@ -166,6 +171,14 @@ defmodule T3.Web.Protocol do
 
   defp decode_shape(%{"type" => "preview", "node" => node}, nodes) do
     with {:ok, node} <- known_node(node, nodes), do: {:ok, {:preview, node}}
+  end
+
+  defp decode_shape(
+         %{"type" => "previewAutomation", "node" => node, "host" => %{"clientId" => id} = host},
+         nodes
+       )
+       when is_binary(id) do
+    with {:ok, node} <- known_node(node, nodes), do: {:ok, {:preview_automation, node, host}}
   end
 
   defp decode_shape(%{"type" => "localServers", "node" => node}, nodes) do

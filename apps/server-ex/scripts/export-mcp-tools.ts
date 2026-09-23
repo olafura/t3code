@@ -17,6 +17,7 @@ const toolkits = [
   "attachment",
   "environment",
   "orchestrator",
+  "preview",
   "previewControls",
   "project",
   "pullRequests",

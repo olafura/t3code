@@ -69,6 +69,8 @@ import {
   WS_METHODS,
   WorktreeSetupStreamEvent,
   WsRpcGroup,
+  PreviewAutomationStreamEvent,
+  type PreviewAutomationHost,
 } from "@t3tools/contracts";
 import {
   compileResolvedKeybindingsConfig,
@@ -128,6 +130,9 @@ const decodeProviderUpdateError = Schema.decodeUnknownOption(ServerProviderUpdat
 const decodeUsageReadError = Schema.decodeUnknownOption(UsageReadError);
 const decodePreviewError = Schema.decodeUnknownOption(PreviewError);
 const decodePreviewEvent = Schema.decodeUnknownSync(Schema.toCodecJson(PreviewEvent));
+const decodePreviewAutomationEvent = Schema.decodeUnknownSync(
+  Schema.toCodecJson(PreviewAutomationStreamEvent),
+);
 const decodeLocalServers = Schema.decodeUnknownSync(Schema.toCodecJson(DiscoveredLocalServerList));
 const decodeTelemetry = Schema.decodeUnknownSync(Schema.toCodecJson(ResourceTelemetrySnapshot));
 const decodeAuthAccess = Schema.decodeUnknownSync(Schema.toCodecJson(AuthAccessStreamEvent));
@@ -674,6 +679,12 @@ export function makeV3Session(input: {
       shapeStream(socket, { type: "preview", node }, (frame) =>
         frame.t === "preview" ? [decodePreviewEvent(frame.event)] : [],
       );
+    // The stream ends when the node drops this host; the caller registers again.
+    // A node that cannot host automation just never sends requests.
+    const previewAutomation = (host: PreviewAutomationHost) =>
+      shapeStream(socket, { type: "previewAutomation", node, host }, (frame) =>
+        frame.t === "previewAutomation" ? [decodePreviewAutomationEvent(frame.event)] : [],
+      );
     const localServers = () =>
       shapeStream(socket, { type: "localServers", node }, (frame) =>
         frame.t === "localServers" ? [decodeLocalServers(frame.list)] : [],
@@ -1007,6 +1018,15 @@ export function makeV3Session(input: {
       [WS_METHODS.previewClose]: previewCommand(WS_METHODS.previewClose),
       [WS_METHODS.previewList]: previewCommand(WS_METHODS.previewList),
       [WS_METHODS.subscribePreviewEvents]: previewEvents,
+      [WS_METHODS.previewAutomationConnect]: previewAutomation,
+      [WS_METHODS.previewAutomationRespond]: forward(
+        WS_METHODS.previewAutomationRespond,
+        (_request: object, _message, cause) => cause,
+      ),
+      [WS_METHODS.previewAutomationFocusHost]: forward(
+        WS_METHODS.previewAutomationFocusHost,
+        (_request: object, _message, cause) => cause,
+      ),
       [WS_METHODS.subscribeDiscoveredLocalServers]: localServers,
       [WS_METHODS.scheduledTasksList]: scheduledTaskCommand(WS_METHODS.scheduledTasksList),
       [WS_METHODS.scheduledTasksUpsert]: scheduledTaskCommand(WS_METHODS.scheduledTasksUpsert),

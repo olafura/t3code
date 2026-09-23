@@ -31,6 +31,7 @@ defmodule T3.Application do
           T3.ScheduledTasks,
           T3.ProjectClones,
           T3.Preview,
+          T3.PreviewAutomation,
           T3.LocalServers,
           T3.Diagnostics,
           T3.PullRequests.Refreshes,

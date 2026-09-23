@@ -119,6 +119,10 @@ defmodule T3.Mcp do
           "structuredContent" => value
         }
 
+      # A tool whose answer is more than JSON, such as a screenshot.
+      {:ok, value, content} ->
+        %{"content" => content, "structuredContent" => value}
+
       {:error, code, message} ->
         failure = %{"_tag" => "OrchestratorMcpFailure", "code" => code, "message" => message}
         %{"content" => [%{"type" => "text", "text" => JSON.encode!(failure)}], "isError" => true}

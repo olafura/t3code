@@ -43,6 +43,12 @@ export type ProjectClonesShape = { readonly type: "projectClones"; readonly node
 export type PreviewShape = { readonly type: "preview"; readonly node: string };
 export type ResourceTelemetryShape = { readonly type: "resourceTelemetry"; readonly node: string };
 export type LocalServersShape = { readonly type: "localServers"; readonly node: string };
+/** This client as a node's browser automation host; the node ends it when it drops the host. */
+export type PreviewAutomationShape = {
+  readonly type: "previewAutomation";
+  readonly node: string;
+  readonly host: Readonly<Record<string, unknown>>;
+};
 export type PullRequestRefreshesShape = {
   readonly type: "pullRequestRefreshes";
   readonly node: string;
@@ -65,6 +71,7 @@ export type Shape =
   | PreviewShape
   | ResourceTelemetryShape
   | LocalServersShape
+  | PreviewAutomationShape
   | PullRequestRefreshesShape
   | GitActionShape
   | ProviderAuthShape
@@ -215,6 +222,8 @@ export class ClusterSocket {
       this.sendSub(id);
       return;
     }
+    // The node ended the shape and already forgot it.
+    if (frame.t === "end") this.subscriptions.delete(id);
     if ((frame.t === "events" || frame.t === "live") && typeof frame.offset === "number") {
       subscription.offset = frame.offset;
     }

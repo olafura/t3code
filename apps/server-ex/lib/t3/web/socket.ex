@@ -155,6 +155,20 @@ defmodule T3.Web.Socket do
     end
   end
 
+  def handle_info({:t3_preview_automation, node, client_id, event}, state) do
+    case state.by_terminal do
+      %{{:preview_automation, ^node, ^client_id} => id} when event == :end ->
+        {:push, Protocol.encode(%{"t" => "end", "id" => id}), unsubscribe(state, id)}
+
+      %{{:preview_automation, ^node, ^client_id} => id} ->
+        {:push, Protocol.encode(%{"t" => "previewAutomation", "id" => id, "event" => event}),
+         state}
+
+      _ ->
+        {:ok, state}
+    end
+  end
+
   def handle_info({:t3_preview, node, event}, state) do
     case state.by_terminal do
       %{{:preview, ^node} => id} ->
@@ -490,6 +504,23 @@ defmodule T3.Web.Socket do
     end
   end
 
+  defp subscribe(state, id, {:preview_automation, node, host}, _offset) do
+    key = {:preview_automation, node, host["clientId"]}
+
+    case remote(node, T3.PreviewAutomation, :connect, [host, self()]) do
+      {:ok, {:ok, _connection_id}} ->
+        {:ok,
+         %{
+           state
+           | subs: Map.put(state.subs, id, key),
+             by_terminal: Map.put(state.by_terminal, key, id)
+         }}
+
+      {:error, reason} ->
+        {:push, Protocol.encode(error_frame(id, reason)), state}
+    end
+  end
+
   defp subscribe(state, id, {:preview, node} = shape, _offset) do
     case remote(node, T3.Preview, :subscribe, [self()]) do
       {:ok, :ok} ->
@@ -681,6 +712,10 @@ defmodule T3.Web.Socket do
           | subs: subs,
             by_terminal: Map.delete(state.by_terminal, {:resource_telemetry, node})
         }
+
+      {{:preview_automation, node, client_id} = key, subs} ->
+        :erpc.cast(node, T3.PreviewAutomation, :disconnect, [client_id, self()])
+        %{state | subs: subs, by_terminal: Map.delete(state.by_terminal, key)}
 
       {{:preview, node}, subs} ->
         :erpc.cast(node, T3.Preview, :unsubscribe, [self()])

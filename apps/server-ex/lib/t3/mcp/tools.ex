@@ -16,6 +16,7 @@ defmodule T3.Mcp.Tools do
                   list_scheduled_tasks schedule_task delete_scheduled_task run_scheduled_task_now)
 
   @delegation ~w(delegate_task task_status task_cancel)
+  @preview T3.Mcp.Preview.names()
 
   @runtime_ranks %{
     "approval-required" => 0,
@@ -27,7 +28,9 @@ defmodule T3.Mcp.Tools do
 
   @doc "The advertised tools (MCP `tools/list`)."
   def list do
-    for tool <- definitions(), tool["name"] in @implemented or tool["name"] in @delegation do
+    for tool <- definitions(),
+        tool["name"] in @implemented or tool["name"] in @delegation or
+          tool["name"] in @preview do
       Map.take(tool, ["name", "description", "inputSchema"])
     end
   end
@@ -60,6 +63,8 @@ defmodule T3.Mcp.Tools do
 
   def call("task_cancel", %{"taskId" => id}, caller),
     do: T3.Orchestration.Delegation.cancel(caller.thread_id, id)
+
+  def call(name, args, caller) when name in @preview, do: T3.Mcp.Preview.call(name, args, caller)
 
   def call(name, _args, _caller),
     do: {:error, "capability_denied", "#{name} is not available on this node."}

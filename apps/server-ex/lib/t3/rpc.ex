@@ -75,6 +75,17 @@ defmodule T3.Rpc do
   def handle("preview.refresh", input), do: T3.Preview.refresh(input)
   def handle("preview.close", input), do: T3.Preview.close(input)
   def handle("preview.list", input), do: T3.Preview.list(input)
+
+  def handle("previewAutomation.respond", input) do
+    :ok = T3.PreviewAutomation.respond(input)
+    {:ok, nil}
+  end
+
+  def handle("previewAutomation.focusHost", input) do
+    :ok = T3.PreviewAutomation.focus_host(input)
+    {:ok, nil}
+  end
+
   def handle("scheduledTasks.list", input), do: T3.ScheduledTasks.list(input)
   def handle("scheduledTasks.upsert", input), do: T3.ScheduledTasks.upsert(input)
   def handle("scheduledTasks.delete", input), do: T3.ScheduledTasks.delete(input)
