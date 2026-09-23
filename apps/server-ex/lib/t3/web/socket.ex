@@ -125,6 +125,16 @@ defmodule T3.Web.Socket do
     end
   end
 
+  def handle_info({:t3_project_clones, node, clones}, state) do
+    case state.by_terminal do
+      %{{:project_clones, ^node} => id} ->
+        {:push, Protocol.encode(%{"t" => "projectClones", "id" => id, "clones" => clones}), state}
+
+      _ ->
+        {:ok, state}
+    end
+  end
+
   def handle_info({:t3_scheduled_tasks, node, tasks}, state) do
     case state.by_terminal do
       %{{:scheduled_tasks, ^node} => id} ->
@@ -371,6 +381,21 @@ defmodule T3.Web.Socket do
     end
   end
 
+  defp subscribe(state, id, {:project_clones, node} = shape, _offset) do
+    case remote(node, T3.ProjectClones, :subscribe, [self()]) do
+      {:ok, {:ok, clones}} ->
+        {:push, Protocol.encode(%{"t" => "projectClones", "id" => id, "clones" => clones}),
+         %{
+           state
+           | subs: Map.put(state.subs, id, shape),
+             by_terminal: Map.put(state.by_terminal, {:project_clones, node}, id)
+         }}
+
+      {:error, reason} ->
+        {:push, Protocol.encode(error_frame(id, reason)), state}
+    end
+  end
+
   defp subscribe(state, id, {:scheduled_tasks, node} = shape, _offset) do
     case remote(node, T3.ScheduledTasks, :subscribe, [self()]) do
       {:ok, {:ok, tasks}} ->
@@ -472,6 +497,10 @@ defmodule T3.Web.Socket do
       {{:config, node}, subs} ->
         :erpc.cast(node, T3.Settings, :unwatch, [self()])
         %{state | subs: subs, by_terminal: Map.delete(state.by_terminal, {:settings, node})}
+
+      {{:project_clones, node}, subs} ->
+        :erpc.cast(node, T3.ProjectClones, :unsubscribe, [self()])
+        %{state | subs: subs, by_terminal: Map.delete(state.by_terminal, {:project_clones, node})}
 
       {{:scheduled_tasks, node}, subs} ->
         :erpc.cast(node, T3.ScheduledTasks, :unsubscribe, [self()])

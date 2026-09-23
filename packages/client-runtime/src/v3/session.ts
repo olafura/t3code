@@ -40,7 +40,9 @@ import {
   OrchestrationV2ThreadLaunchError,
   ORCHESTRATION_V2_WS_METHODS,
   type ResolvedKeybindingsConfig,
+  ProjectCloneListEvent,
   ScheduledTaskError,
+  SourceControlRepositoryError,
   ScheduledTaskListResult,
   ServerConfig,
   ServerProviders,
@@ -107,6 +109,8 @@ const decodeAuthState = Schema.decodeUnknownSync(Schema.toCodecJson(ProviderAuth
 const decodeWorktreeSetup = Schema.decodeUnknownSync(Schema.toCodecJson(WorktreeSetupStreamEvent));
 const decodeScheduledTasks = Schema.decodeUnknownSync(Schema.toCodecJson(ScheduledTaskListResult));
 const decodeScheduledTaskError = Schema.decodeUnknownOption(ScheduledTaskError);
+const decodeProjectClones = Schema.decodeUnknownSync(Schema.toCodecJson(ProjectCloneListEvent));
+const decodeRepositoryError = Schema.decodeUnknownOption(SourceControlRepositoryError);
 const decodeSetupError = Schema.decodeUnknownOption(ProviderSetupError);
 const decodeTerminalError = Schema.decodeUnknownOption(TerminalError);
 const settingsCodec = Schema.toCodecJson(ServerSettings);
@@ -554,6 +558,26 @@ export function makeV3Session(input: {
         ),
       );
 
+    // Repositories are looked up, cloned, and published by the node's host CLIs.
+    const repositoryCommand = (tag: string, operation: string) =>
+      forward(tag, (request: { readonly provider?: string }, message, cause) =>
+        decodeRepositoryError(cause instanceof ClusterRpcError ? cause.detail : undefined).pipe(
+          Option.getOrElse(
+            () =>
+              new SourceControlRepositoryError({
+                provider: (request.provider ??
+                  "unknown") as SourceControlRepositoryError["provider"],
+                operation,
+                detail: message,
+              }),
+          ),
+        ),
+      );
+    const projectClones = () =>
+      shapeStream(socket, { type: "projectClones", node }, (frame) =>
+        frame.t === "projectClones" ? [decodeProjectClones(frame.clones)] : [],
+      );
+
     // A new thread's worktree is prepared on its node.
     const worktreeSetup = (request: { readonly threadId: string }) =>
       shapeStream(socket, { type: "worktreeSetup", node, threadId: request.threadId }, (frame) =>
@@ -783,6 +807,35 @@ export function makeV3Session(input: {
       [WS_METHODS.serverRemoveKeybinding]: keybindingCommand("t3.removeKeybinding"),
       [WS_METHODS.shellOpenInEditor]: openInEditor,
       [WS_METHODS.scheduledTasksSubscribe]: scheduledTasks,
+      [WS_METHODS.serverDiscoverSourceControl]: forward(
+        WS_METHODS.serverDiscoverSourceControl,
+        (_request: object, _message, cause) => cause,
+      ),
+      [WS_METHODS.sourceControlLookupRepository]: repositoryCommand(
+        WS_METHODS.sourceControlLookupRepository,
+        "lookupRepository",
+      ),
+      [WS_METHODS.sourceControlCloneRepository]: repositoryCommand(
+        WS_METHODS.sourceControlCloneRepository,
+        "cloneRepository",
+      ),
+      [WS_METHODS.sourceControlPublishRepository]: repositoryCommand(
+        WS_METHODS.sourceControlPublishRepository,
+        "publishRepository",
+      ),
+      [WS_METHODS.projectCloneStart]: repositoryCommand(
+        WS_METHODS.projectCloneStart,
+        "cloneRepository",
+      ),
+      [WS_METHODS.projectCloneRetry]: repositoryCommand(
+        WS_METHODS.projectCloneRetry,
+        "cloneRepository",
+      ),
+      [WS_METHODS.projectCloneCancel]: forward(
+        WS_METHODS.projectCloneCancel,
+        (_request: object, _message, cause) => cause,
+      ),
+      [WS_METHODS.subscribeProjectClones]: projectClones,
       [WS_METHODS.scheduledTasksList]: scheduledTaskCommand(WS_METHODS.scheduledTasksList),
       [WS_METHODS.scheduledTasksUpsert]: scheduledTaskCommand(WS_METHODS.scheduledTasksUpsert),
       [WS_METHODS.scheduledTasksDelete]: scheduledTaskCommand(WS_METHODS.scheduledTasksDelete),

@@ -44,6 +44,13 @@ defmodule T3.Rpc do
 
   def handle("filesystem.browse", input), do: T3.Projects.browse(input)
   def handle("shell.openInEditor", input), do: T3.Editors.open(input)
+  def handle("server.discoverSourceControl", input), do: T3.SourceControl.discover(input)
+  def handle("sourceControl.lookupRepository", input), do: T3.SourceControl.lookup(input)
+  def handle("sourceControl.cloneRepository", input), do: T3.SourceControl.clone(input)
+  def handle("sourceControl.publishRepository", input), do: T3.SourceControl.publish(input)
+  def handle("projectClone.start", input), do: T3.ProjectClones.start(input)
+  def handle("projectClone.retry", input), do: T3.ProjectClones.retry(input)
+  def handle("projectClone.cancel", input), do: T3.ProjectClones.cancel(input)
   def handle("scheduledTasks.list", input), do: T3.ScheduledTasks.list(input)
   def handle("scheduledTasks.upsert", input), do: T3.ScheduledTasks.upsert(input)
   def handle("scheduledTasks.delete", input), do: T3.ScheduledTasks.delete(input)

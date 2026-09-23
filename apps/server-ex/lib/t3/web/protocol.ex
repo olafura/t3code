@@ -16,6 +16,8 @@ defmodule T3.Web.Protocol do
     * `{"type": "vcs", "node": n, "cwd": dir}`: a checkout's git status, then changes
     * `{"type": "worktreeSetup", "node": n, "threadId": id}`: a new thread's worktree
       setup (`WorktreeSetupStreamEvent`: null, or a snapshot), then changes
+    * `{"type": "projectClones", "node": n}`: that node's project clones in
+      progress (`ProjectCloneSnapshot[]`), then the whole list on every change
     * `{"type": "scheduledTasks", "node": n}`: that node's scheduled tasks, then
       the whole list again whenever one changes
     * `{"type": "providerAuth", "node": n, "instanceId": id}`: that provider
@@ -55,6 +57,7 @@ defmodule T3.Web.Protocol do
       {"t": "providerAuth", "id", "state"} (ProviderAuthState)
       {"t": "worktreeSetup", "id", "event"} (WorktreeSetupStreamEvent)
       {"t": "scheduledTasks", "id", "tasks"} (ScheduledTask[])
+      {"t": "projectClones", "id", "clones"} (ProjectCloneSnapshot[])
       {"t": "rpc.result", "id", "result"} / {"t": "rpc.error", "id", "error", "detail"?}
         (`detail` is the contract error as `{"_tag", ...fields}` when there is one)
       {"t": "pong"}
@@ -139,6 +142,10 @@ defmodule T3.Web.Protocol do
        )
        when is_binary(id) do
     with {:ok, node} <- known_node(node, nodes), do: {:ok, {:git_action, node, input}}
+  end
+
+  defp decode_shape(%{"type" => "projectClones", "node" => node}, nodes) do
+    with {:ok, node} <- known_node(node, nodes), do: {:ok, {:project_clones, node}}
   end
 
   defp decode_shape(%{"type" => "scheduledTasks", "node" => node}, nodes) do
