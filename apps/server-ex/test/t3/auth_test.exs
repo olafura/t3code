@@ -1,0 +1,76 @@
+defmodule T3.AuthTest do
+  use ExUnit.Case, async: false
+
+  alias T3.Test.WsClient
+
+  @moduletag :tmp_dir
+
+  setup %{tmp_dir: dir} do
+    Application.put_env(:t3, :home, dir)
+    Application.put_env(:t3, :port, 0)
+    :persistent_term.erase({T3.Web, :token})
+    start_supervised!({T3.Store, path: Path.join(dir, "t3.sqlite")})
+    start_supervised!(T3.Auth)
+    start_supervised!(T3.Streams)
+    start_supervised!(T3.Shell)
+    {:ok, {_ip, port}} = ThousandIsland.listener_info(start_supervised!(T3.Web))
+    {:ok, _} = Application.ensure_all_started(:inets)
+    %{port: port, path: Path.join(dir, "t3.sqlite")}
+  end
+
+  # The same requests, in the same order, the client runtime makes when pairing.
+  test "pairing token -> bearer token -> ws ticket -> socket", %{port: port, path: path} do
+    pairing = T3.Auth.create_pairing_token(path)
+    base = "http://127.0.0.1:#{port}"
+
+    form = %{
+      "grant_type" => "urn:ietf:params:oauth:grant-type:token-exchange",
+      "subject_token" => pairing,
+      "subject_token_type" => "urn:t3:params:oauth:token-type:environment-bootstrap",
+      "requested_token_type" => "urn:ietf:params:oauth:token-type:access_token",
+      "client_label" => "test"
+    }
+
+    assert {200, %{"access_token" => access, "token_type" => "Bearer", "scope" => scope}} =
+             post_form(base <> "/oauth/token", form)
+
+    assert scope =~ "orchestration:read"
+    # Pairing tokens are single use.
+    assert {400, _} = post_form(base <> "/oauth/token", form)
+
+    assert {200, %{"authenticated" => true, "sessionMethod" => "bearer-access-token"}} =
+             request(:get, base <> "/api/auth/session", access)
+
+    assert {200, %{"authenticated" => false}} = request(:get, base <> "/api/auth/session", nil)
+    assert {401, _} = request(:post, base <> "/api/auth/websocket-ticket", "wrong")
+
+    assert {200, %{"ticket" => ticket, "expiresAt" => _}} =
+             request(:post, base <> "/api/auth/websocket-ticket", access)
+
+    assert {:ok, client} = WsClient.connect(port, "/ws?wsTicket=#{ticket}")
+    assert {%{"t" => "hello"}, _} = WsClient.recv(client, 1_000)
+    # Tickets open one socket.
+    assert {:error, 401} = WsClient.connect(port, "/ws?wsTicket=#{ticket}")
+  end
+
+  defp post_form(url, form) do
+    body = URI.encode_query(form)
+
+    {:ok, {{_, status, _}, _, resp}} =
+      :httpc.request(:post, {url, [], ~c"application/x-www-form-urlencoded", body}, [], [])
+
+    {status, JSON.decode!(to_string(resp))}
+  end
+
+  defp request(method, url, bearer) do
+    headers = if bearer, do: [{~c"authorization", ~c"Bearer " ++ to_charlist(bearer)}], else: []
+
+    req =
+      if method == :post,
+        do: {url, headers, ~c"application/json", ""},
+        else: {url, headers}
+
+    {:ok, {{_, status, _}, _, resp}} = :httpc.request(method, req, [], [])
+    {status, JSON.decode!(to_string(resp))}
+  end
+end
