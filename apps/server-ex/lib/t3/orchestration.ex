@@ -52,22 +52,34 @@ defmodule T3.Orchestration do
          do: {:ok, %{"sequence" => sequence(thread_id)}}
   end
 
+  # An approval's decision, or answers to questions (`answers`, by question id).
   def dispatch(%{"type" => "runtime-request.respond", "threadId" => thread_id} = command) do
-    decision = command["decision"] || "decline"
+    response =
+      if is_map(command["answers"]),
+        do: %{"answers" => command["answers"]},
+        else: %{"decision" => command["decision"] || "decline"}
 
+    respond(thread_id, command["requestId"], response)
+  end
+
+  # Closing questions without answering them.
+  def dispatch(%{"type" => "thread.user-input.dismiss", "threadId" => thread_id} = command),
+    do: respond(thread_id, command["requestId"], %{"dismissed" => true})
+
+  def dispatch(%{"type" => type}), do: {:error, "#{type} is not supported by this node yet"}
+
+  defp respond(thread_id, request_id, response) do
     result =
       Enum.find_value(
         [T3.Codex.ThreadRuntime, T3.Claude.ThreadRuntime, T3.Acp.ThreadRuntime],
         {:error, "no pending request"},
         fn runtime ->
-          if runtime.respond(thread_id, command["requestId"], decision) == :ok, do: :ok
+          if runtime.respond(thread_id, request_id, response) == :ok, do: :ok
         end
       )
 
     with :ok <- result, do: {:ok, %{"sequence" => sequence(thread_id)}}
   end
-
-  def dispatch(%{"type" => type}), do: {:error, "#{type} is not supported by this node yet"}
 
   # A runtime that dies while starting the turn must not leave the run "starting"
   # forever: the run fails and the thread can take the next message.

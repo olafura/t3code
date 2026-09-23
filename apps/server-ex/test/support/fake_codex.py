@@ -1,5 +1,6 @@
 # Fake `codex app-server` for tests: answers the handshake and plays a scripted turn.
-# A turn whose text contains "wait" stays running until turn/interrupt.
+# A turn whose text contains "wait" stays running until turn/interrupt; "approve" asks
+# to run a command and "ask" asks a question (item/tool/requestUserInput).
 import json, sys
 
 def send(msg):
@@ -12,6 +13,14 @@ for line in sys.stdin:
     msg = json.loads(line)
     method, params, mid = msg.get("method"), msg.get("params") or {}, msg.get("id")
     if mid is None:
+        continue
+    # A reply to our question: say what was answered.
+    if "result" in msg and mid == "input-1":
+        ctx = pending_ctx
+        text = "answered " + json.dumps(msg["result"]["answers"], sort_keys=True)
+        send({"method": "item/started", "params": {**ctx, "item": {"type": "agentMessage", "id": "msg-ask", "text": ""}}})
+        send({"method": "item/completed", "params": {**ctx, "item": {"type": "agentMessage", "id": "msg-ask", "text": text}}})
+        send({"method": "turn/completed", "params": {**ctx, "turn": {"id": ctx["turnId"], "status": "completed"}}})
         continue
     # A reply to our approval request: finish the command according to the decision.
     if "result" in msg and mid == "approval-1":
@@ -35,6 +44,11 @@ for line in sys.stdin:
         ctx = {"threadId": thread_id, "turnId": turn_id}
         send({"method": "turn/started", "params": {**ctx, "turn": {"id": turn_id, "status": "inProgress"}}})
         if "wait" in text:
+            continue
+        if "ask" in text:
+            pending_ctx = ctx
+            send({"id": "input-1", "method": "item/tool/requestUserInput", "params": {**ctx, "itemId": "ask-1", "questions": [
+                {"id": "color", "header": "Color", "question": "Which color?", "options": [{"label": "Red", "description": "Warm"}]}]}})
             continue
         if "approve" in text:
             pending_ctx = ctx

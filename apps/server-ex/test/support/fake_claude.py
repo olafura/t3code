@@ -1,6 +1,7 @@
 # Fake `claude -p --input-format stream-json --output-format stream-json` for tests.
 # Plays one turn per user message: thinking, a Bash tool call, and a streamed answer.
-# A message containing "wait" stays open until an interrupt control request.
+# A message containing "wait" stays open until an interrupt control request; "approve"
+# asks permission for a command and "ask" asks a question (AskUserQuestion).
 import json, sys
 
 def send(msg):
@@ -12,8 +13,11 @@ turn = 0
 for line in sys.stdin:
     msg = json.loads(line)
     if msg.get("type") == "control_response":
-        allowed = msg["response"]["response"]["behavior"] == "allow"
-        send({"type": "assistant", "session_id": session, "message": {"id": "m-perm", "role": "assistant", "content": [{"type": "text", "text": "allowed" if allowed else "denied"}]}})
+        reply = msg["response"]["response"]
+        allowed = reply["behavior"] == "allow"
+        answers = reply.get("updatedInput", {}).get("answers")
+        text = ("answered " + json.dumps(answers, sort_keys=True)) if answers is not None else ("allowed" if allowed else "denied")
+        send({"type": "assistant", "session_id": session, "message": {"id": "m-perm", "role": "assistant", "content": [{"type": "text", "text": text}]}})
         send({"type": "result", "subtype": "success", "is_error": False, "result": "done", "session_id": session})
         continue
     if msg.get("type") == "control_request":
@@ -31,6 +35,11 @@ for line in sys.stdin:
         continue
     if "approve" in text:
         send({"type": "control_request", "request_id": "perm-1", "request": {"subtype": "can_use_tool", "tool_name": "Bash", "input": {"command": "touch x"}}})
+        continue
+    if "ask" in text:
+        send({"type": "control_request", "request_id": "perm-1", "request": {"subtype": "can_use_tool", "tool_name": "AskUserQuestion", "input": {"questions": [
+            {"question": "Which color?", "header": "Color", "multiSelect": False,
+             "options": [{"label": "Red", "description": "Warm"}, {"label": "Blue", "description": ""}]}]}}})
         continue
     ev = lambda e: send({"type": "stream_event", "session_id": session, "event": e})
     send({"type": "assistant", "session_id": session, "message": {"id": f"m{turn}a", "role": "assistant", "content": [{"type": "thinking", "thinking": "Let me look."}]}})

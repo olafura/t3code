@@ -126,7 +126,17 @@ defmodule T3.Orchestration.TurnWriter do
   "file-read", "permission"). Returns `{state, request_id}`; the runtime keeps what
   it needs to answer the provider under that id.
   """
-  def open_request(state, native, request_kind, prompt) do
+  def open_request(state, native, request_kind, prompt),
+    do: open(state, native, {:approval, request_kind, prompt})
+
+  @doc """
+  Opens questions for the user (`OrchestrationV2UserInputQuestion`s): a pending
+  `user_input` request and its waiting `user_input_request` item. Answers arrive
+  through `resolve_request/4` like approvals. Returns `{state, request_id}`.
+  """
+  def open_question(state, native, questions), do: open(state, native, {:questions, questions})
+
+  defp open(state, native, what) do
     ids = state.turn.ids
     driver = Entities.driver(ids)
     at = Entities.now()
@@ -135,12 +145,28 @@ defmodule T3.Orchestration.TurnWriter do
     item_id = "turn-item:approval:#{native}"
     item_ids = Map.put(ids, :node, node_id)
 
+    {node_kind, request_kind, item_fields} =
+      case what do
+        {:approval, kind, prompt} ->
+          fields = %{"requestId" => request_id, "requestKind" => kind}
+
+          {"approval_request", kind,
+           if(is_binary(prompt) and prompt != "",
+             do: Map.put(fields, "prompt", prompt),
+             else: fields
+           )}
+
+        {:questions, questions} ->
+          {"user_input_request", "user_input",
+           %{"requestId" => request_id, "questions" => questions}}
+      end
+
     commit(state, fn stream ->
       [
         Orchestration.create(
           "node",
           node_id,
-          Entities.node(ids, node_id, "approval_request", "waiting", at, %{
+          Entities.node(ids, node_id, node_kind, "waiting", at, %{
             "runtimeRequestId" => request_id
           })
         ),
@@ -164,17 +190,11 @@ defmodule T3.Orchestration.TurnWriter do
           Entities.turn_item(
             item_ids,
             item_id,
-            "approval_request",
+            node_kind,
             Orchestration.next_ordinal(stream),
             "waiting",
             at,
-            %{
-              "requestId" => request_id,
-              "requestKind" => request_kind
-            }
-          )
-          |> then(
-            &if(is_binary(prompt) and prompt != "", do: Map.put(&1, "prompt", prompt), else: &1)
+            item_fields
           )
         )
       ]
@@ -200,7 +220,7 @@ defmodule T3.Orchestration.TurnWriter do
           request_id,
           &(&1
             |> Map.merge(%{"status" => status, "resolvedAt" => at})
-            |> then(fn r -> if decision, do: Map.put(r, "decision", decision), else: r end))
+            |> Map.merge(response_fields(decision)))
         ),
         Orchestration.upsert(
           stream,
@@ -219,6 +239,11 @@ defmodule T3.Orchestration.TurnWriter do
 
     state
   end
+
+  # A decision string, or a response's `decision`/`answers`.
+  defp response_fields(nil), do: %{}
+  defp response_fields(decision) when is_binary(decision), do: %{"decision" => decision}
+  defp response_fields(%{} = response), do: Map.take(response, ["decision", "answers"])
 
   @doc "Closes this turn's items that are still running (their node too) with `status`."
   def close_open_items(state, status) do

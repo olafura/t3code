@@ -44,11 +44,14 @@ defmodule T3.Codex.ThreadRuntime do
     end
   end
 
-  @doc "Answers an approval prompt with a `ProviderApprovalDecision`."
-  @spec respond(String.t(), String.t(), String.t()) :: :ok | {:error, String.t()}
-  def respond(thread_id, request_id, decision) do
+  @doc """
+  Answers a prompt: an approval's `%{"decision" => ProviderApprovalDecision}`,
+  questions' `%{"answers" => answers}`, or `%{"dismissed" => true}`.
+  """
+  @spec respond(String.t(), String.t(), map) :: :ok | {:error, String.t()}
+  def respond(thread_id, request_id, response) do
     case Registry.lookup(T3.Codex.Registry, thread_id) do
-      [{pid, _}] -> GenServer.call(pid, {:respond, request_id, decision})
+      [{pid, _}] -> GenServer.call(pid, {:respond, request_id, response})
       [] -> {:error, "no pending request"}
     end
   end
@@ -113,12 +116,26 @@ defmodule T3.Codex.ThreadRuntime do
 
   def handle_call(:interrupt, _from, state), do: {:reply, {:error, "no running turn"}, state}
 
-  def handle_call({:respond, request_id, decision}, _from, state) do
+  def handle_call({:respond, request_id, response}, _from, state) do
     case Map.pop(state.requests, request_id) do
       {nil, _} ->
         {:reply, {:error, "no pending request #{request_id}"}, state}
 
+      {{:question, rpc_id, question_ids}, requests} ->
+        answers = if response["dismissed"], do: %{}, else: response["answers"] || %{}
+
+        Connection.respond(
+          state.conn,
+          rpc_id,
+          {:ok, %{"answers" => codex_answers(answers, question_ids)}}
+        )
+
+        status = if response["dismissed"], do: "cancelled", else: "resolved"
+        state = resolve_request(%{state | requests: requests}, request_id, response, status)
+        {:reply, :ok, state}
+
       {rpc_id, requests} ->
+        decision = response["decision"] || "decline"
         # Codex has no "always"; the closest is for the rest of the session.
         codex_decision = if decision == "acceptAlways", do: "acceptForSession", else: decision
         Connection.respond(state.conn, rpc_id, {:ok, %{"decision" => codex_decision}})
@@ -155,7 +172,34 @@ defmodule T3.Codex.ThreadRuntime do
     {:noreply, %{state | requests: Map.put(state.requests, request_id, id)}}
   end
 
-  # Questions and other requests are not wired up yet; refuse rather than hang the turn.
+  def handle_info(
+        {:json_rpc, _conn, {:request, id, "item/tool/requestUserInput", params}},
+        %{turn: turn} = state
+      )
+      when turn != nil do
+    questions =
+      (params["questions"] || [])
+      |> Enum.with_index(1)
+      |> Enum.map(fn {question, index} ->
+        %{
+          "id" => text(question["id"], "question-#{index}"),
+          "header" => text(question["header"], "Question"),
+          "question" => text(question["question"], "Choose an answer."),
+          "options" =>
+            for {option, n} <- Enum.with_index(question["options"] || [], 1) do
+              label = text(option["label"], "Option #{n}")
+              %{"label" => label, "description" => text(option["description"], label)}
+            end
+        }
+      end)
+
+    native = params["itemId"] || "request-#{id}"
+    {state, request_id} = open_question(flush(state), native, questions)
+    ids = Enum.map(questions, & &1["id"])
+    {:noreply, %{state | requests: Map.put(state.requests, request_id, {:question, id, ids})}}
+  end
+
+  # Other requests are not wired up yet; refuse rather than hang the turn.
   def handle_info({:json_rpc, conn, {:request, id, method, _params}}, state) do
     Connection.respond(
       conn,
@@ -171,6 +215,20 @@ defmodule T3.Codex.ThreadRuntime do
 
   @impl true
   def code_change(_old, state, _extra), do: {:ok, %{state | v: @state_version}}
+
+  # Codex takes each answered question's choices as strings.
+  defp codex_answers(answers, question_ids) do
+    for {id, value} <- answers, id in question_ids, into: %{} do
+      values = if is_list(value), do: value, else: [value]
+      {id, %{"answers" => for(v <- values, v != nil, do: to_string(v))}}
+    end
+  end
+
+  defp text(value, default) when is_binary(value) do
+    if String.trim(value) == "", do: default, else: String.trim(value)
+  end
+
+  defp text(_value, default), do: default
 
   # --- turn lifecycle -------------------------------------------------------------
 

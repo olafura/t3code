@@ -229,6 +229,60 @@ defmodule T3.OrchestrationTest do
       end
     end
 
+    # Each fake says what it was told; Claude keys answers by question text.
+    for {instance, question_id, told} <- [
+          {"codex", "color", ~s(answered {"color": {"answers": ["Red"]}})},
+          {"claudeAgent", "Which color?", ~s(answered {"Which color?": "Red"})}
+        ] do
+      test "#{instance}: a question waits for the user's answer and passes it on" do
+        thread_id = launch("ask me", unquote(instance))
+        request = await_request(thread_id)
+        assert %{"status" => "pending", "kind" => "user_input"} = request
+
+        assert [%{"status" => "waiting", "questions" => [question]}] =
+                 thread_id
+                 |> current()
+                 |> StreamState.list("turn-item")
+                 |> Enum.filter(&(&1["type"] == "user_input_request"))
+
+        assert %{"id" => unquote(question_id), "header" => "Color", "question" => "Which color?"} =
+                 question
+
+        assert %{"label" => "Red", "description" => "Warm"} = hd(question["options"])
+
+        {:ok, _} =
+          Orchestration.dispatch(%{
+            "type" => "runtime-request.respond",
+            "threadId" => thread_id,
+            "requestId" => request["id"],
+            "answers" => %{unquote(question_id) => "Red"}
+          })
+
+        state = await_run(thread_id, "completed")
+
+        assert [%{"status" => "resolved", "answers" => %{unquote(question_id) => "Red"}}] =
+                 StreamState.list(state, "runtime-request")
+
+        assert Enum.any?(StreamState.list(state, "turn-item"), &(&1["text"] == unquote(told)))
+      end
+    end
+
+    test "dismissing a question tells Claude no and cancels the request" do
+      thread_id = launch("ask me", "claudeAgent")
+      request = await_request(thread_id)
+
+      {:ok, _} =
+        Orchestration.dispatch(%{
+          "type" => "thread.user-input.dismiss",
+          "threadId" => thread_id,
+          "requestId" => request["id"]
+        })
+
+      state = await_run(thread_id, "completed")
+      assert [%{"status" => "cancelled"}] = StreamState.list(state, "runtime-request")
+      assert Enum.any?(StreamState.list(state, "turn-item"), &(&1["text"] == "denied"))
+    end
+
     test "declining a Claude prompt is passed on to Claude" do
       thread_id = launch("approve this", "claudeAgent")
       request = await_request(thread_id)

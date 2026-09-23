@@ -37,11 +37,11 @@ defmodule T3.Acp.ThreadRuntime do
     end
   end
 
-  @spec respond(String.t(), String.t(), String.t()) :: :ok | {:error, String.t()}
-  def respond(thread_id, request_id, decision) do
+  @spec respond(String.t(), String.t(), map) :: :ok | {:error, String.t()}
+  def respond(thread_id, request_id, response) do
     case lookup(thread_id) do
       nil -> {:error, "no pending request"}
-      pid -> GenServer.call(pid, {:respond, request_id, decision})
+      pid -> GenServer.call(pid, {:respond, request_id, response["decision"] || "decline"})
     end
   end
 

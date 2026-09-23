@@ -48,11 +48,14 @@ defmodule T3.Claude.ThreadRuntime do
     end
   end
 
-  @doc "Answers a permission prompt with a `ProviderApprovalDecision`."
-  @spec respond(String.t(), String.t(), String.t()) :: :ok | {:error, String.t()}
-  def respond(thread_id, request_id, decision) do
+  @doc """
+  Answers a prompt: a permission's `%{"decision" => ProviderApprovalDecision}`,
+  AskUserQuestion's `%{"answers" => answers}`, or `%{"dismissed" => true}`.
+  """
+  @spec respond(String.t(), String.t(), map) :: :ok | {:error, String.t()}
+  def respond(thread_id, request_id, response) do
     case Registry.lookup(T3.Claude.Registry, thread_id) do
-      [{pid, _}] -> GenServer.call(pid, {:respond, request_id, decision})
+      [{pid, _}] -> GenServer.call(pid, {:respond, request_id, response})
       [] -> {:error, "no pending request"}
     end
   end
@@ -165,12 +168,27 @@ defmodule T3.Claude.ThreadRuntime do
 
   def handle_call(:interrupt, _from, state), do: {:reply, {:error, "no running turn"}, state}
 
-  def handle_call({:respond, request_id, decision}, _from, state) do
+  def handle_call({:respond, request_id, response}, _from, state) do
     case Map.pop(state.requests, request_id) do
       {nil, _} ->
         {:reply, {:error, "no pending request #{request_id}"}, state}
 
+      # The answers go back as the tool's input, keyed by question text.
+      {{:question, control_id, input}, requests} ->
+        {answer, status} =
+          if response["dismissed"],
+            do: {{:deny, "The user dismissed the question."}, "cancelled"},
+            else:
+              {{:allow, Map.put(input, "answers", claude_answers(response["answers"]))},
+               "resolved"}
+
+        Session.answer_permission(state.session, control_id, answer)
+        state = resolve_request(%{state | requests: requests}, request_id, response, status)
+        {:reply, :ok, state}
+
       {control_id, requests} ->
+        decision = response["decision"] || "decline"
+
         answer =
           if decision in ["accept", "acceptForSession", "acceptAlways"],
             do: :allow,
@@ -192,6 +210,12 @@ defmodule T3.Claude.ThreadRuntime do
       ) do
     Session.answer_permission(session, id, {:deny, "No turn is running."})
     {:noreply, state}
+  end
+
+  def handle_info({:claude, _session, {:permission, id, "AskUserQuestion", input, _}}, state) do
+    {state, request_id} = open_question(flush(state), id, claude_questions(input))
+    request = {:question, id, input}
+    {:noreply, %{state | requests: Map.put(state.requests, request_id, request)}}
   end
 
   def handle_info({:claude, _session, {:permission, id, tool, input, _context}}, state) do
@@ -217,6 +241,37 @@ defmodule T3.Claude.ThreadRuntime do
 
   @impl true
   def code_change(_old, state, _extra), do: {:ok, %{state | v: @state_version}}
+
+  # AskUserQuestion's questions; each is keyed by its text, as Claude keys answers.
+  defp claude_questions(input) do
+    for {question, index} <- Enum.with_index(input["questions"] || [], 1),
+        text = String.trim(question["question"] || ""),
+        text != "" do
+      %{
+        "id" => text,
+        "header" => non_empty(question["header"], "Question #{index}"),
+        "question" => text,
+        "options" =>
+          for option <- question["options"] || [],
+              label = String.trim(option["label"] || ""),
+              label != "" do
+            %{"label" => label, "description" => non_empty(option["description"], label)}
+          end,
+        "multiSelect" => question["multiSelect"] == true
+      }
+    end
+  end
+
+  defp claude_answers(answers) do
+    for {question, value} <- answers || %{}, into: %{} do
+      {question, if(is_list(value), do: Enum.join(value, ", "), else: to_string(value || ""))}
+    end
+  end
+
+  defp non_empty(value, default) when is_binary(value),
+    do: if(String.trim(value) == "", do: default, else: String.trim(value))
+
+  defp non_empty(_value, default), do: default
 
   defp ensure_session(%{session: session} = state, _turn) when session != nil, do: {:ok, state}
 
