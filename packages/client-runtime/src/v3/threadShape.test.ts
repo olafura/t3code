@@ -165,3 +165,26 @@ describe("ThreadShapeFold order", () => {
     );
   });
 });
+
+describe("ThreadShapeFold turn item order", () => {
+  it("shows turn items by ordinal whatever order the rows arrive in", () => {
+    const shape = new ThreadShapeFold(v2ThreadId);
+    const item = (id: string, ordinal: number) => ({ ...message("x"), id, ordinal });
+    const [snapshot] = shape.snapshot({
+      rows: [
+        ["thread", v2ThreadId, thread],
+        ["turn-item", "late", item("late", 2)],
+        ["turn-item", "first", item("first", 0)],
+        ["turn-item", "middle", item("middle", 1)],
+      ],
+      part: 0,
+      done: true,
+      offset: 1,
+      at: 1,
+    });
+    expect(
+      snapshot?.kind === "snapshot" &&
+        snapshot.projection.visibleTurnItems.map((row) => row.item.id),
+    ).toEqual(["first", "middle", "late"]);
+  });
+});

@@ -124,6 +124,12 @@ export class ThreadShapeFold {
     for (const [kind, field] of Object.entries(PROJECTION_FIELD)) {
       encoded[field] = [...(this.entities.get(kind)?.values() ?? [])];
     }
+    // Turn items are shown in ordinal order, as the reference server sends them.
+    encoded.turnItems = (encoded.turnItems as ReadonlyArray<EntityJson>).toSorted(
+      (left, right) =>
+        Number(left.ordinal) - Number(right.ordinal) ||
+        String(left.id).localeCompare(String(right.id)),
+    );
     const projection = decodeProjection(encoded);
     // Unforked threads show their own visible items; forks need the source thread.
     const visibleTurnItems = projection.turnItems

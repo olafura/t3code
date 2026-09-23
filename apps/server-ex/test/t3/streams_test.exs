@@ -69,6 +69,24 @@ defmodule T3.StreamsTest do
     assert state.entities["turn-item"]["item-1"]["text"] == "ab"
   end
 
+  test "snapshot rows arrive in creation order" do
+    {:ok, _} = Streams.commit("th-6", :thread, thread("th-6"))
+    ids = for n <- 1..20, do: "item-#{n}"
+
+    for id <- ids,
+        do:
+          {:ok, _} =
+            Streams.commit("th-6", :thread, [{"turn-item", id, %{"s" => %{"text" => id}}}])
+
+    # Updating an early item must not move it.
+    {:ok, _} =
+      Streams.commit("th-6", :thread, [{"turn-item", "item-1", %{"a" => %{"text" => "!"}}}])
+
+    :ok = Streams.subscribe("th-6", self(), nil)
+    rows = collect_snapshot("th-6", []) |> List.flatten()
+    assert for({"turn-item", id, _} <- rows, do: id) == ids
+  end
+
   test "large snapshots arrive in bounded chunks" do
     big = String.duplicate("x", 100_000)
     changes = for i <- 1..10, do: {"turn-item", "item-#{i}", %{"s" => %{"output" => big}}}
