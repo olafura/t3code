@@ -277,6 +277,37 @@ defmodule T3.OrchestrationTest do
     end
   end
 
+  test "pull requests link to a thread by host, repository and number" do
+    thread_id = launch("hello")
+    await_statuses(thread_id, ["completed"])
+    key = %{"host" => "github.com", "repository" => "t3/code", "number" => 7}
+
+    link = fn url ->
+      Orchestration.dispatch(
+        Map.merge(key, %{
+          "type" => "thread.pull-request.link",
+          "threadId" => thread_id,
+          "url" => url,
+          "source" => "manual"
+        })
+      )
+    end
+
+    {:ok, _} = link.("https://github.com/t3/code/pull/7")
+    {:ok, _} = link.("https://github.com/t3/code/pull/7?again")
+    thread = StreamState.get(current(thread_id), "thread")[thread_id]
+
+    assert [%{"number" => 7, "url" => "https://github.com/t3/code/pull/7?again"}] =
+             thread["pullRequests"]
+
+    {:ok, _} =
+      Orchestration.dispatch(
+        Map.merge(key, %{"type" => "thread.pull-request.unlink", "threadId" => thread_id})
+      )
+
+    assert [] = StreamState.get(current(thread_id), "thread")[thread_id]["pullRequests"]
+  end
+
   describe "queued messages" do
     test "a message sent during a run waits in the queue and starts when the run ends" do
       thread_id = launch("wait for it")
@@ -915,6 +946,43 @@ defmodule T3.OrchestrationTest do
       state = await_statuses(thread_id, ["completed", "completed"])
 
       assert "resumed at None fork False history True" in replies(state)
+    end
+
+    test "provider.switch moves the next run to the new provider, with the conversation" do
+      thread_id = launch("hello")
+      await_statuses(thread_id, ["completed"])
+
+      {:ok, _} =
+        Orchestration.dispatch(
+          Map.merge(claude(), %{"type" => "provider.switch", "threadId" => thread_id})
+        )
+
+      {:ok, _} = send_message(thread_id, "msg-user-2", "where are we")
+      state = await_statuses(thread_id, ["completed", "completed"])
+
+      assert "resumed at None fork False history True" in replies(state)
+    end
+
+    test "a stopped session starts again on the next run and resumes its thread" do
+      thread_id = launch("hello")
+      await_statuses(thread_id, ["completed"])
+      [session] = StreamState.list(current(thread_id), "provider-session")
+
+      {:ok, _} =
+        Orchestration.dispatch(%{
+          "type" => "provider-session.detach",
+          "threadId" => thread_id,
+          "providerSessionId" => session["id"]
+        })
+
+      assert [] = StreamState.list(current(thread_id), "provider-session")
+      assert [] = Registry.lookup(T3.Codex.Registry, thread_id)
+
+      {:ok, _} = send_message(thread_id, "msg-user-2", "where are we")
+      state = await_statuses(thread_id, ["completed", "completed"])
+
+      assert "on native-thread-1 history False merged False" in replies(state)
+      assert [_] = StreamState.list(state, "provider-session")
     end
 
     test "merging a fork back brings its newer work to the parent's next run" do

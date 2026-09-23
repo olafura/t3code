@@ -23,7 +23,8 @@ defmodule T3.Orchestration do
   @thread_updates ~w(thread.archive thread.unarchive thread.delete thread.settle thread.unsettle
                      thread.snooze thread.unsnooze thread.pin thread.unpin thread.pin.reorder
                      thread.active.reorder thread.visit thread.mark-unread thread.metadata.update
-                     thread.runtime-mode.set thread.interaction-mode.set thread.model-selection.set)
+                     thread.runtime-mode.set thread.interaction-mode.set thread.model-selection.set
+                     provider.switch thread.pull-request.link thread.pull-request.unlink)
 
   @doc "Handles one client RPC by method name; see `packages/contracts/src/orchestrationV2.ts`."
   @spec handle(String.t(), map) :: {:ok, term} | {:error, String.t()}
@@ -80,6 +81,34 @@ defmodule T3.Orchestration do
       end)
 
     with :ok <- created, do: {:ok, %{"sequence" => sequence(thread_id)}}
+  end
+
+  # Stops the thread's provider process ("Stop session"). The next run starts it
+  # again and resumes the provider thread.
+  def dispatch(%{"type" => "provider-session.detach", "threadId" => thread_id} = command) do
+    session_id = command["providerSessionId"]
+
+    detached =
+      T3.Streams.transact(thread_id, :thread, fn state ->
+        cond do
+          Enum.any?(StreamState.list(state, "run"), &(&1["status"] in @active_statuses)) ->
+            {[], {:error, "Interrupt the current turn before stopping the session."}}
+
+          StreamState.get(state, "provider-session")[session_id] ->
+            {[{"provider-session", session_id, Patch.delete()}], :ok}
+
+          true ->
+            {[], :ok}
+        end
+      end)
+
+    with :ok <- detached do
+      for registry <- [T3.Codex.Registry, T3.Claude.Registry, T3.Acp.Registry],
+          {pid, _} <- Registry.lookup(registry, thread_id),
+          do: DynamicSupervisor.terminate_child(T3.Codex.Supervisor, pid)
+
+      {:ok, %{"sequence" => sequence(thread_id)}}
+    end
   end
 
   def dispatch(%{"type" => "checkpoint.rollback", "threadId" => thread_id} = command) do
@@ -153,7 +182,7 @@ defmodule T3.Orchestration do
   end
 
   # Commands that set fields on the thread itself.
-  def dispatch(%{"type" => "thread." <> _ = type, "threadId" => thread_id} = command)
+  def dispatch(%{"type" => type, "threadId" => thread_id} = command)
       when type in @thread_updates do
     at = Entities.now()
 
@@ -604,6 +633,23 @@ defmodule T3.Orchestration do
   defp thread_fields("thread.interaction-mode.set", command, _, at),
     do: %{"interactionMode" => command["interactionMode"], "updatedAt" => at}
 
+  # A thread's pull requests are keyed by host, repository and number.
+  defp thread_fields("thread.pull-request.link", command, thread, at) do
+    link =
+      command
+      |> Map.take(~w(host repository number url source))
+      |> Map.merge(%{"linkedAt" => at, "snapshot" => nil, "stack" => nil})
+
+    %{"pullRequests" => other_pull_requests(thread, command) ++ [link], "updatedAt" => at}
+  end
+
+  defp thread_fields("thread.pull-request.unlink", command, thread, at),
+    do: %{"pullRequests" => other_pull_requests(thread, command), "updatedAt" => at}
+
+  # The next run starts the new provider's thread with the conversation handed over.
+  defp thread_fields("provider.switch", command, thread, at),
+    do: thread_fields("thread.model-selection.set", command, thread, at)
+
   defp thread_fields("thread.model-selection.set", %{"modelSelection" => selection}, _, at),
     do: %{
       "modelSelection" => selection,
@@ -622,6 +668,13 @@ defmodule T3.Orchestration do
         |> Map.take(~w(title branch worktreePath limitRecovery linkedPullRequest))
         |> Map.put("updatedAt", at)
     end
+  end
+
+  defp other_pull_requests(thread, key) do
+    Enum.reject(
+      thread["pullRequests"] || [],
+      &(Map.take(&1, ~w(host repository number)) == Map.take(key, ~w(host repository number)))
+    )
   end
 
   # Changes to queued runs; positions are renumbered 1.. after each one.
