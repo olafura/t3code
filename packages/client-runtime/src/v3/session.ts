@@ -42,6 +42,7 @@ import {
   type ResolvedKeybindingsConfig,
   DiscoveredLocalServerList,
   PreviewError,
+  ResourceTelemetrySnapshot,
   PreviewEvent,
   PreviewInvalidUrlError,
   PreviewSessionLookupError,
@@ -122,6 +123,7 @@ const decodeProviderUpdateError = Schema.decodeUnknownOption(ServerProviderUpdat
 const decodePreviewError = Schema.decodeUnknownOption(PreviewError);
 const decodePreviewEvent = Schema.decodeUnknownSync(Schema.toCodecJson(PreviewEvent));
 const decodeLocalServers = Schema.decodeUnknownSync(Schema.toCodecJson(DiscoveredLocalServerList));
+const decodeTelemetry = Schema.decodeUnknownSync(Schema.toCodecJson(ResourceTelemetrySnapshot));
 const decodeSetupError = Schema.decodeUnknownOption(ProviderSetupError);
 const decodeTerminalError = Schema.decodeUnknownOption(TerminalError);
 const settingsCodec = Schema.toCodecJson(ServerSettings);
@@ -634,6 +636,16 @@ export function makeV3Session(input: {
         frame.t === "localServers" ? [decodeLocalServers(frame.list)] : [],
       );
 
+    // The node samples its processes faster while this is subscribed.
+    const resourceTelemetry = () =>
+      shapeStream(socket, { type: "resourceTelemetry", node }, (frame) =>
+        frame.t === "resourceTelemetry" ? [decodeTelemetry(frame.snapshot)] : [],
+      );
+    const backgroundPolicy = forward(
+      WS_METHODS.serverGetBackgroundPolicy,
+      (_request: object, message) => new ClusterRpcError(message, undefined),
+    );
+
     // A new thread's worktree is prepared on its node.
     const worktreeSetup = (request: { readonly threadId: string }) =>
       shapeStream(socket, { type: "worktreeSetup", node, threadId: request.threadId }, (frame) =>
@@ -892,6 +904,22 @@ export function makeV3Session(input: {
         (_request: object, _message, cause) => cause,
       ),
       [WS_METHODS.subscribeProjectClones]: projectClones,
+      ...Object.fromEntries(
+        [
+          WS_METHODS.serverGetProcessDiagnostics,
+          WS_METHODS.serverSignalProcess,
+          WS_METHODS.serverGetTraceDiagnostics,
+          WS_METHODS.serverGetHostResources,
+          WS_METHODS.serverGetProcessResourceHistory,
+          WS_METHODS.serverGetResourceTelemetryHistory,
+          WS_METHODS.serverRetryResourceTelemetry,
+        ].map((tag) => [tag, forward(tag, (_request: object, _message, cause) => cause)]),
+      ),
+      [WS_METHODS.subscribeResourceTelemetry]: resourceTelemetry,
+      [WS_METHODS.serverGetBackgroundPolicy]: backgroundPolicy,
+      // Nodes have no client-driven policy, so it never changes after the first read.
+      [WS_METHODS.subscribeBackgroundPolicy]: (request: object) =>
+        Stream.concat(Stream.fromEffect(backgroundPolicy(request)), Stream.never),
       [WS_METHODS.previewOpen]: withPreviewUrl(WS_METHODS.previewOpen),
       [WS_METHODS.previewNavigate]: withPreviewUrl(WS_METHODS.previewNavigate),
       [WS_METHODS.previewReportStatus]: previewCommand(WS_METHODS.previewReportStatus),

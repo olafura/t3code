@@ -125,6 +125,18 @@ defmodule T3.Web.Socket do
     end
   end
 
+  def handle_info({:t3_resource_telemetry, node, snapshot}, state) do
+    case state.by_terminal do
+      %{{:resource_telemetry, ^node} => id} ->
+        {:push,
+         Protocol.encode(%{"t" => "resourceTelemetry", "id" => id, "snapshot" => snapshot}),
+         state}
+
+      _ ->
+        {:ok, state}
+    end
+  end
+
   def handle_info({:t3_preview, node, event}, state) do
     case state.by_terminal do
       %{{:preview, ^node} => id} ->
@@ -403,6 +415,22 @@ defmodule T3.Web.Socket do
     end
   end
 
+  defp subscribe(state, id, {:resource_telemetry, node} = shape, _offset) do
+    case remote(node, T3.Diagnostics, :subscribe, [self()]) do
+      {:ok, {:ok, snapshot}} ->
+        {:push,
+         Protocol.encode(%{"t" => "resourceTelemetry", "id" => id, "snapshot" => snapshot}),
+         %{
+           state
+           | subs: Map.put(state.subs, id, shape),
+             by_terminal: Map.put(state.by_terminal, {:resource_telemetry, node}, id)
+         }}
+
+      {:error, reason} ->
+        {:push, Protocol.encode(error_frame(id, reason)), state}
+    end
+  end
+
   defp subscribe(state, id, {:preview, node} = shape, _offset) do
     case remote(node, T3.Preview, :subscribe, [self()]) do
       {:ok, :ok} ->
@@ -549,6 +577,15 @@ defmodule T3.Web.Socket do
       {{:config, node}, subs} ->
         :erpc.cast(node, T3.Settings, :unwatch, [self()])
         %{state | subs: subs, by_terminal: Map.delete(state.by_terminal, {:settings, node})}
+
+      {{:resource_telemetry, node}, subs} ->
+        :erpc.cast(node, T3.Diagnostics, :unsubscribe, [self()])
+
+        %{
+          state
+          | subs: subs,
+            by_terminal: Map.delete(state.by_terminal, {:resource_telemetry, node})
+        }
 
       {{:preview, node}, subs} ->
         :erpc.cast(node, T3.Preview, :unsubscribe, [self()])

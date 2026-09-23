@@ -51,6 +51,17 @@ defmodule T3.Rpc do
   def handle("projectClone.start", input), do: T3.ProjectClones.start(input)
   def handle("projectClone.retry", input), do: T3.ProjectClones.retry(input)
   def handle("projectClone.cancel", input), do: T3.ProjectClones.cancel(input)
+  def handle("server.getProcessDiagnostics", input), do: T3.Diagnostics.processes(input)
+  def handle("server.signalProcess", input), do: T3.Diagnostics.signal(input)
+  def handle("server.getTraceDiagnostics", input), do: T3.Diagnostics.traces(input)
+  def handle("server.getHostResources", input), do: T3.Diagnostics.host(input)
+  def handle("server.getProcessResourceHistory", input), do: T3.Diagnostics.history(input)
+
+  def handle("server.getResourceTelemetryHistory", input),
+    do: T3.Diagnostics.telemetry_history(input)
+
+  def handle("server.retryResourceTelemetry", input), do: T3.Diagnostics.retry(input)
+  def handle("server.getBackgroundPolicy", input), do: T3.Diagnostics.background_policy(input)
   def handle("preview.open", input), do: T3.Preview.open(input)
   def handle("preview.navigate", input), do: T3.Preview.navigate(input)
   def handle("preview.reportStatus", input), do: T3.Preview.report_status(input)
