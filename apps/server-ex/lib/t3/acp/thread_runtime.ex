@@ -222,7 +222,7 @@ defmodule T3.Acp.ThreadRuntime do
     {:noreply, %{state | conn: nil, session_id: nil, prompt: nil}}
   end
 
-  def handle_info(:flush, state), do: {:noreply, flush(%{state | flush_timer: nil})}
+  def handle_info(:flush, state), do: {:noreply, flush(%{state | flush_timer: nil}, :timer)}
   def handle_info(_other, state), do: {:noreply, state}
 
   @impl true

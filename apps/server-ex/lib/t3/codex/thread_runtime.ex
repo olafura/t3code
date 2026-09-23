@@ -291,7 +291,7 @@ defmodule T3.Codex.ThreadRuntime do
     {:noreply, state}
   end
 
-  def handle_info(:flush, state), do: {:noreply, flush(%{state | flush_timer: nil})}
+  def handle_info(:flush, state), do: {:noreply, flush(%{state | flush_timer: nil}, :timer)}
   def handle_info(_other, state), do: {:noreply, state}
 
   @impl true

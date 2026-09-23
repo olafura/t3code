@@ -1443,6 +1443,9 @@ defmodule T3.Orchestration do
       scope_id: scope_id,
       model: selection["model"],
       runtime_mode: thread["runtimeMode"] || "full-access",
+      # How assistant text is written as it streams (`TurnWriter.flush/2`).
+      streaming_mode:
+        T3.Settings.for_project(thread["projectId"])["responseStreamingMode"] || "paragraph",
       interaction_mode: thread["interactionMode"] || "default",
       # The files providers read, from this node's attachment store.
       attachments:

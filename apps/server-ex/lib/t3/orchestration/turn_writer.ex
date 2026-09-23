@@ -14,6 +14,7 @@ defmodule T3.Orchestration.TurnWriter do
   alias T3.StreamState
 
   @flush_ms 50
+  @text_ms 400
 
   @doc "The turn item id for a provider's native item."
   def item_id(ids, native), do: "turn-item:#{Entities.driver(ids)}:#{native}"
@@ -530,11 +531,53 @@ defmodule T3.Orchestration.TurnWriter do
     %{state | buffer: buffer, flush_timer: timer}
   end
 
-  def flush(%{buffer: buffer} = state) when map_size(buffer) == 0, do: state
+  @doc """
+  Writes buffered text. `:all` (item ends, prompts, the turn's end) writes
+  everything; `:timer` holds assistant and reasoning text back by the project's
+  `responseStreamingMode`, as the Node server does: "paragraph" writes finished
+  paragraphs and closed code blocks at most every 400 ms, "turn" writes nothing
+  until a boundary. Tool output and plans stream as they come.
+  """
+  def flush(state, how \\ :all)
 
-  def flush(state) do
+  def flush(%{buffer: buffer} = state, _how) when map_size(buffer) == 0, do: state
+
+  def flush(state, how) do
+    now = System.monotonic_time(:millisecond)
+    mode = Map.get(state.turn || %{}, :streaming_mode, "paragraph")
+    streamed = Map.get(state, :streamed, %{})
+
+    {writes, held, streamed} =
+      Enum.reduce(state.buffer, {[], %{}, streamed}, fn {key, pending},
+                                                        {writes, held, streamed} ->
+        {native, field} = key
+        committed = streamed[key] || ""
+
+        cond do
+          how == :all or not prose?(state, native, field) ->
+            {[{key, pending} | writes], held, Map.put(streamed, key, committed <> pending)}
+
+          mode == "turn" or recent?(state, now) ->
+            {writes, Map.put(held, key, pending), streamed}
+
+          true ->
+            {ready, _rest} = split_ready(committed <> pending)
+
+            if byte_size(ready) > byte_size(committed) do
+              out =
+                binary_part(ready, byte_size(committed), byte_size(ready) - byte_size(committed))
+
+              rest = binary_part(pending, byte_size(out), byte_size(pending) - byte_size(out))
+              held = if rest == "", do: held, else: Map.put(held, key, rest)
+              {[{key, out} | writes], held, Map.put(streamed, key, ready)}
+            else
+              {writes, Map.put(held, key, pending), streamed}
+            end
+        end
+      end)
+
     changes =
-      Enum.flat_map(state.buffer, fn {{native, field}, text} ->
+      Enum.flat_map(writes, fn {{native, field}, text} ->
         %{id: item_id, message: message_id} = Map.fetch!(state.items, native)
         append = %{"a" => %{field => text}}
 
@@ -542,9 +585,70 @@ defmodule T3.Orchestration.TurnWriter do
           if(message_id && field == "text", do: [{"message", message_id, append}], else: [])
       end)
 
-    {:ok, _} = T3.Streams.commit(state.thread_id, :thread, changes)
+    if changes != [], do: {:ok, _} = T3.Streams.commit(state.thread_id, :thread, changes)
     if state.flush_timer, do: Process.cancel_timer(state.flush_timer)
-    %{state | buffer: %{}, flush_timer: nil}
+
+    wrote_prose = Enum.any?(writes, fn {{native, field}, _} -> prose?(state, native, field) end)
+
+    # Held paragraphs get another look once the throttle allows one.
+    timer =
+      if held != %{} and mode == "paragraph",
+        do: Process.send_after(self(), :flush, @text_ms)
+
+    state
+    |> Map.merge(%{buffer: held, flush_timer: timer, streamed: streamed})
+    |> then(&if(wrote_prose and how == :timer, do: Map.put(&1, :text_at, now), else: &1))
+  end
+
+  defp recent?(state, now) do
+    case Map.get(state, :text_at) do
+      nil -> false
+      at -> now - at < @text_ms
+    end
+  end
+
+  defp prose?(state, native, "text"),
+    do: match?(%{kind: k} when k in [:assistant, :reasoning], state.items[native])
+
+  defp prose?(_state, _native, _field), do: false
+
+  @doc """
+  Splits text at its last blank line or closing code fence outside an open
+  fence: `{ready, rest}`, where `ready` will not change shape as more arrives.
+  Only whole lines count, so a partial line is never delivered.
+  """
+  def split_ready(text) do
+    {boundary, _fence, _offset} =
+      text
+      |> String.split("\n")
+      # The last piece has no newline after it yet.
+      |> Enum.drop(-1)
+      |> Enum.reduce({0, nil, 0}, fn raw, {boundary, fence, offset} ->
+        line = String.replace(raw, ~r/[ \t\r]+$/, "")
+        next = offset + byte_size(raw) + 1
+
+        case Regex.run(~r/^( *)(`{3,}|~{3,})/, line) do
+          [_, indent, marker] when fence == nil ->
+            {boundary, {marker, byte_size(indent)}, next}
+
+          [_, indent, marker] ->
+            {open, open_indent} = fence
+
+            if String.first(marker) == String.first(open) and
+                 byte_size(marker) >= byte_size(open) and
+                 byte_size(indent) <= open_indent + 3 and
+                 byte_size(line) == byte_size(indent) + byte_size(marker),
+               do: {next, nil, next},
+               else: {boundary, fence, next}
+
+          nil ->
+            if fence == nil and offset > 0 and Regex.match?(~r/^[ \t]*$/, line),
+              do: {next, nil, next},
+              else: {boundary, fence, next}
+        end
+      end)
+
+    {binary_part(text, 0, boundary), binary_part(text, boundary, byte_size(text) - boundary)}
   end
 
   @doc "Commits the changes `fun` builds from the thread's current state; nils are skipped."
