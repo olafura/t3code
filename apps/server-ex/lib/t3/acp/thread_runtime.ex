@@ -187,6 +187,20 @@ defmodule T3.Acp.ThreadRuntime do
     {:noreply, permission(conn, id, params, state)}
   end
 
+  # Answered off this process: the user may take minutes to open the page.
+  def handle_info(
+        {:json_rpc, conn, {:request, id, "elicitation/create", %{"mode" => "url"} = params}},
+        state
+      ) do
+    instance = state.agent
+
+    Task.start(fn ->
+      Connection.respond(conn, id, {:ok, T3.Acp.UrlAuth.request(instance, params)})
+    end)
+
+    {:noreply, state}
+  end
+
   # This client offers no file system or terminal; say so rather than hang.
   def handle_info({:json_rpc, conn, {:request, id, method, _params}}, state) do
     Connection.respond(
@@ -261,7 +275,9 @@ defmodule T3.Acp.ThreadRuntime do
              "protocolVersion" => 1,
              "clientCapabilities" => %{
                "fs" => %{"readTextFile" => false, "writeTextFile" => false},
-               "terminal" => false
+               "terminal" => false,
+               # A sign-in page the agent asks for shows on the provider (`T3.Acp.UrlAuth`).
+               "elicitation" => %{"url" => %{}}
              },
              "clientInfo" => %{"name" => "t3code", "version" => "0.1.0"}
            }),

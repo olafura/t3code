@@ -1149,6 +1149,9 @@ export function makeV3Session(input: {
       [WS_METHODS.serverPrepareAcpRegistryAgent]: acpRegistryCommand(
         WS_METHODS.serverPrepareAcpRegistryAgent,
       ),
+      [WS_METHODS.serverAcceptAcpRegistryUrlAuth]: acpRegistryCommand(
+        WS_METHODS.serverAcceptAcpRegistryUrlAuth,
+      ),
       [WS_METHODS.serverUninstallAcpRegistryManagedBinary]: acpRegistryCommand(
         WS_METHODS.serverUninstallAcpRegistryManagedBinary,
       ),

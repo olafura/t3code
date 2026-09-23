@@ -265,22 +265,32 @@ defmodule T3.Acp do
     %{
       "setup" =>
         Map.merge(%{"canAuthenticate" => methods > 0, "canInstall" => false}, setup || %{}),
-      "auth" => %{
-        "status" =>
-          cond do
-            signed_out -> "unauthenticated"
-            capabilities(id) == nil -> "unknown"
-            true -> "authenticated"
-          end,
-        "canLogout" => is_map(get_in(capabilities(id) || %{}, ["auth", "logout"]))
-      }
+      "auth" =>
+        %{
+          "status" =>
+            cond do
+              signed_out -> "unauthenticated"
+              capabilities(id) == nil -> "unknown"
+              true -> "authenticated"
+            end,
+          "canLogout" => is_map(get_in(capabilities(id) || %{}, ["auth", "logout"]))
+        }
+        |> then(fn auth ->
+          case T3.Acp.UrlAuth.action(id) do
+            nil -> auth
+            action -> Map.put(auth, "action", action)
+          end
+        end)
     }
   end
 
   @doc "Reads each enabled agent's version and models from a throwaway session."
   def load do
-    for id <- instances(), enabled?(id), do: load(id)
-    :ok
+    # Apart, so one agent waiting on a sign-in does not hold up the others.
+    instances()
+    |> Enum.filter(&enabled?/1)
+    |> Task.async_stream(&load/1, timeout: :infinity, max_concurrency: 4)
+    |> Stream.run()
   end
 
   # An agent enabled after boot is read in the background, once.
@@ -345,6 +355,35 @@ defmodule T3.Acp do
     end
   end
 
+  # A probe's call, answering the agent meanwhile: a sign-in page it asks for waits
+  # for a user (`T3.Acp.UrlAuth`), so the call may take as long as that allows.
+  defp call_serving(conn, id, method, params) do
+    task = Task.async(fn -> Connection.call(conn, method, params, :timer.minutes(11)) end)
+    serve(conn, id, task)
+  end
+
+  defp serve(conn, id, task) do
+    receive do
+      {ref, result} when ref == task.ref ->
+        Process.demonitor(ref, [:flush])
+        result
+
+      {:json_rpc, ^conn, {:request, rpc_id, "elicitation/create", %{"mode" => "url"} = params}} ->
+        Task.start(fn ->
+          Connection.respond(conn, rpc_id, {:ok, T3.Acp.UrlAuth.request(id, params)})
+        end)
+
+        serve(conn, id, task)
+
+      {:json_rpc, ^conn, {:request, rpc_id, method, _params}} ->
+        Connection.respond(conn, rpc_id, {:error, %{"code" => -32601, "message" => method}})
+        serve(conn, id, task)
+
+      {:json_rpc, ^conn, _notification} ->
+        serve(conn, id, task)
+    end
+  end
+
   defp describe(%{"message" => message}) when is_binary(message), do: message
   defp describe(reason) when is_binary(reason), do: reason
   defp describe(reason), do: inspect(reason)
@@ -356,7 +395,7 @@ defmodule T3.Acp do
       :persistent_term.put({__MODULE__, id, :capabilities}, init["agentCapabilities"] || %{})
       :persistent_term.put({__MODULE__, id, :auth_methods}, length(init["authMethods"] || []))
 
-      case Connection.call(conn, "session/new", %{"cwd" => dir, "mcpServers" => []}, 60_000) do
+      case call_serving(conn, id, "session/new", %{"cwd" => dir, "mcpServers" => []}) do
         {:ok, session} -> :persistent_term.put({__MODULE__, id, :models}, models(session))
         # ACP's "authentication required".
         {:error, %{"code" => -32000}} -> {:error, :unauthenticated}

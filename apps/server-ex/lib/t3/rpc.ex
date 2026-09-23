@@ -46,6 +46,8 @@ defmodule T3.Rpc do
      }}
   end
 
+  def handle("server.acceptAcpRegistryUrlAuth", input), do: T3.Acp.UrlAuth.accept(input)
+
   def handle("provider.uploadFeedback", input),
     do: T3.Orchestration.handle("provider.uploadFeedback", input)
 
