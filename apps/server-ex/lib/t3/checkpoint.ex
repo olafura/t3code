@@ -298,5 +298,4 @@ defmodule T3.Checkpoint do
   defp count(n), do: String.to_integer(n)
 
   defp git(cwd, args, opts \\ []), do: T3.Git.ok(cwd, args, opts)
-
 end
