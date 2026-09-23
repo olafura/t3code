@@ -148,7 +148,7 @@ const registerPairingConnection = Effect.fn(
  * their nodes through the node just paired, with the same URLs and credential,
  * so pairing once brings in every machine of the cluster.
  */
-function clusterRegistrations(
+export function clusterRegistrations(
   descriptor: ExecutionEnvironmentDescriptor,
   paired: BearerConnectionProfile,
   credential: BearerConnectionCredential,
