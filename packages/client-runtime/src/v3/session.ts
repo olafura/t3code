@@ -4,6 +4,7 @@ import {
   AgentSessionScanError,
   FilesystemBrowseError,
   GitCommandError,
+  GitManagerError,
   GitManagerServiceError,
   OrchestrationGetFullThreadDiffError,
   OrchestrationGetTurnDiffError,
@@ -362,6 +363,49 @@ export function makeV3Session(input: {
           vcsError(WS_METHODS.subscribeVcsStatus, request.cwd, frame.detail, String(frame.reason)),
       );
 
+    // Runs once on the checkout's node. The stream ends with the action, failing
+    // after action_failed as the Node server's does.
+    const runStackedAction = (request: { readonly cwd: string; readonly actionId: string }) =>
+      Stream.callback<unknown, unknown>((queue) =>
+        Effect.acquireRelease(
+          Effect.sync(() =>
+            socket.subscribe({ type: "gitAction", node, input: request }, (frame) => {
+              if (frame.t === "error") {
+                Queue.failCauseUnsafe(
+                  queue,
+                  Cause.fail(
+                    vcsError(
+                      WS_METHODS.gitRunStackedAction,
+                      request.cwd,
+                      frame.detail,
+                      String(frame.reason),
+                    ),
+                  ),
+                );
+                return;
+              }
+              if (frame.t !== "gitAction") return;
+              const event = frame.event as { readonly kind: string; readonly message?: string };
+              Queue.offerAllUnsafe(queue, [event]);
+              if (event.kind === "action_finished") Queue.endUnsafe(queue);
+              if (event.kind === "action_failed") {
+                Queue.failCauseUnsafe(
+                  queue,
+                  Cause.fail(
+                    new GitManagerError({
+                      operation: WS_METHODS.gitRunStackedAction,
+                      cwd: request.cwd,
+                      detail: event.message ?? "The git action failed.",
+                    }),
+                  ),
+                );
+              }
+            }),
+          ),
+          (unsubscribe) => Effect.sync(unsubscribe),
+        ),
+      );
+
     const vcsCommand = (tag: string) =>
       forward(tag, (request: { readonly cwd: string }, message, cause) =>
         vcsError(
@@ -389,6 +433,7 @@ export function makeV3Session(input: {
       [WS_METHODS.agentSessionsScan]: agentSessionCommand(WS_METHODS.agentSessionsScan),
       [WS_METHODS.agentSessionsImport]: agentSessionCommand(WS_METHODS.agentSessionsImport),
       [WS_METHODS.subscribeVcsStatus]: vcsStatus,
+      [WS_METHODS.gitRunStackedAction]: runStackedAction,
       [WS_METHODS.vcsRefreshStatus]: vcsCommand(WS_METHODS.vcsRefreshStatus),
       [WS_METHODS.vcsListRefs]: vcsCommand(WS_METHODS.vcsListRefs),
       [WS_METHODS.vcsSwitchRef]: vcsCommand(WS_METHODS.vcsSwitchRef),
