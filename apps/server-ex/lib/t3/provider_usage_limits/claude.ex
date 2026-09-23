@@ -123,10 +123,21 @@ defmodule T3.ProviderUsageLimits.Claude do
 
     with {:ok, session} <- Session.start_link(opts) do
       try do
-        case Session.control(session, "get_usage", %{}, 20_000) do
-          {:ok, response} -> limits(response, checked_at)
-          _ -> {Limits.unavailable(checked_at, "probeFailed"), nil}
+        result =
+          case Session.control(session, "get_usage", %{}, 20_000) do
+            {:ok, response} -> limits(response, checked_at)
+            _ -> {Limits.unavailable(checked_at, "probeFailed"), nil}
+          end
+
+        # The initialize reply came first; it names the account.
+        receive do
+          {:claude, ^session, {:initialized, {:ok, init}}} ->
+            Limits.remember_account("claudeAgent", account(init["account"]))
+        after
+          1_000 -> :ok
         end
+
+        result
       catch
         :exit, _ -> {Limits.unavailable(checked_at, "probeFailed"), nil}
       after
@@ -135,6 +146,78 @@ defmodule T3.ProviderUsageLimits.Claude do
     else
       _ -> {Limits.unavailable(checked_at, "probeFailed"), nil}
     end
+  end
+
+  @doc false
+  # `auth` fields for the account `initialize` reports, as the Node server labels them.
+  def account(%{} = account) do
+    method = String.downcase(String.replace(account["tokenSource"] || "", ~r/[\s_-]+/, ""))
+    subscription = account["subscriptionType"]
+
+    auth =
+      cond do
+        method in ~w(apikey anthropicapikey anthropicauthtoken) ->
+          %{"type" => "apiKey", "label" => "Claude API Key"}
+
+        is_binary(subscription) and subscription != "" ->
+          %{"type" => subscription, "label" => subscription_label(subscription)}
+
+        account["apiProvider"] == "bedrock" ->
+          %{"type" => "bedrock", "label" => "Amazon Bedrock"}
+
+        true ->
+          %{}
+      end
+
+    Limits.put_present(auth, "email", account["email"])
+  end
+
+  def account(_), do: %{}
+
+  @plans %{
+    "claudemaxsubscription" => "Max",
+    "claudemax5xsubscription" => "Max 5x",
+    "claudemax20xsubscription" => "Max 20x",
+    "claudeenterprisesubscription" => "Enterprise",
+    "claudeteamsubscription" => "Team",
+    "claudeprosubscription" => "Pro",
+    "claudefreesubscription" => "Free",
+    "max" => "Max",
+    "maxplan" => "Max",
+    "max5" => "Max 5x",
+    "max20" => "Max 20x",
+    "enterprise" => "Enterprise",
+    "team" => "Team",
+    "pro" => "Pro",
+    "free" => "Free"
+  }
+
+  defp subscription_label(type) do
+    plan = @plans[String.downcase(String.replace(type, ~r/[\s_-]+/, ""))] || title_case(type)
+    squashed = String.downcase(String.replace(plan, ~r/[\s_-]+/, ""))
+
+    cond do
+      String.starts_with?(squashed, "claude") and String.ends_with?(squashed, "subscription") ->
+        plan
+
+      String.starts_with?(squashed, "claude") ->
+        "#{plan} Subscription"
+
+      String.ends_with?(squashed, "subscription") ->
+        "Claude #{plan}"
+
+      true ->
+        "Claude #{plan} Subscription"
+    end
+  end
+
+  defp title_case(value) do
+    value
+    |> String.split(~r/[\s_-]+/, trim: true)
+    |> Enum.map_join(
+      " ",
+      &(String.upcase(String.first(&1)) <> String.downcase(String.slice(&1, 1..-1//1)))
+    )
   end
 
   defp stop(session) do

@@ -140,7 +140,12 @@ defmodule T3.ProviderUsageLimits.Codex do
   """
   def probe(checked_at) do
     with_app_server(fn conn ->
-      case call(conn, "account/read", %{}, 10_000) do
+      read = call(conn, "account/read", %{}, 10_000)
+
+      with {:ok, %{"account" => %{} = account}} <- read,
+           do: Limits.remember_account("codex", account(account))
+
+      case read do
         {:ok, %{"account" => %{"type" => "apiKey"}}} ->
           Limits.unavailable(checked_at, "unsupported")
 
@@ -160,6 +165,21 @@ defmodule T3.ProviderUsageLimits.Codex do
     end) ||
       Limits.unavailable(checked_at, "probeFailed", "Codex could not be started to read usage.")
   end
+
+  @doc false
+  # `auth` fields for the signed-in account, as the Node server labels it.
+  def account(%{"type" => "apiKey"}), do: %{"type" => "apiKey", "label" => "OpenAI API Key"}
+
+  def account(%{"type" => "amazonBedrock"}),
+    do: %{"type" => "amazonBedrock", "label" => "Amazon Bedrock"}
+
+  def account(%{"type" => "chatgpt"} = account) do
+    %{"type" => "chatgpt"}
+    |> Limits.put_present("label", plan_label(account["planType"]))
+    |> Limits.put_present("email", account["email"])
+  end
+
+  def account(_), do: %{}
 
   @doc "Redeems one reset credit; `key` names the attempt, so a retry reuses it."
   def consume(key) do

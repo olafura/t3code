@@ -42,12 +42,38 @@ defmodule T3.ProviderUsageLimits do
     ArgumentError -> nil
   end
 
-  @doc "A provider entry with its published `usageLimits`, when there are any."
+  @doc """
+  A provider entry with its published `usageLimits`, and the signed-in account's
+  email, type and label on its `auth` (clients merge one account seen on several
+  environments by its email).
+  """
   def put(%{"instanceId" => instance} = entry) do
-    case get(instance) do
-      nil -> entry
-      limits -> Map.put(entry, "usageLimits", limits)
+    entry =
+      case get(instance) do
+        nil -> entry
+        limits -> Map.put(entry, "usageLimits", limits)
+      end
+
+    case {lookup({:account, instance}), entry} do
+      {%{} = account, %{"auth" => %{} = auth}} when map_size(account) > 0 ->
+        Map.put(entry, "auth", Map.merge(auth, account))
+
+      _ ->
+        entry
     end
+  end
+
+  @doc "Records the account a probe saw for `instance` (`auth` fields)."
+  def remember_account(instance, account),
+    do: GenServer.cast(__MODULE__, {:account, instance, account})
+
+  defp lookup(key) do
+    case :ets.lookup(__MODULE__, key) do
+      [{_, value}] -> value
+      [] -> nil
+    end
+  rescue
+    ArgumentError -> nil
   end
 
   @doc "Probes the given instances now and publishes what they report."
@@ -244,6 +270,15 @@ defmodule T3.ProviderUsageLimits do
   end
 
   @impl true
+  def handle_cast({:account, instance, account}, state) do
+    if lookup({:account, instance}) != account do
+      :ets.insert(__MODULE__, {{:account, instance}, account})
+      T3.Settings.notify_providers()
+    end
+
+    {:noreply, state}
+  end
+
   def handle_cast({:update, instance, windows}, state) do
     publish(instance, merge(get(instance), windows, T3.Orchestration.Entities.now()))
     {:noreply, state}

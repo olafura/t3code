@@ -123,6 +123,33 @@ defmodule T3.ProviderUsageLimitsTest do
     assert after_update["resetCredits"] == before["resetCredits"]
   end
 
+  test "a provider's auth names the account its probe saw, so clients can merge it" do
+    start()
+    # The account arrives as a cast after the probe; a call after it has been handled.
+    _ = :sys.get_state(Limits)
+
+    assert %{
+             "auth" => %{
+               "status" => "authenticated",
+               "email" => "me@example.com",
+               "label" => "ChatGPT Pro 20x Subscription"
+             }
+           } =
+             Limits.put(%{"instanceId" => "codex", "auth" => %{"status" => "authenticated"}})
+
+    assert %{
+             "auth" => %{
+               "email" => "me@example.com",
+               "type" => "max",
+               "label" => "Claude Max Subscription"
+             }
+           } =
+             Limits.put(%{
+               "instanceId" => "claudeAgent",
+               "auth" => %{"status" => "authenticated"}
+             })
+  end
+
   test "API key accounts are unsupported and ignore turn updates" do
     System.put_env("FAKE_CODEX_ACCOUNT", "apiKey")
     System.put_env("FAKE_CLAUDE_USAGE", "unsupported")

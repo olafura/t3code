@@ -34,7 +34,9 @@ for line in sys.stdin:
                     "model_scoped": [{"display_name": "Fable 1", "utilization": 12, "resets_at": "2026-09-30T00:00:00Z"}]}}
             send({"type": "control_response", "response": {"subtype": "success", "request_id": msg["request_id"], "response": usage}})
             continue
-        send({"type": "control_response", "response": {"subtype": "success", "request_id": msg["request_id"], "response": {}}})
+        # The account a signed-in Claude Code reports when it starts.
+        reply = {"account": {"email": "me@example.com", "subscriptionType": "max", "tokenSource": "claude.ai"}} if sub == "initialize" else {}
+        send({"type": "control_response", "response": {"subtype": "success", "request_id": msg["request_id"], "response": reply}})
         if sub == "interrupt":
             send({"type": "result", "subtype": "error_during_execution", "is_error": True, "session_id": session})
         continue

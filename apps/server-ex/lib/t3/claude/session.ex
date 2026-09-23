@@ -2,8 +2,9 @@ defmodule T3.Claude.Session do
   @moduledoc """
   Owns one `claude` CLI process speaking the stream-json control protocol.
 
-  The session sends `initialize` on start. Transcript messages go to the `:handler`
-  as `{:claude, session, {:message, map}}`. Tool permission prompts arrive as
+  The session sends `initialize` on start, and passes its reply (which names the
+  signed-in account) to the `:handler` as `{:claude, session, {:initialized, reply}}`.
+  Transcript messages go to the handler as `{:claude, session, {:message, map}}`. Tool permission prompts arrive as
   `{:claude, session, {:permission, request_id, tool_name, input, context}}` and are
   answered with `answer_permission/3`. `control/3` sends any control request
   (`"interrupt"`, `"set_model"`, `"set_permission_mode"`, ...) and waits for its reply.
@@ -109,7 +110,8 @@ defmodule T3.Claude.Session do
 
   defp handle_line(line, state) do
     case Protocol.decode(line) do
-      {:control_response, "init", _reply} ->
+      {:control_response, "init", reply} ->
+        notify(state, {:initialized, reply})
         state
 
       {:control_response, id, reply} ->
