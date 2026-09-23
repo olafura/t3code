@@ -18,7 +18,13 @@ defmodule T3.Web.Socket do
 
   @impl true
   def init(_opts) do
-    state = %{subs: %{}, by_stream: %{}, buffers: %{}, flush_scheduled: false}
+    state = %{
+      subs: %{},
+      by_stream: %{},
+      by_terminal: %{},
+      buffers: %{},
+      flush_scheduled: false
+    }
 
     {:push,
      Protocol.encode(%{
@@ -65,11 +71,42 @@ defmodule T3.Web.Socket do
     end
   end
 
+  def handle_info({:t3_terminal, key, event}, state) do
+    case state.by_terminal do
+      %{^key => id} ->
+        {:push, Protocol.encode(%{"t" => "terminal", "id" => id, "event" => event}), state}
+
+      _ ->
+        {:ok, state}
+    end
+  end
+
+  def handle_info({:t3_terminals, node, event}, state) do
+    case state.by_terminal do
+      %{{:terminals, ^node} => id} ->
+        {:push, Protocol.encode(%{"t" => "terminals", "id" => id, "event" => event}), state}
+
+      _ ->
+        {:ok, state}
+    end
+  end
+
   def handle_info({:rpc_reply, id, reply}, state) do
     frame =
       case reply do
-        {:ok, result} -> %{"t" => "rpc.result", "id" => id, "result" => result}
-        {:error, message} -> %{"t" => "rpc.error", "id" => id, "error" => to_string(message)}
+        {:ok, result} ->
+          %{"t" => "rpc.result", "id" => id, "result" => result}
+
+        {:error, %{} = detail} ->
+          %{
+            "t" => "rpc.error",
+            "id" => id,
+            "error" => to_string(detail["message"] || detail["_tag"]),
+            "detail" => Map.delete(detail, "message")
+          }
+
+        {:error, message} ->
+          %{"t" => "rpc.error", "id" => id, "error" => to_string(message)}
       end
 
     {:push, Protocol.encode(frame), state}
@@ -198,8 +235,76 @@ defmodule T3.Web.Socket do
     end
   end
 
+  # A terminal lives on the node that owns its thread; its events come straight here.
+  defp subscribe(state, id, {:terminal, node, input}, _offset) do
+    key = {input["threadId"], input["terminalId"]}
+
+    reply =
+      try do
+        :erpc.call(node, T3.Terminal, :attach, [input, self()], 15_000)
+      catch
+        :error, {:erpc, reason} -> {:error, %{"message" => "node unavailable: #{reason}"}}
+      end
+
+    case reply do
+      {:ok, snapshot} ->
+        frame = %{"type" => "snapshot", "snapshot" => snapshot}
+
+        {:push, Protocol.encode(%{"t" => "terminal", "id" => id, "event" => frame}),
+         %{
+           state
+           | subs: Map.put(state.subs, id, {:terminal, node, key}),
+             by_terminal: Map.put(state.by_terminal, key, id)
+         }}
+
+      {:error, %{} = error} ->
+        frame = %{
+          "t" => "error",
+          "id" => id,
+          "reason" => error["message"],
+          "detail" => Map.delete(error, "message")
+        }
+
+        {:push, Protocol.encode(frame), state}
+
+      {:error, error} ->
+        {:push, Protocol.encode(%{"t" => "error", "id" => id, "reason" => to_string(error)}),
+         state}
+    end
+  end
+
+  defp subscribe(state, id, {:terminals, node} = shape, _offset) do
+    try do
+      terminals = :erpc.call(node, T3.Terminal.Hub, :watch, [self()], 15_000)
+      event = %{"type" => "snapshot", "terminals" => terminals}
+
+      {:push, Protocol.encode(%{"t" => "terminals", "id" => id, "event" => event}),
+       %{
+         state
+         | subs: Map.put(state.subs, id, shape),
+           by_terminal: Map.put(state.by_terminal, shape, id)
+       }}
+    catch
+      :error, {:erpc, reason} ->
+        {:push,
+         Protocol.encode(%{
+           "t" => "error",
+           "id" => id,
+           "reason" => "node unavailable: #{reason}"
+         }), state}
+    end
+  end
+
   defp unsubscribe(state, id) do
     case Map.pop(state.subs, id) do
+      {{:terminal, node, {thread_id, terminal_id} = key}, subs} ->
+        :erpc.cast(node, T3.Terminal, :detach, [thread_id, terminal_id, self()])
+        %{state | subs: subs, by_terminal: Map.delete(state.by_terminal, key)}
+
+      {{:terminals, node} = shape, subs} ->
+        :erpc.cast(node, T3.Terminal.Hub, :unwatch, [self()])
+        %{state | subs: subs, by_terminal: Map.delete(state.by_terminal, shape)}
+
       {{:stream, node, stream_id}, subs} ->
         :erpc.cast(node, T3.Streams, :unsubscribe, [stream_id, self()])
 

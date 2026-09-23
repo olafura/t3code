@@ -10,6 +10,9 @@ defmodule T3.Web.Protocol do
     * `{"type": "stream", "node": n, "stream": id}`: one project or thread
     * `{"type": "config", "node": n}` or `{"type": "config", "environment": id}`:
       that node's `ServerConfig` and name, sent once
+    * `{"type": "terminal", "node": n, "input": TerminalAttachInput}`: one terminal,
+      opened if needed; a snapshot, then its events
+    * `{"type": "terminals", "node": n}`: that node's terminal summaries, then changes
 
   Client to server:
 
@@ -33,7 +36,10 @@ defmodule T3.Web.Protocol do
       {"t": "resync", "id", "offset"}   (fell behind: resubscribe from offset)
       {"t": "error", "id", "reason"}
       {"t": "config", "id", "node", "config"}
-      {"t": "rpc.result", "id", "result"} / {"t": "rpc.error", "id", "error"}
+      {"t": "terminal", "id", "event"}   (TerminalAttachStreamEvent)
+      {"t": "terminals", "id", "event"}  (TerminalMetadataStreamEvent)
+      {"t": "rpc.result", "id", "result"} / {"t": "rpc.error", "id", "error", "detail"?}
+        (`detail` is the contract error as `{"_tag", ...fields}` when there is one)
       {"t": "pong"}
 
   Shell rows are `OrchestrationV2ThreadShell` (`kind` "thread") or
@@ -101,7 +107,22 @@ defmodule T3.Web.Protocol do
     end
   end
 
+  defp decode_shape(%{"type" => "terminal", "node" => node, "input" => %{} = input}, nodes) do
+    with {:ok, node} <- known_node(node, nodes), do: {:ok, {:terminal, node, input}}
+  end
+
+  defp decode_shape(%{"type" => "terminals", "node" => node}, nodes) do
+    with {:ok, node} <- known_node(node, nodes), do: {:ok, {:terminals, node}}
+  end
+
   defp decode_shape(_, _), do: {:error, "unknown shape"}
+
+  defp known_node(name, nodes) do
+    case Enum.find(nodes, &(Atom.to_string(&1) == name)) do
+      nil -> {:error, "unknown node"}
+      node -> {:ok, node}
+    end
+  end
 
   defp offset(n) when is_integer(n) and n >= 0, do: n
   defp offset(_), do: nil

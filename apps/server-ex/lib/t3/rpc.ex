@@ -4,11 +4,21 @@ defmodule T3.Rpc do
   Run on the node that owns the environment (`T3.Web.Socket` routes them).
   """
 
-  @spec handle(String.t(), term) :: {:ok, term} | {:error, String.t()}
+  @doc """
+  Handles one RPC. An error is a message, or a map with a `"message"` plus the
+  contract error's `"_tag"` and fields, which the client decodes.
+  """
+  @spec handle(String.t(), term) :: {:ok, term} | {:error, String.t() | map}
   def handle("orchestration." <> _ = method, payload),
     do: T3.Orchestration.handle(method, payload)
 
   def handle("projects.mutate", mutation), do: T3.Projects.mutate(mutation)
   def handle("filesystem.browse", input), do: T3.Projects.browse(input)
+  def handle("terminal.open", input), do: T3.Terminal.open(input)
+  def handle("terminal.write", input), do: T3.Terminal.write(input)
+  def handle("terminal.resize", input), do: T3.Terminal.resize(input)
+  def handle("terminal.clear", input), do: T3.Terminal.clear(input)
+  def handle("terminal.restart", input), do: T3.Terminal.restart(input)
+  def handle("terminal.close", input), do: T3.Terminal.close(input)
   def handle(method, _payload), do: {:error, "#{method} is not served by this node yet"}
 end

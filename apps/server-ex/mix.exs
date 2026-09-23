@@ -23,6 +23,7 @@ defmodule T3.MixProject do
   defp deps do
     [
       {:bandit, "~> 1.12"},
+      {:erlexec, "~> 2.5"},
       {:exile, "~> 0.15"},
       {:exqlite, "~> 0.41"},
       {:libcluster, "~> 3.5"},

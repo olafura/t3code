@@ -119,4 +119,71 @@ defmodule T3.Web.SocketTest do
       do: {Enum.reverse(acc), client},
       else: collect_events(client, last, acc)
   end
+
+  test "a terminal shape attaches a shell that RPCs drive; metadata follows it", %{
+    port: port,
+    tmp_dir: dir
+  } do
+    start_supervised!({Registry, keys: :unique, name: T3.Terminal.Registry})
+    start_supervised!({DynamicSupervisor, name: T3.Terminal.Supervisor, strategy: :one_for_one})
+    start_supervised!(T3.Terminal.Hub)
+    [{_node, %{"environmentId" => environment}}] = T3.Shell.environments()
+    me = Atom.to_string(node())
+    input = %{"threadId" => "th-t", "terminalId" => "term-1", "cwd" => dir}
+
+    client =
+      connect(port)
+      |> WsClient.send_json(%{
+        "t" => "sub",
+        "id" => 1,
+        "shape" => %{"type" => "terminals", "node" => me}
+      })
+      |> WsClient.send_json(%{
+        "t" => "sub",
+        "id" => 2,
+        "shape" => %{"type" => "terminal", "node" => me, "input" => input}
+      })
+
+    {%{"t" => "terminals", "id" => 1, "event" => %{"type" => "snapshot", "terminals" => []}},
+     client} =
+      WsClient.recv(client, 1_000)
+
+    {%{"t" => "terminal", "id" => 2, "event" => %{"type" => "snapshot", "snapshot" => snapshot}},
+     _, client} =
+      WsClient.recv_until(client, &(&1["t"] == "terminal"))
+
+    assert %{"status" => "running", "threadId" => "th-t"} = snapshot
+
+    client =
+      WsClient.send_json(client, %{
+        "t" => "rpc",
+        "id" => 3,
+        "environment" => environment,
+        "method" => "terminal.write",
+        "payload" => Map.put(input, "data", "echo over-the-wire\n")
+      })
+
+    {_, _, client} =
+      WsClient.recv_until(client, fn frame ->
+        frame["t"] == "terminal" and frame["event"]["type"] == "output" and
+          frame["event"]["data"] =~ "over-the-wire"
+      end)
+
+    # A contract error comes back with its tag and fields.
+    client =
+      WsClient.send_json(client, %{
+        "t" => "rpc",
+        "id" => 4,
+        "environment" => environment,
+        "method" => "terminal.write",
+        "payload" => %{"threadId" => "th-t", "terminalId" => "term-9", "data" => "x"}
+      })
+
+    {error, _, _client} = WsClient.recv_until(client, &(&1["t"] == "rpc.error"))
+
+    assert %{
+             "id" => 4,
+             "detail" => %{"_tag" => "TerminalSessionLookupError", "terminalId" => "term-9"}
+           } = error
+  end
 end
