@@ -17,6 +17,7 @@ defmodule T3.Orchestration do
 
   alias T3.Orchestration.Entities
   alias T3.{Patch, StreamState}
+  alias T3.Projection.{JS, PullRequests}
 
   @active_statuses ~w(preparing starting running waiting)
 
@@ -195,6 +196,88 @@ defmodule T3.Orchestration do
       for {id, position} <- Enum.with_index(order, 1),
           do: upsert(state, "run", id, &Map.put(&1, "queuePosition", position))
     end)
+  end
+
+  # A link's host snapshot and native stack, from `T3.PullRequests.Sync`.
+  def dispatch(%{"type" => "thread.pull-request-link.sync", "threadId" => thread_id} = command) do
+    quiet_update(thread_id, fn thread ->
+      links = PullRequests.of(thread)
+      key = PullRequests.key(command)
+
+      if Enum.any?(links, &(PullRequests.key(&1) == key)) do
+        links
+        |> Enum.map(fn link ->
+          if PullRequests.key(link) == key,
+            do: %{link | "snapshot" => command["snapshot"], "stack" => command["stack"]},
+            else: link
+        end)
+        |> then(&pull_request_fields(thread, &1))
+      else
+        %{}
+      end
+    end)
+  end
+
+  # The branch's pull request, from `T3.PullRequests.Discovery`, refused when what it
+  # was decided from (`expected`) no longer holds.
+  def dispatch(%{"type" => "thread.pull-request.sync", "threadId" => thread_id} = command) do
+    expected = command["expected"] || %{}
+
+    project =
+      case T3.Shell.row(node(), command["projectId"]) do
+        {"project", row} -> if row["deletedAt"] == nil, do: row
+        _ -> nil
+      end
+
+    quiet_update(thread_id, fn thread ->
+      same? = fn field ->
+        Map.take(JS.json(JS.get(thread, field)) || %{}, ~w(projectId repository number url)) ==
+          Map.take(expected[field] || %{}, ~w(projectId repository number url))
+      end
+
+      cond do
+        JS.get(thread, "archivedAt") != nil ->
+          {:error, "Thread #{thread_id} is archived."}
+
+        project == nil or project["workspaceRoot"] != expected["workspaceRoot"] or
+          thread["projectId"] != command["projectId"] or
+          JS.get(thread, "branch") != expected["branch"] or
+          JS.get(thread, "worktreePath") != expected["worktreePath"] or
+          not same?.("linkedPullRequest") or not same?.("branchPullRequest") ->
+          {:error, "Thread #{thread_id} changed before pull request discovery."}
+
+        Map.has_key?(command, "linkedPullRequest") ->
+          thread
+          |> replace_linked(command["linkedPullRequest"], Entities.now())
+          |> Map.put("branchPullRequest", command["branchPullRequest"])
+
+        true ->
+          %{"branchPullRequest" => command["branchPullRequest"]}
+      end
+    end)
+  end
+
+  # Settles a thread `T3.Orchestration.Settlement` found idle or done, unless it was
+  # touched after the row that was judged (`snapshotAt`) or settled or unsettled by hand.
+  def dispatch(%{"type" => "thread.auto-settle", "threadId" => thread_id} = command) do
+    snapshot_at = JS.epoch_ms(command["snapshotAt"])
+
+    result =
+      T3.Streams.transact(thread_id, :thread, fn state ->
+        thread = StreamState.get(state, "thread")[thread_id]
+
+        if thread == nil or JS.get(thread, "settledOverride") != nil or snapshot_at == nil or
+             (state.updated_at || 0) > snapshot_at do
+          {[], {:error, "Thread #{thread_id} changed before automatic settlement."}}
+        else
+          fields = thread_fields("thread.settle", command, thread, Entities.now())
+
+          {Enum.reject([upsert(state, "thread", thread_id, &Map.merge(&1, fields))], &is_nil/1),
+           :ok}
+        end
+      end)
+
+    with :ok <- result, do: {:ok, %{"sequence" => sequence(thread_id)}}
   end
 
   # Commands that set fields on the thread itself.
@@ -780,18 +863,87 @@ defmodule T3.Orchestration do
   defp thread_fields("thread.interaction-mode.set", command, _, at),
     do: %{"interactionMode" => command["interactionMode"], "updatedAt" => at}
 
-  # A thread's pull requests are keyed by host, repository and number.
+  # A thread's pull requests are keyed by host, repository and number. Linking again
+  # changes nothing, except that a user or agent brings back a stack layer they unlinked.
+  # A first manual link keeps the branch's pull request beside it.
   defp thread_fields("thread.pull-request.link", command, thread, at) do
-    link =
-      command
-      |> Map.take(~w(host repository number url source))
-      |> Map.merge(%{"linkedAt" => at, "snapshot" => nil, "stack" => nil})
+    links = PullRequests.of(thread)
+    key = PullRequests.key(command)
+    existing = Enum.find(links, &(PullRequests.key(&1) == key))
+    source = command["source"]
 
-    %{"pullRequests" => other_pull_requests(thread, command) ++ [link], "updatedAt" => at}
+    if existing &&
+         (existing["source"] != "stack-dismissed" or source in ["stack", "stack-dismissed"]) do
+      %{}
+    else
+      link =
+        if existing,
+          do: %{existing | "source" => source, "url" => command["url"]},
+          else: new_link(PullRequests.normalize(command), command["url"], source, at)
+
+      branch = JS.json(JS.get(thread, "branchPullRequest"))
+      branch_key = branch && PullRequests.legacy_key(branch)
+
+      kept_branch =
+        if source == "manual" and branch != nil and PullRequests.visible(links) == [] and
+             PullRequests.key(branch_key) != key and
+             not Enum.any?(links, &(PullRequests.key(&1) == PullRequests.key(branch_key))),
+           do: [new_link(branch_key, branch["url"], "manual", at)],
+           else: []
+
+      pull_requests =
+        kept_branch ++ Enum.reject(links, &(PullRequests.key(&1) == key)) ++ [link]
+
+      Map.put(pull_request_fields(thread, pull_requests), "updatedAt", at)
+    end
   end
 
-  defp thread_fields("thread.pull-request.unlink", command, thread, at),
-    do: %{"pullRequests" => other_pull_requests(thread, command), "updatedAt" => at}
+  # A layer of a native stack stays as a tombstone, so the sync does not link it again.
+  defp thread_fields("thread.pull-request.unlink", command, thread, at) do
+    links = PullRequests.of(thread)
+    key = PullRequests.normalize(command)
+    existing = Enum.find(links, &(PullRequests.normalize(&1) == key))
+
+    stacked? =
+      existing != nil and
+        (existing["source"] == "stack" or existing["stack"] != nil or
+           Enum.any?(links, fn link ->
+             Map.delete(PullRequests.normalize(link), "number") == Map.delete(key, "number") and
+               Enum.any?((link["stack"] || %{})["layers"] || [], &(&1["number"] == key["number"]))
+           end))
+
+    cond do
+      existing == nil ->
+        %{}
+
+      stacked? ->
+        links
+        |> Enum.map(&if(&1 == existing, do: %{&1 | "source" => "stack-dismissed"}, else: &1))
+        |> then(&Map.put(pull_request_fields(thread, &1), "updatedAt", at))
+
+      true ->
+        links
+        |> List.delete(existing)
+        |> then(&Map.put(pull_request_fields(thread, &1), "updatedAt", at))
+    end
+  end
+
+  # A legacy client's single link replaces the previous one among the thread's links.
+  defp thread_fields(
+         "thread.metadata.update",
+         %{"linkedPullRequest" => linked} = command,
+         thread,
+         at
+       ) do
+    with %{} = fields <-
+           thread_fields(
+             "thread.metadata.update",
+             Map.delete(command, "linkedPullRequest"),
+             thread,
+             at
+           ),
+         do: Map.merge(fields, replace_linked(thread, linked, at))
+  end
 
   # The next run starts the new provider's thread with the conversation handed over.
   defp thread_fields("provider.switch", command, thread, at),
@@ -843,11 +995,68 @@ defmodule T3.Orchestration do
       else: %{}
   end
 
-  defp other_pull_requests(thread, key) do
-    Enum.reject(
-      thread["pullRequests"] || [],
-      &(Map.take(&1, ~w(host repository number)) == Map.take(key, ~w(host repository number)))
-    )
+  defp new_link(key, url, source, at),
+    do:
+      Map.merge(Map.take(key, ~w(host repository number)), %{
+        "url" => url,
+        "source" => source,
+        "linkedAt" => at,
+        "snapshot" => nil,
+        "stack" => nil
+      })
+
+  # The legacy `linkedPullRequest` lasts only while a visible link still names it.
+  defp pull_request_fields(thread, pull_requests) do
+    linked = JS.json(JS.get(thread, "linkedPullRequest"))
+
+    if linked == nil or
+         Enum.any?(
+           PullRequests.visible(pull_requests),
+           &(PullRequests.key(&1) == PullRequests.key(PullRequests.legacy_key(linked)))
+         ),
+       do: %{"pullRequests" => pull_requests},
+       else: %{"pullRequests" => pull_requests, "linkedPullRequest" => nil}
+  end
+
+  defp replace_linked(thread, linked, at) do
+    replaced =
+      for l <- [JS.json(JS.get(thread, "linkedPullRequest")), linked],
+          l,
+          do: PullRequests.key(PullRequests.legacy_key(l))
+
+    kept = Enum.reject(PullRequests.of(thread), &(PullRequests.key(&1) in replaced))
+
+    added =
+      if linked,
+        do: [new_link(PullRequests.legacy_key(linked), linked["url"], "manual", at)],
+        else: []
+
+    %{"linkedPullRequest" => linked, "pullRequests" => kept ++ added}
+  end
+
+  # Host state and branch discovery are not activity: they leave `updatedAt` where it is.
+  defp quiet_update(thread_id, decide) do
+    result =
+      T3.Streams.transact(thread_id, :thread, fn state ->
+        case StreamState.get(state, "thread")[thread_id] do
+          nil ->
+            {[], {:error, "unknown thread #{thread_id}"}}
+
+          thread ->
+            case decide.(thread) do
+              {:error, _} = error ->
+                {[], error}
+
+              fields ->
+                case upsert(state, "thread", thread_id, &Map.merge(&1, fields)) do
+                  nil -> {[], :ok}
+                  {kind, id, patch} -> {[{kind, id, Map.put(patch, "q", true)}], :ok}
+                end
+            end
+        end
+      end)
+
+    with :ok <- result, do: {:ok, %{"sequence" => sequence(thread_id)}}
   end
 
   # Changes to queued runs; positions are renumbered 1.. after each one.

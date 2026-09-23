@@ -688,6 +688,105 @@ defmodule T3.PullRequests.GitHub do
     end
   end
 
+  @doc """
+  Summaries for pull requests anywhere on one host, as `%{{repository, number} =>
+  summary}` with the repository lowercased: 25 aliased lookups to a read, so a sweep
+  costs one `gh` call rather than one apiece. One GitHub answered nothing for is absent.
+  """
+  def summaries(ctx, refs) do
+    refs
+    |> Enum.uniq_by(fn {repository, number} -> {String.downcase(repository), number} end)
+    |> Enum.chunk_every(25)
+    |> Task.async_stream(&summaries_chunk(ctx, &1), max_concurrency: 4, timeout: :infinity)
+    |> Enum.reduce(%{}, fn
+      {:ok, {:ok, found}}, acc -> Map.merge(acc, found)
+      _, acc -> acc
+    end)
+  end
+
+  @summary_selection "number title url state isDraft mergeable reviewDecision additions deletions changedFiles updatedAt mergedAt closedAt headRefName baseRefName author { __typename login avatarUrl ... on User { name } } latestReviews(first: 20) { nodes { state author { login } } } commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }"
+
+  defp summaries_chunk(ctx, chunk) do
+    selections =
+      for {{repository, number}, index} <- Enum.with_index(chunk),
+          [owner, name] <- [String.split(repository, "/")],
+          Regex.match?(~r/^[A-Za-z0-9._-]+$/, owner) and Regex.match?(~r/^[A-Za-z0-9._-]+$/, name),
+          is_integer(number) and number > 0 do
+        ~s[s#{index}: repository(owner: "#{owner}", name: "#{name}") { pullRequest(number: #{number}) { #{@summary_selection} } }]
+      end
+
+    with true <- selections != [],
+         {:ok, data} <-
+           graphql(ctx, "query PullRequestSummaries {\n#{Enum.join(selections, "\n")}\n}") do
+      {:ok,
+       for {{repository, number}, index} <- Enum.with_index(chunk),
+           %{"title" => title, "url" => url, "updatedAt" => updated} = pr <-
+             [get_in(data, ["s#{index}", "pullRequest"])],
+           is_binary(title) and is_binary(url) and is_binary(updated) and
+             is_binary(pr["headRefName"]) and is_binary(pr["baseRefName"]),
+           into: %{} do
+         head_rollup =
+           for node <- get_in(pr, ["commits", "nodes"]) || [],
+               state = trimmed(get_in(node || %{}, ["commit", "statusCheckRollup", "state"])),
+               do: %{"state" => state}
+
+         {{String.downcase(repository), number},
+          %{
+            "number" => number,
+            "title" => title,
+            "url" => url,
+            "headBranch" => pr["headRefName"],
+            "baseBranch" => pr["baseRefName"],
+            "state" => state(pr),
+            "isDraft" => pr["isDraft"] == true,
+            "closedAt" => trimmed(pr["closedAt"]),
+            "mergedAt" => trimmed(pr["mergedAt"]),
+            "updatedAt" => updated,
+            "author" => with_avatar(actor(pr["author"]), ctx.host),
+            "additions" => pr["additions"] || 0,
+            "deletions" => pr["deletions"] || 0,
+            "changedFiles" => pr["changedFiles"] || 0,
+            "reviewDecision" => review_decision(pr["reviewDecision"], pr["latestReviews"]),
+            "checksState" => rollup(head_rollup),
+            "mergeability" => mergeability(pr["mergeable"])
+          }}
+       end}
+    else
+      false -> {:ok, %{}}
+      error -> error
+    end
+  end
+
+  @doc """
+  The newest pull request whose head is `branch`, in whichever repository `gh` reads
+  the checkout at `cwd` against: `%{"number", "url", "state", "mergedAt", "closedAt"}`,
+  or nil.
+  """
+  def branch_pull_request(cwd, branch) do
+    args =
+      ~w(pr list --state all --limit 1 --json number,url,state,mergedAt,closedAt --head) ++
+        [branch]
+
+    case gh_json(cwd, args) do
+      {:ok, [%{"number" => number, "url" => url} = pr | _]}
+      when is_integer(number) and is_binary(url) ->
+        {:ok,
+         %{
+           "number" => number,
+           "url" => url,
+           "state" => state(pr),
+           "mergedAt" => trimmed(pr["mergedAt"]),
+           "closedAt" => trimmed(pr["closedAt"])
+         }}
+
+      {:ok, _} ->
+        {:ok, nil}
+
+      error ->
+        error
+    end
+  end
+
   # --- one pull request ----------------------------------------------------------------
 
   @doc "`PullRequestSummary`'s host fields, from `gh pr view`."

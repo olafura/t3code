@@ -446,8 +446,37 @@ defmodule T3.PullRequests do
     _, _ -> refuse("diff", "The node holding this project is unavailable.")
   end
 
-  @doc "The host-native stack a pull request is in, or nil."
-  def stack(ref), do: read(ref, "stack", fn _project, ctx -> GitHub.stack(ctx) end)
+  @doc "The host-native stack a pull request is in, or nil; `details?` false skips its second read."
+  def stack(ref, details? \\ true),
+    do: read(ref, "stack", fn _project, ctx -> GitHub.stack(ctx, details?) end)
+
+  @doc """
+  Summaries for pull requests on this node's GitHub hosts, keyed by the refs asked
+  for (`%{"host", "repository", "number"}`), read in one batch per host through any
+  checkout there. A ref no checkout here can answer for, or GitHub left unanswered, is
+  absent.
+  """
+  def summaries(refs) do
+    checkouts = projects() |> Enum.filter(&(&1.kind == "github")) |> Enum.group_by(& &1.host)
+
+    refs
+    |> Enum.group_by(&String.downcase(&1["host"] || ""))
+    |> Enum.flat_map(fn {host, refs} ->
+      case checkouts[host] do
+        [project | _] ->
+          found =
+            GitHub.summaries(ctx(project, nil), Enum.map(refs, &{&1["repository"], &1["number"]}))
+
+          for ref <- refs,
+              summary = found[{String.downcase(ref["repository"]), ref["number"]}],
+              do: {ref, summary}
+
+        nil ->
+          []
+      end
+    end)
+    |> Map.new()
+  end
 
   # --- changes ----------------------------------------------------------------------
 
@@ -456,7 +485,8 @@ defmodule T3.PullRequests do
   asked of the host fresh. Stack actions are not served.
   """
   def run_action(input) do
-    change(input, "runAction", fn _project, ctx ->
+    input
+    |> change("runAction", fn _project, ctx ->
       action = input["action"]
       capabilities = GitHub.capabilities()
 
@@ -492,6 +522,8 @@ defmodule T3.PullRequests do
           end
       end
     end)
+    # Linked threads show what the action did without waiting for the next sweep.
+    |> tap(&if(match?({:ok, _}, &1), do: T3.PullRequests.Sync.request(input)))
   end
 
   # Rewriting is left to the host to allow: whoever wrote something may rewrite it,
@@ -610,6 +642,8 @@ defmodule T3.PullRequests do
   def invalidate(input) do
     if input["filesViewedOnly"] != true do
       if input["reference"] == nil, do: :persistent_term.erase(@viewers)
+      # A reader asking for fresh host state wants the thread links it feeds to follow.
+      if input["reference"], do: T3.PullRequests.Sync.request(input["reference"])
       Refreshes.bump()
     end
 

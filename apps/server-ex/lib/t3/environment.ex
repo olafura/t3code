@@ -26,6 +26,12 @@ defmodule T3.Environment do
         # GitHub pull requests through `gh` (`T3.PullRequests`), diff over HTTP.
         "pullRequests" => true,
         "pullRequestChecks" => true,
+        # Threads link many pull requests, kept in sync with the host
+        # (`T3.PullRequests.Sync`, `T3.PullRequests.Discovery`), and settle on their own
+        # (`T3.Orchestration.Settlement`). Stack actions are not served.
+        "threadPullRequests" => true,
+        "threadPullRequestLinking" => true,
+        "threadAutoSettlement" => true,
         # Files besides images upload to `T3.Attachments` too.
         "attachmentUploads" => true,
         "fileAttachments" => %{"maxUploadBytes" => 50 * 1024 * 1024},

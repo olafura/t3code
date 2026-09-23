@@ -351,7 +351,7 @@ defmodule T3.OrchestrationTest do
     {:ok, _} = link.("https://github.com/t3/code/pull/7?again")
     thread = StreamState.get(current(thread_id), "thread")[thread_id]
 
-    assert [%{"number" => 7, "url" => "https://github.com/t3/code/pull/7?again"}] =
+    assert [%{"number" => 7, "url" => "https://github.com/t3/code/pull/7"}] =
              thread["pullRequests"]
 
     {:ok, _} =

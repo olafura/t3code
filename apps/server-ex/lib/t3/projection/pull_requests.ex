@@ -36,8 +36,63 @@ defmodule T3.Projection.PullRequests do
     end
   end
 
+  @doc "Links a user sees: every one but the tombstones of unlinked stack layers."
+  @spec visible([map]) :: [map]
+  def visible(links), do: Enum.reject(links, &(get(&1, "source") == "stack-dismissed"))
+
+  @doc """
+  A link's identity as `normalizeThreadPullRequestKey` gives it: `host`, `repository`
+  and `number`, lowercased, with a Forgejo port recovered from the link's URL.
+  """
+  @spec normalize(map) :: map
+  def normalize(link) do
+    repository = link |> get("repository") |> trim() |> String.downcase()
+    number = get(link, "number")
+    parsed = parse_change_request_url(get(link, "url"))
+
+    authority =
+      get(link, "authority") ||
+        if(parsed && parsed.repository == repository && parsed.number == number,
+          do: parsed[:authority]
+        )
+
+    normalize_key(%{
+      host: get(link, "host"),
+      authority: authority,
+      repository: repository,
+      number: number
+    })
+  end
+
+  @doc "A link's identity as one string, `host/repository#number`."
+  @spec key(map) :: String.t()
+  def key(link) do
+    %{"host" => host, "repository" => repository, "number" => number} = normalize(link)
+    "#{host}/#{repository}##{number}"
+  end
+
+  @doc """
+  The URL of pull request `number` in the same repository as `url`, as
+  `siblingPullRequestUrl` builds it, or `nil`.
+  """
+  @spec sibling_url(String.t(), integer) :: String.t() | nil
+  def sibling_url(url, number) do
+    with %{repository: repository} <- parse_change_request_url(url),
+         true <- is_integer(number) and number > 0,
+         {:ok, uri} <- URI.new(url),
+         rest = String.slice(uri.path || "", (String.length(repository) + 1)..-1//1),
+         [_, route] <-
+           Regex.run(~r{^/(-/merge_requests|pulls?|pull-requests|pullrequest)/\d+(?:/|\z)}u, rest) do
+      URI.to_string(%{uri | path: "/#{repository}/#{route}/#{number}", query: nil, fragment: nil})
+    else
+      _ -> nil
+    end
+  end
+
+  @doc "The link key of a legacy `ThreadLinkedPullRequest` (`legacyThreadPullRequestKey`)."
+  @spec legacy_key(map) :: map
   # Legacy Azure selectors omit the organization and project; recover them from the URL.
-  defp legacy_key(linked) do
+  def legacy_key(linked) do
     url = get(linked, "url")
     number = get(linked, "number")
     parsed = parse_change_request_url(url)
