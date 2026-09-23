@@ -14,6 +14,7 @@ import {
   WsRpcGroup,
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
+import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -177,6 +178,36 @@ export function makeV3Session(input: {
         })),
       );
 
+    // A node never bootstraps a project from its cwd, so its welcome is complete at
+    // once; the stream then stays open like the Node server's lifecycle stream.
+    const serverLifecycle = () =>
+      Stream.concat(
+        Stream.make(
+          {
+            version: 1 as const,
+            sequence: 0,
+            type: "welcome" as const,
+            payload: {
+              environment: config.environment,
+              cwd: config.cwd,
+              projectName:
+                config.cwd.split(/[\\/]/).findLast((part) => part.length > 0) ?? config.cwd,
+              bootstrapStatus: "complete" as const,
+            },
+          },
+          {
+            version: 1 as const,
+            sequence: 1,
+            type: "ready" as const,
+            payload: {
+              at: DateTime.formatIso(DateTime.nowUnsafe()),
+              environment: config.environment,
+            },
+          },
+        ),
+        Stream.never,
+      );
+
     // RPCs run on the environment's node; a failure surfaces as the method's contract error.
     const forward =
       <R extends object, E>(
@@ -276,6 +307,7 @@ export function makeV3Session(input: {
       [WS_METHODS.serverGetConfig]: () => initialConfig,
       [WS_METHODS.serverProbe]: () => Effect.void,
       [WS_METHODS.subscribeServerConfig]: serverConfig,
+      [WS_METHODS.subscribeServerLifecycle]: serverLifecycle,
     };
 
     // Every other method fails in the shape its callers expect: a stream or an effect.
