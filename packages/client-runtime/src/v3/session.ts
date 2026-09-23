@@ -34,6 +34,8 @@ import {
   type ProjectWriteFileInput,
   ProviderAuthState,
   ProviderSetupError,
+  PullRequestOperationError,
+  PullRequestUnavailableError,
   ReviewDiffPreviewError,
   VcsError,
   OrchestrationV2DispatchCommandError,
@@ -171,6 +173,42 @@ function vcsError(operation: string, cwd: string, detail: unknown, message: stri
   );
 }
 const decodeAcpRegistryError = Schema.decodeUnknownOption(AcpRegistryOperationError);
+const decodePullRequestError = Schema.decodeUnknownOption(
+  Schema.Union([PullRequestUnavailableError, PullRequestOperationError]),
+);
+
+/** The pull request RPCs a node serves through its `gh`, all failing the same way. */
+const PULL_REQUEST_METHODS = [
+  WS_METHODS.pullRequestsList,
+  WS_METHODS.pullRequestsListStats,
+  WS_METHODS.pullRequestsSummary,
+  WS_METHODS.pullRequestsRouting,
+  WS_METHODS.pullRequestsRoutingIdentity,
+  WS_METHODS.pullRequestsStack,
+  WS_METHODS.pullRequestsLinkedThreads,
+  WS_METHODS.pullRequestsDetail,
+  WS_METHODS.pullRequestsPreview,
+  WS_METHODS.pullRequestsChecks,
+  WS_METHODS.pullRequestsActivity,
+  WS_METHODS.pullRequestsThreadComments,
+  WS_METHODS.pullRequestsDiffFileContents,
+  WS_METHODS.pullRequestsFilesViewed,
+  WS_METHODS.pullRequestsSetFilesViewed,
+  WS_METHODS.pullRequestsRunAction,
+  WS_METHODS.pullRequestsUpdate,
+  WS_METHODS.pullRequestsComment,
+  WS_METHODS.pullRequestsUpdateComment,
+  WS_METHODS.pullRequestsSubmitReview,
+  WS_METHODS.pullRequestsReplyToThread,
+  WS_METHODS.pullRequestsSetThreadResolution,
+  WS_METHODS.pullRequestsSetReaction,
+  WS_METHODS.pullRequestsInvalidate,
+  WS_METHODS.pullRequestsReviewerCandidates,
+  WS_METHODS.pullRequestsRequestReviewers,
+  WS_METHODS.pullRequestsLabelCandidates,
+  WS_METHODS.pullRequestsSetLabels,
+] as const;
+
 const decodeAgentSessionError = Schema.decodeUnknownOption(
   Schema.Union([
     AgentSessionImportProjectChangedError,
@@ -799,6 +837,25 @@ export function makeV3Session(input: {
         ),
       );
 
+    // Pull requests are read and changed through the node's `gh`; a node bumps its
+    // refresh revision after every change so other readers fetch again.
+    const pullRequestCommand = (tag: string) =>
+      forward(tag, (_request: object, message, cause) =>
+        decodePullRequestError(cause instanceof ClusterRpcError ? cause.detail : undefined).pipe(
+          Option.getOrElse(
+            () => new PullRequestOperationError({ operation: tag, detail: message }),
+          ),
+        ),
+      );
+    const pullRequestRefreshes = () =>
+      shapeStream(socket, { type: "pullRequestRefreshes", node }, (frame) =>
+        frame.t === "pullRequestRefreshes" &&
+        typeof frame.revision === "number" &&
+        frame.revision > 0
+          ? [frame.revision]
+          : [],
+      );
+
     const getFullThreadDiff = forward(
       ORCHESTRATION_V2_WS_METHODS.getFullThreadDiff,
       (_request: object, message) => new OrchestrationGetFullThreadDiffError({ message }),
@@ -1081,6 +1138,10 @@ export function makeV3Session(input: {
       [WS_METHODS.vcsPull]: vcsCommand(WS_METHODS.vcsPull),
       [WS_METHODS.vcsCreateWorktree]: vcsCommand(WS_METHODS.vcsCreateWorktree),
       [WS_METHODS.vcsRemoveWorktree]: vcsCommand(WS_METHODS.vcsRemoveWorktree),
+      [WS_METHODS.gitResolvePullRequest]: vcsCommand(WS_METHODS.gitResolvePullRequest),
+      [WS_METHODS.gitPreparePullRequestThread]: vcsCommand(WS_METHODS.gitPreparePullRequestThread),
+      ...Object.fromEntries(PULL_REQUEST_METHODS.map((tag) => [tag, pullRequestCommand(tag)])),
+      [WS_METHODS.pullRequestsSubscribeRefreshes]: pullRequestRefreshes,
       [WS_METHODS.reviewGetDiffPreview]: reviewCommand(WS_METHODS.reviewGetDiffPreview),
       [WS_METHODS.reviewGetDiffFileContents]: reviewCommand(WS_METHODS.reviewGetDiffFileContents),
       [WS_METHODS.terminalAttach]: terminalAttach,

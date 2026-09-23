@@ -27,6 +27,8 @@ defmodule T3.Web.Protocol do
       progress (`ProjectCloneSnapshot[]`), then the whole list on every change
     * `{"type": "scheduledTasks", "node": n}`: that node's scheduled tasks, then
       the whole list again whenever one changes
+    * `{"type": "pullRequestRefreshes", "node": n}`: that node's pull request
+      refresh revision, then each new one (`pullRequests.subscribeRefreshes`)
     * `{"type": "providerAuth", "node": n, "instanceId": id}`: that provider
       instance's sign-in state (`ProviderAuthState`), then changes
     * `{"type": "gitAction", "node": n, "input": GitRunStackedActionInput}`: runs the
@@ -69,6 +71,7 @@ defmodule T3.Web.Protocol do
       {"t": "resourceTelemetry", "id", "snapshot"} (ResourceTelemetrySnapshot)
       {"t": "authAccess", "id", "event"} (AuthAccessStreamEvent)
       {"t": "localServers", "id", "list"} (DiscoveredLocalServerList)
+      {"t": "pullRequestRefreshes", "id", "revision"} (non-negative integer)
       {"t": "rpc.result", "id", "result"} / {"t": "rpc.error", "id", "error", "detail"?}
         (`detail` is the contract error as `{"_tag", ...fields}` when there is one)
       {"t": "pong"}
@@ -175,6 +178,10 @@ defmodule T3.Web.Protocol do
 
   defp decode_shape(%{"type" => "scheduledTasks", "node" => node}, nodes) do
     with {:ok, node} <- known_node(node, nodes), do: {:ok, {:scheduled_tasks, node}}
+  end
+
+  defp decode_shape(%{"type" => "pullRequestRefreshes", "node" => node}, nodes) do
+    with {:ok, node} <- known_node(node, nodes), do: {:ok, {:pull_request_refreshes, node}}
   end
 
   defp decode_shape(%{"type" => "worktreeSetup", "node" => node, "threadId" => id}, nodes)

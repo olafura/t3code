@@ -193,6 +193,17 @@ defmodule T3.Web.Socket do
     end
   end
 
+  def handle_info({:t3_pull_request_refreshes, node, revision}, state) do
+    case state.by_terminal do
+      %{{:pull_request_refreshes, ^node} => id} ->
+        frame = %{"t" => "pullRequestRefreshes", "id" => id, "revision" => revision}
+        {:push, Protocol.encode(frame), state}
+
+      _ ->
+        {:ok, state}
+    end
+  end
+
   def handle_info({:t3_worktree_setup, thread_id, snapshot}, state) do
     case state.by_terminal do
       %{{:worktree_setup, ^thread_id} => id} ->
@@ -537,6 +548,22 @@ defmodule T3.Web.Socket do
     end
   end
 
+  defp subscribe(state, id, {:pull_request_refreshes, node} = shape, _offset) do
+    case remote(node, T3.PullRequests.Refreshes, :subscribe, [self()]) do
+      {:ok, {:ok, revision}} ->
+        {:push,
+         Protocol.encode(%{"t" => "pullRequestRefreshes", "id" => id, "revision" => revision}),
+         %{
+           state
+           | subs: Map.put(state.subs, id, shape),
+             by_terminal: Map.put(state.by_terminal, {:pull_request_refreshes, node}, id)
+         }}
+
+      {:error, reason} ->
+        {:push, Protocol.encode(error_frame(id, reason)), state}
+    end
+  end
+
   defp subscribe(state, id, {:worktree_setup, node, thread_id} = shape, _offset) do
     case remote(node, T3.WorktreeSetup, :subscribe, [thread_id, self()]) do
       {:ok, snapshot} ->
@@ -673,6 +700,10 @@ defmodule T3.Web.Socket do
           | subs: subs,
             by_terminal: Map.delete(state.by_terminal, {:scheduled_tasks, node})
         }
+
+      {{:pull_request_refreshes, node} = shape, subs} ->
+        :erpc.cast(node, T3.PullRequests.Refreshes, :unsubscribe, [self()])
+        %{state | subs: subs, by_terminal: Map.delete(state.by_terminal, shape)}
 
       {{:worktree_setup, node, thread_id}, subs} ->
         :erpc.cast(node, T3.WorktreeSetup, :unsubscribe, [thread_id, self()])
