@@ -28,7 +28,10 @@ defmodule T3.Shell do
 
   @doc "Every known row as `{{node, stream_id}, {kind, row}}`."
   @spec rows() :: [{{node, String.t()}, {String.t(), map}}]
-  def rows, do: :ets.tab2list(@table)
+  def rows do
+    # Without the shell (tools, some tests) there are no rows.
+    if :ets.whereis(@table) == :undefined, do: [], else: :ets.tab2list(@table)
+  end
 
   @doc "One row as `{kind, row}`, or `nil`."
   def row(node, id) do

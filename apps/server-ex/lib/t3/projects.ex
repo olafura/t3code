@@ -103,6 +103,43 @@ defmodule T3.Projects do
   end
 
   @doc """
+  The id of this node's project a directory belongs to: a thread's worktree, or
+  the project whose workspace holds it (the deepest one). Nil when none does.
+  """
+  def at(path) when is_binary(path) do
+    path = Path.expand(path)
+    rows = for {{node, _id}, row} <- T3.Shell.rows(), node == node(), do: row
+
+    worktree =
+      Enum.find_value(rows, fn
+        {"thread", %{"worktreePath" => root, "projectId" => id}} when is_binary(root) ->
+          if within?(path, root), do: id
+
+        _ ->
+          nil
+      end)
+
+    worktree ||
+      rows
+      |> Enum.flat_map(fn
+        {"project", %{"workspaceRoot" => root, "id" => id} = row} when is_binary(root) ->
+          if row["deletedAt"] == nil and within?(path, root), do: [{root, id}], else: []
+
+        _ ->
+          []
+      end)
+      |> Enum.max_by(fn {root, _} -> byte_size(root) end, fn -> {nil, nil} end)
+      |> elem(1)
+  end
+
+  def at(_path), do: nil
+
+  defp within?(path, root) do
+    root = Path.expand(root)
+    path == root or String.starts_with?(path, root <> "/")
+  end
+
+  @doc """
   Folders matching a partly typed path: the folders in its parent whose names start
   with its last segment, or every folder inside it when it ends with a separator.
   Hidden folders show only when asked for.

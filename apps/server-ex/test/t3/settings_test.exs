@@ -30,4 +30,29 @@ defmodule T3.SettingsTest do
     start_supervised!(Settings)
     assert {^doc, 0} = Settings.get()
   end
+
+  test "a project's overrides apply over the environment's, except models on disabled providers" do
+    settings = %{
+      "enableAgentBrowserAccess" => true,
+      "worktreeSubmodules" => "recursive",
+      "textGenerationModelSelection" => %{"instanceId" => "codex", "model" => "gpt-5.4"},
+      "providerInstances" => %{"claudeAgent" => %{"enabled" => false}},
+      "projectSettingsOverrides" => %{
+        "p1" => %{
+          "enableAgentBrowserAccess" => false,
+          "worktreeSubmodules" => "none",
+          "textGenerationModelSelection" => %{"instanceId" => "claudeAgent", "model" => "haiku"},
+          "notScoped" => 1
+        }
+      }
+    }
+
+    resolved = T3.Settings.resolve(settings, "p1")
+    assert resolved["enableAgentBrowserAccess"] == false
+    assert resolved["worktreeSubmodules"] == "none"
+    assert resolved["textGenerationModelSelection"]["instanceId"] == "codex"
+    refute Map.has_key?(resolved, "notScoped")
+    assert T3.Settings.resolve(settings, "p2") == settings
+    assert T3.Settings.resolve(settings, nil) == settings
+  end
 end

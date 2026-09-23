@@ -549,12 +549,29 @@ defmodule T3.Vcs do
 
     with :ok <- run(cwd, args, "vcs.createWorktree", "git worktree add failed") do
       # `git worktree add` leaves submodules empty; filling them is best effort.
-      if File.exists?(Path.join(path, ".gitmodules")),
-        do: Git.run(path, ~w(submodule update --init))
+      if File.exists?(Path.join(path, ".gitmodules")) do
+        case submodules(cwd, path) do
+          "none" -> :ok
+          "top-level" -> Git.run(path, ~w(submodule update --init))
+          _recursive -> Git.run(path, ~w(submodule update --init --recursive))
+        end
+      end
 
       changed(cwd)
       {:ok, %{"worktree" => %{"path" => path, "refName" => branch}}}
     end
+  end
+
+  # How deep a new worktree's submodules go: the project's settings, else the
+  # checkout's t3.json, else every level.
+  defp submodules(cwd, worktree) do
+    T3.Settings.for_project(T3.Projects.at(cwd))["worktreeSubmodules"] ||
+      with {:ok, text} <- File.read(Path.join(worktree, "t3.json")),
+           {:ok, %{"worktreeSubmodules" => mode}} <- JSON.decode(text) do
+        mode
+      else
+        _ -> "recursive"
+      end
   end
 
   @doc "`vcs.removeWorktree`; a worktree that is already gone is pruned instead."

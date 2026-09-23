@@ -21,6 +21,48 @@ defmodule T3.Settings do
   @doc "The settings document (`%{}` when never written; clients fill in defaults)."
   def settings, do: elem(get(), 0)
 
+  # The keys a project may override (`ProjectSettingsOverrides`).
+  @project_scoped ~w(worktreeCleanup defaultModelSelection defaultRuntimeMode defaultThreadEnvMode
+                     newWorktreesStartFromOrigin worktreeSubmodules defaultAutoPull
+                     defaultProjectScripts enableAgentBrowserAccess enableAgentDeviceAccess
+                     textGenerationModelSelection sourceControlWriterModelSelection
+                     sourceControlWritingStyle pullRequestMergeMethod sidebarAutoSettleOnMerge
+                     sidebarAutoSettleAfterDays continueThreadsAfterServerUpdate
+                     responseStreamingMode)
+
+  @doc """
+  The settings as they apply to one project: its `projectSettingsOverrides` entry
+  over the environment's values, as the Node server resolves them. A model
+  override on a disabled provider falls back to the environment's.
+  """
+  def for_project(project_id), do: resolve(settings(), project_id)
+
+  @doc false
+  def resolve(settings, project_id) do
+    overrides = get_in(settings, ["projectSettingsOverrides", project_id]) || %{}
+
+    Enum.reduce(overrides, settings, fn {key, value}, acc ->
+      cond do
+        key not in @project_scoped ->
+          acc
+
+        key in ~w(textGenerationModelSelection defaultModelSelection) and is_map(value) and
+            not provider_enabled?(settings, value["instanceId"]) ->
+          acc
+
+        true ->
+          Map.put(acc, key, value)
+      end
+    end)
+  end
+
+  defp provider_enabled?(settings, instance) do
+    case get_in(settings, ["providerInstances", instance]) do
+      %{} = config -> config["enabled"] != false
+      nil -> get_in(settings, ["providers", instance, "enabled"]) != false
+    end
+  end
+
   @doc "`{settings, version}`."
   def get do
     GenServer.call(__MODULE__, :get)

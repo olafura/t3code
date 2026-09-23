@@ -135,7 +135,9 @@ defmodule T3.TextGeneration do
       "additionalProperties" => false
     }
 
-    selection = T3.Settings.settings()["textGenerationModelSelection"] || %{}
+    selection =
+      T3.Settings.for_project(T3.Projects.at(cwd))["textGenerationModelSelection"] || %{}
+
     model = selection["model"]
 
     cond do

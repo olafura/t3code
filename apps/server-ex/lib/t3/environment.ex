@@ -37,6 +37,8 @@ defmodule T3.Environment do
         "usagePriceOverrides" => true,
         # The icon setting persists, and `platform.machine` is detected.
         "environmentIcon" => true,
+        # Project-scoped settings resolve per project (`T3.Settings.for_project/1`).
+        "projectSettingsOverrides" => true,
         # Thread commands `T3.Orchestration` understands (`@thread_updates`).
         "threadSettlement" => true,
         "threadSnooze" => true,

@@ -9,6 +9,9 @@ defmodule T3.Mcp do
   bearer credential (`server/2`), given to that thread's agent, so every tool call
   acts as the thread that made it. Credentials last as long as the node runs.
 
+  A project can turn the server off for its threads (`enableAgentBrowserAccess`
+  in its settings overrides).
+
   Tool definitions and the instructions agents get come from the Node server
   (`scripts/export-mcp-tools.ts`), so both servers advertise the same tools.
   """
@@ -40,9 +43,15 @@ defmodule T3.Mcp do
   tools from agents (`enableAgentBrowserAccess`, which gates the whole server).
   """
   def for_agent(thread_id, instance) do
+    project =
+      case T3.Shell.row(node(), thread_id) do
+        {"thread", row} -> row["projectId"]
+        _ -> nil
+      end
+
     allowed =
       Process.whereis(T3.Settings) == nil or
-        T3.Settings.settings()["enableAgentBrowserAccess"] != false
+        T3.Settings.for_project(project)["enableAgentBrowserAccess"] != false
 
     if Process.whereis(__MODULE__) && allowed, do: server(thread_id, instance)
   end
