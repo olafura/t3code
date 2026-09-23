@@ -31,10 +31,20 @@ defmodule T3.Web.Socket do
   @impl true
   def handle_in({frame, [opcode: :text]}, state) do
     case Protocol.decode(frame, [node() | Node.list()]) do
-      {:ok, :ping} -> {:push, Protocol.encode(%{"t" => "pong"}), state}
-      {:ok, {:sub, id, shape, offset}} -> subscribe(state, id, shape, offset)
-      {:ok, {:unsub, id}} -> {:ok, unsubscribe(state, id)}
-      {:error, reason} -> {:push, Protocol.encode(%{"t" => "error", "reason" => reason}), state}
+      {:ok, :ping} ->
+        {:push, Protocol.encode(%{"t" => "pong"}), state}
+
+      {:ok, {:sub, id, shape, offset}} ->
+        subscribe(state, id, shape, offset)
+
+      {:ok, {:unsub, id}} ->
+        {:ok, unsubscribe(state, id)}
+
+      {:ok, {:rpc, id, environment, method, payload}} ->
+        {:ok, rpc(state, id, environment, method, payload)}
+
+      {:error, reason} ->
+        {:push, Protocol.encode(%{"t" => "error", "reason" => reason}), state}
     end
   end
 
@@ -55,6 +65,16 @@ defmodule T3.Web.Socket do
     end
   end
 
+  def handle_info({:rpc_reply, id, reply}, state) do
+    frame =
+      case reply do
+        {:ok, result} -> %{"t" => "rpc.result", "id" => id, "result" => result}
+        {:error, message} -> %{"t" => "rpc.error", "id" => id, "error" => to_string(message)}
+      end
+
+    {:push, Protocol.encode(frame), state}
+  end
+
   def handle_info(:flush, state) do
     {frames, state} = flush(state)
     {:push, frames, %{state | flush_scheduled: false}}
@@ -66,6 +86,38 @@ defmodule T3.Web.Socket do
   def terminate(_reason, state) do
     for {id, _} <- state.subs, do: unsubscribe(state, id)
     :ok
+  end
+
+  # Runs a client RPC on the node that owns the environment, off this process so a
+  # slow command never holds up streaming.
+  defp rpc(state, id, environment, method, payload) do
+    socket = self()
+
+    Task.start(fn ->
+      reply =
+        case node_for(environment) do
+          nil ->
+            {:error, "unknown environment"}
+
+          node ->
+            try do
+              :erpc.call(node, T3.Orchestration, :handle, [method, payload || %{}], 60_000)
+            catch
+              :error, {:erpc, reason} -> {:error, "node unavailable: #{reason}"}
+              kind, reason -> {:error, Exception.format(kind, reason)}
+            end
+        end
+
+      send(socket, {:rpc_reply, id, reply})
+    end)
+
+    state
+  end
+
+  defp node_for(environment_id) do
+    Enum.find_value(T3.Shell.environments(), fn {node, descriptor} ->
+      if descriptor["environmentId"] == environment_id, do: node
+    end)
   end
 
   # --- subscriptions -------------------------------------------------------------

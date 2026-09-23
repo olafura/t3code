@@ -45,6 +45,10 @@ defmodule T3.Streams do
   defdelegate subscribe(stream_id, pid, offset), to: Server
   defdelegate unsubscribe(stream_id, pid), to: Server
 
+  @doc "See `T3.Streams.Server.transact/3`."
+  def transact(stream_id, stream_kind, fun),
+    do: stream_id |> ensure() |> Server.transact(stream_kind, fun)
+
   @doc "Commits changes to a stream and fans them out to its subscribers."
   @spec commit(String.t(), T3.Store.stream_kind(), [T3.Store.change()]) :: {:ok, non_neg_integer}
   def commit(stream_id, stream_kind, changes),

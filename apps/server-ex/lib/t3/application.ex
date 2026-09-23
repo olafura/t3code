@@ -14,6 +14,9 @@ defmodule T3.Application do
           T3.Auth,
           T3.Streams,
           T3.Shell,
+          {Registry, keys: :unique, name: T3.Codex.Registry},
+          {DynamicSupervisor, name: T3.Codex.Supervisor, strategy: :one_for_one},
+          Supervisor.child_spec({Task, &T3.Codex.Provider.load/0}, id: :codex_models),
           T3.Web
         ] ++ discovery(home)
       else

@@ -16,6 +16,9 @@ defmodule T3.Web.Protocol do
       {"t": "sub", "id": 1, "shape": {...}, "offset": 1234 | null}
       {"t": "unsub", "id": 1}
       {"t": "ping"}
+      {"t": "rpc", "id": 1, "environment": id, "method": m, "payload": ...}
+        (a client RPC such as orchestration.dispatchCommand, run on that
+        environment's node; answered by rpc.result or rpc.error)
 
   Server to client:
 
@@ -30,6 +33,7 @@ defmodule T3.Web.Protocol do
       {"t": "resync", "id", "offset"}   (fell behind: resubscribe from offset)
       {"t": "error", "id", "reason"}
       {"t": "config", "id", "node", "config"}
+      {"t": "rpc.result", "id", "result"} / {"t": "rpc.error", "id", "error"}
       {"t": "pong"}
 
   Shell rows are `OrchestrationV2ThreadShell` (`kind` "thread") or
@@ -48,6 +52,7 @@ defmodule T3.Web.Protocol do
           {:sub, integer, :shell | {:stream, node, String.t()} | {:config, node},
            non_neg_integer | nil}
           | {:unsub, integer}
+          | {:rpc, integer, String.t(), String.t(), term}
           | :ping
 
   @spec decode(binary, [node]) :: {:ok, request} | {:error, String.t()}
@@ -62,6 +67,10 @@ defmodule T3.Web.Protocol do
 
       %{"t" => "ping"} ->
         {:ok, :ping}
+
+      %{"t" => "rpc", "id" => id, "environment" => env, "method" => method} = msg
+      when is_integer(id) and is_binary(env) and is_binary(method) ->
+        {:ok, {:rpc, id, env, method, msg["payload"]}}
 
       _ ->
         {:error, "unknown message"}

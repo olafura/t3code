@@ -1,0 +1,222 @@
+defmodule T3.Orchestration do
+  @moduledoc """
+  Client commands on this node's threads: start a thread, send a message, and
+  interrupt a run, for threads whose provider is Codex.
+
+  Each command is decided inside the thread's stream process (`T3.Streams.transact/3`),
+  so reading the thread and writing its new entities is atomic. Starting the provider
+  turn happens after the commit, in `T3.Codex.ThreadRuntime`, which streams the turn
+  back into the same log.
+  """
+
+  alias T3.Orchestration.Entities
+  alias T3.{Patch, StreamState}
+
+  @active_statuses ~w(preparing starting running waiting)
+
+  @doc "Handles one client RPC by method name; see `packages/contracts/src/orchestrationV2.ts`."
+  @spec handle(String.t(), map) :: {:ok, term} | {:error, String.t()}
+  def handle("orchestration.dispatchCommand", command), do: dispatch(command)
+  def handle("orchestration.launchThread", input), do: launch_thread(input)
+  def handle(method, _payload), do: {:error, "#{method} is not served by this node yet"}
+
+  @spec dispatch(map) :: {:ok, map} | {:error, String.t()}
+  def dispatch(%{"type" => "message.dispatch", "threadId" => thread_id} = command) do
+    case T3.Streams.transact(thread_id, :thread, &decide_message(&1, thread_id, command)) do
+      {:ok, turn} ->
+        :ok = T3.Codex.ThreadRuntime.start_turn(thread_id, turn)
+        {:ok, %{"sequence" => sequence(thread_id)}}
+
+      {:error, _} = error ->
+        error
+    end
+  end
+
+  def dispatch(%{"type" => "run.interrupt", "threadId" => thread_id} = command) do
+    with :ok <- T3.Codex.ThreadRuntime.interrupt(thread_id, command["runId"]),
+         do: {:ok, %{"sequence" => sequence(thread_id)}}
+  end
+
+  def dispatch(%{"type" => type}), do: {:error, "#{type} is not supported by this node yet"}
+
+  @doc "Creates a thread with its first message (`orchestration.launchThread`)."
+  @spec launch_thread(map) :: {:ok, map} | {:error, String.t()}
+  def launch_thread(%{"threadId" => thread_id, "initialMessage" => message} = input) do
+    at = Entities.now()
+
+    {:ok, _} =
+      T3.Streams.transact(thread_id, :thread, fn state ->
+        case StreamState.get(state, "thread")[thread_id] do
+          nil ->
+            {[{"thread", thread_id, Patch.diff(nil, Entities.thread(input, at))}],
+             {:ok, :created}}
+
+          _ ->
+            {[], {:ok, :resumed}}
+        end
+      end)
+
+    command =
+      Map.merge(message, %{
+        "type" => "message.dispatch",
+        "commandId" => "#{input["commandId"]}:initial-message",
+        "threadId" => thread_id,
+        "createdBy" => "user",
+        "creationSource" => input["creationSource"] || "web",
+        "modelSelection" => input["modelSelection"]
+      })
+
+    with {:ok, _} <- dispatch(command),
+         do: {:ok, %{"threadId" => thread_id, "resumed" => false}}
+  end
+
+  defp sequence(thread_id), do: T3.Streams.Server.state(T3.Streams.ensure(thread_id)).seq
+
+  # Records the user's message and a new run, and returns what the provider needs to
+  # start the turn. Rejects a second run while one is active.
+  defp decide_message(state, thread_id, command) do
+    thread = StreamState.get(state, "thread")[thread_id]
+    runs = StreamState.list(state, "run")
+
+    cond do
+      thread == nil ->
+        {[], {:error, "unknown thread #{thread_id}"}}
+
+      Enum.any?(runs, &(&1["status"] in @active_statuses)) ->
+        {[], {:error, "a run is already active in this thread"}}
+
+      true ->
+        new_run(state, thread, runs, command)
+    end
+  end
+
+  defp new_run(state, thread, runs, command) do
+    at = Entities.now()
+    thread_id = thread["id"]
+    ordinal = length(runs) + 1
+    provider_thread_id = "provider-thread:codex:#{thread_id}"
+    session_id = "provider-session:codex:#{thread_id}"
+    selection = command["modelSelection"] || thread["modelSelection"]
+    cwd = thread["worktreePath"] || project_root(thread["projectId"]) || File.cwd!()
+    message_id = command["messageId"] || Entities.new_id("message")
+
+    ids = %{
+      thread: thread_id,
+      run: Entities.new_id("run"),
+      attempt: Entities.new_id("run-attempt"),
+      root_node: Entities.new_id("node"),
+      provider_thread: provider_thread_id,
+      message: message_id
+    }
+
+    provider_thread = StreamState.get(state, "provider-thread")[provider_thread_id]
+
+    provider_changes =
+      if provider_thread do
+        [
+          upsert(
+            state,
+            "provider-thread",
+            provider_thread_id,
+            &Map.put(&1, "lastRunOrdinal", ordinal)
+          )
+        ]
+      else
+        [
+          create(
+            "provider-session",
+            session_id,
+            Entities.provider_session(session_id, cwd, selection["model"], at)
+          ),
+          create(
+            "provider-thread",
+            provider_thread_id,
+            Entities.provider_thread(provider_thread_id, thread_id, session_id, ordinal, at)
+          )
+        ]
+      end
+
+    text = command["text"] || ""
+
+    changes =
+      Enum.reject(provider_changes, &is_nil/1) ++
+        [
+          create("run", ids.run, Entities.run(ids, ordinal, selection, at)),
+          create("run-attempt", ids.attempt, Entities.attempt(ids)),
+          create(
+            "node",
+            ids.root_node,
+            Entities.node(ids, ids.root_node, "root_turn", "pending", at)
+          ),
+          create(
+            "message",
+            message_id,
+            Entities.message(ids, message_id, "user", text, false, at)
+          ),
+          create(
+            "turn-item",
+            "turn-item:user:#{message_id}",
+            Entities.turn_item(
+              ids,
+              "turn-item:user:#{message_id}",
+              "user_message",
+              next_ordinal(state),
+              "completed",
+              at,
+              %{
+                "createdBy" => command["createdBy"] || "user",
+                "creationSource" => command["creationSource"] || "web",
+                "messageId" => message_id,
+                "inputIntent" => "turn_start",
+                "text" => text,
+                "attachments" => command["attachments"] || []
+              }
+            )
+          )
+        ]
+
+    turn = %{
+      ids: ids,
+      run_ordinal: ordinal,
+      text: text,
+      cwd: cwd,
+      model: selection["model"],
+      runtime_mode: thread["runtimeMode"] || "full-access",
+      native_thread_id: get_in(provider_thread || %{}, ["nativeThreadRef", "nativeId"])
+    }
+
+    {changes, {:ok, turn}}
+  end
+
+  @doc "The next free turn-item ordinal in a thread."
+  def next_ordinal(state) do
+    state
+    |> StreamState.get("turn-item")
+    |> Map.values()
+    |> Enum.map(& &1["ordinal"])
+    |> Enum.max(fn -> -1 end)
+    |> Kernel.+(1)
+  end
+
+  @doc "A change creating `entity`."
+  def create(kind, id, entity), do: {kind, id, Patch.diff(nil, entity)}
+
+  @doc "A change updating an existing entity with `fun`, or `nil` when nothing changes."
+  def upsert(state, kind, id, fun) do
+    current = StreamState.get(state, kind)[id]
+
+    case Patch.diff(current, fun.(current)) do
+      :unchanged -> nil
+      patch -> {kind, id, patch}
+    end
+  end
+
+  defp project_root(nil), do: nil
+
+  defp project_root(project_id) do
+    Enum.find_value(T3.Shell.rows(), fn
+      {{node, ^project_id}, {"project", row}} when node == node() -> row["workspaceRoot"]
+      _ -> nil
+    end)
+  end
+end

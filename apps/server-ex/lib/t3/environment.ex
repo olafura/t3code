@@ -18,14 +18,16 @@ defmodule T3.Environment do
       "platform" => %{"os" => os(), "arch" => arch()},
       "serverVersion" => version(),
       "orchestrationProtocolVersion" => @protocol,
-      "capabilities" => %{"repositoryIdentity" => false}
+      # Commands are resolved against the thread on the node, so clients need not
+      # read the projection before sending.
+      "capabilities" => %{"repositoryIdentity" => false, "serverResolvedCommandContext" => true}
     }
   end
 
   @doc """
   The client's `ServerConfig` for this node. Only what a node serves today is
-  filled in; provider, keybinding, and editor lists stay empty until those
-  subsystems move over, and settings decode to their defaults.
+  filled in: Codex when it is installed, and empty keybinding and editor lists;
+  settings decode to their defaults.
   """
   @spec server_config() :: map
   def server_config do
@@ -43,7 +45,7 @@ defmodule T3.Environment do
       "keybindingsConfigPath" => Path.join(home, "keybindings.json"),
       "keybindings" => [],
       "issues" => [],
-      "providers" => [],
+      "providers" => Enum.reject([T3.Codex.Provider.entry()], &is_nil/1),
       "availableEditors" => [],
       "observability" => %{
         "logsDirectoryPath" => Path.join(home, "logs"),
@@ -115,7 +117,8 @@ defmodule T3.Environment do
 
   defp version, do: Application.spec(:t3, :vsn) |> to_string()
 
-  defp uuid4 do
+  @doc "A random (v4) UUID."
+  def uuid4 do
     <<a::48, _::4, b::12, _::2, c::62>> = :crypto.strong_rand_bytes(16)
 
     <<a::48, 4::4, b::12, 2::2, c::62>>

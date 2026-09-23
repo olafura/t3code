@@ -58,6 +58,19 @@ defmodule T3.Streams.Server do
   def commit(server, stream_kind, changes),
     do: GenServer.call(server, {:commit, stream_kind, changes})
 
+  @doc """
+  Runs `fun` against the stream's current state inside the stream process and
+  commits the changes it returns, so a decision and its effects are atomic with
+  respect to other commits. `fun` returns `{changes, reply}`; an empty change list
+  commits nothing.
+  """
+  @spec transact(GenServer.server(), Store.stream_kind(), (StreamState.t() ->
+                                                             {[Store.change()], reply})) ::
+          reply
+        when reply: term
+  def transact(server, stream_kind, fun),
+    do: GenServer.call(server, {:transact, stream_kind, fun}, 30_000)
+
   @spec state(GenServer.server()) :: StreamState.t()
   def state(server), do: GenServer.call(server, :state)
 
@@ -107,6 +120,19 @@ defmodule T3.Streams.Server do
     broadcast(state, {:events, events})
     state = schedule_shell(%{state | stream: stream})
     {:reply, {:ok, last}, state, timeout(state)}
+  end
+
+  def handle_call({:transact, stream_kind, fun}, from, state) do
+    case fun.(state.stream) do
+      {[], reply} ->
+        {:reply, reply, state, timeout(state)}
+
+      {changes, reply} ->
+        {:reply, {:ok, _last}, state, _} =
+          handle_call({:commit, stream_kind, changes}, from, state)
+
+        {:reply, reply, state, timeout(state)}
+    end
   end
 
   def handle_call(:state, _from, state), do: {:reply, state.stream, state, timeout(state)}
