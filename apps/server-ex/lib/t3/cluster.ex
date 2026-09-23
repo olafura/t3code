@@ -13,6 +13,7 @@ defmodule T3.Cluster do
     * `ca.key` - the CA key (only on members that can invite)
     * `node.pem`, `node.key` - this machine's certificate and key
     * `ssl_dist.conf` - the distribution TLS options, read by the VM at boot
+    * `vm.args` - the flags from `vm_args/1`, which a release boots with
 
   Distribution runs without EPMD on `@dist_port`, one node per machine, named
   `t3@<address>`. See `vm_args/1` for the flags a node must boot with. The cookie is
@@ -145,6 +146,8 @@ defmodule T3.Cluster do
     write(dir, "node.key", key, 0o600)
     write(dir, "address", address)
     write(dir, "ssl_dist.conf", ssl_dist_conf(dir))
+    # Read by the release at boot (rel/env.sh.eex) to start clustered.
+    write(dir, "vm.args", String.replace(vm_args(home), " -", "\n-") <> "\n")
   end
 
   # file:consult/1 format: plain terms only, no function calls.

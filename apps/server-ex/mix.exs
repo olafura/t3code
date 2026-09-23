@@ -8,7 +8,8 @@ defmodule T3.MixProject do
       elixir: "~> 1.20",
       start_permanent: Mix.env() == :prod,
       elixirc_paths: if(Mix.env() == :test, do: ["lib", "test/support"], else: ["lib"]),
-      deps: deps()
+      deps: deps(),
+      releases: [t3: [include_executables_for: [:unix], strip_beams: true]]
     ]
   end
 

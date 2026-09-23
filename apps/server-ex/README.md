@@ -19,6 +19,16 @@ mix t3.pair                                      # one-time pairing URL for Sett
 
 State lives in the repo's `.t3/elixir` during development; set `T3_HOME` elsewhere.
 
+## Release
+
+```sh
+MIX_ENV=prod mix release        # _build/prod/rel/t3, about 31 MB with ERTS
+_build/prod/rel/t3/bin/t3 start # foreground; state in $T3_HOME (default ~/.t3/elixir)
+```
+
+A machine that has joined a cluster boots clustered: joining writes
+`$T3_HOME/cluster/vm.args`, which the release reads at start.
+
 ## Cluster your machines
 
 ```sh
