@@ -58,6 +58,73 @@ defmodule T3.Git do
     end
   end
 
+  @doc "The checked-out branch, or nil when HEAD is detached."
+  def current_branch(root) do
+    case ok(root, ~w(symbolic-ref --short -q HEAD)) do
+      {:ok, branch} -> String.trim(branch) |> then(&if(&1 == "", do: nil, else: &1))
+      _ -> nil
+    end
+  end
+
+  @doc """
+  The branch this one merges into: its gh-merge-base, the remote's default
+  branch, then main or master; remote-tracking refs preferred.
+  """
+  def base_branch(root, branch) do
+    configured = git_line(root, ["config", "--get", "branch.#{branch}.gh-merge-base"])
+    remote = primary_remote(root)
+
+    default =
+      remote &&
+        case git_line(root, ["symbolic-ref", "refs/remotes/#{remote}/HEAD"]) do
+          "refs/remotes/" <> rest -> String.replace_prefix(rest, "#{remote}/", "")
+          _ -> nil
+        end
+
+    [configured, default, "main", "master"]
+    |> Enum.reject(&(&1 in [nil, ""]))
+    |> Enum.map(fn candidate ->
+      candidate
+      |> String.replace_prefix("origin/", "")
+      |> then(
+        &if(remote && remote != "origin",
+          do: String.replace_prefix(&1, "#{remote}/", ""),
+          else: &1
+        )
+      )
+    end)
+    |> Enum.reject(&(&1 == "" or &1 == branch))
+    |> Enum.find_value(fn candidate ->
+      cond do
+        remote && ref?(root, "refs/remotes/#{remote}/#{candidate}") -> "#{remote}/#{candidate}"
+        ref?(root, "refs/heads/#{candidate}") -> candidate
+        true -> nil
+      end
+    end)
+  end
+
+  @doc "`origin` when it exists, else the first remote, or nil."
+  def primary_remote(root) do
+    case ok(root, ["remote"]) do
+      {:ok, out} ->
+        remotes = String.split(out, "\n", trim: true)
+        if "origin" in remotes, do: "origin", else: List.first(remotes)
+
+      _ ->
+        nil
+    end
+  end
+
+  defp ref?(root, ref),
+    do: match?({:ok, _}, ok(root, ["show-ref", "--verify", "--quiet", ref]))
+
+  defp git_line(root, args) do
+    case ok(root, args) do
+      {:ok, out} -> String.trim(out)
+      _ -> nil
+    end
+  end
+
   defp exit_code({:status, code}), do: code
   defp exit_code(other), do: other
 end

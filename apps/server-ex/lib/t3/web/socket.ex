@@ -81,6 +81,16 @@ defmodule T3.Web.Socket do
     end
   end
 
+  def handle_info({:t3_vcs, cwd, event}, state) do
+    case state.by_terminal do
+      %{{:vcs, ^cwd} => id} ->
+        {:push, Protocol.encode(%{"t" => "vcs", "id" => id, "event" => event}), state}
+
+      _ ->
+        {:ok, state}
+    end
+  end
+
   def handle_info({:t3_terminals, node, event}, state) do
     case state.by_terminal do
       %{{:terminals, ^node} => id} ->
@@ -267,6 +277,21 @@ defmodule T3.Web.Socket do
     end
   end
 
+  defp subscribe(state, id, {:vcs, node, cwd} = shape, _offset) do
+    case remote(node, T3.Vcs.Watch, :subscribe, [cwd, self()]) do
+      {:ok, snapshot} ->
+        {:push, Protocol.encode(%{"t" => "vcs", "id" => id, "event" => snapshot}),
+         %{
+           state
+           | subs: Map.put(state.subs, id, shape),
+             by_terminal: Map.put(state.by_terminal, {:vcs, cwd}, id)
+         }}
+
+      {:error, reason} ->
+        {:push, Protocol.encode(error_frame(id, reason)), state}
+    end
+  end
+
   # Calls a node without ever taking this socket down: an unreachable node, or one
   # without the feature (an older version), fails only the one subscription.
   defp remote(node, module, fun, args) do
@@ -286,6 +311,10 @@ defmodule T3.Web.Socket do
       {{:terminal, node, {thread_id, terminal_id} = key}, subs} ->
         :erpc.cast(node, T3.Terminal, :detach, [thread_id, terminal_id, self()])
         %{state | subs: subs, by_terminal: Map.delete(state.by_terminal, key)}
+
+      {{:vcs, node, cwd}, subs} ->
+        :erpc.cast(node, T3.Vcs.Watch, :unsubscribe, [cwd, self()])
+        %{state | subs: subs, by_terminal: Map.delete(state.by_terminal, {:vcs, cwd})}
 
       {{:terminals, node} = shape, subs} ->
         :erpc.cast(node, T3.Terminal.Hub, :unwatch, [self()])

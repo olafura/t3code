@@ -260,6 +260,8 @@ defmodule T3.Orchestration.TurnWriter do
     at = Entities.now()
     done = %{"status" => status, "completedAt" => at}
     checkpoint = if status == "completed", do: capture_checkpoint(state.turn, at)
+    # The turn may have changed the checkout; clients watching it see the result.
+    T3.Vcs.Watch.refresh(state.turn.cwd)
     run_done = if checkpoint, do: Map.put(done, "checkpointId", checkpoint["id"]), else: done
 
     commit(state, fn stream ->
