@@ -15,6 +15,8 @@ defmodule T3.Mcp.Tools do
                   t3_thread_search t3_environment_read t3_project_list t3_project_read
                   list_scheduled_tasks schedule_task delete_scheduled_task run_scheduled_task_now)
 
+  @delegation ~w(delegate_task task_status task_cancel)
+
   @runtime_ranks %{
     "approval-required" => 0,
     "auto-accept-edits" => 1,
@@ -25,7 +27,7 @@ defmodule T3.Mcp.Tools do
 
   @doc "The advertised tools (MCP `tools/list`)."
   def list do
-    for tool <- definitions(), tool["name"] in @implemented do
+    for tool <- definitions(), tool["name"] in @implemented or tool["name"] in @delegation do
       Map.take(tool, ["name", "description", "inputSchema"])
     end
   end
@@ -46,6 +48,18 @@ defmodule T3.Mcp.Tools do
   def call(name, args, caller) when name in @implemented do
     with {:ok, me} <- caller_row(caller), do: run(name, args, Map.put(caller, :row, me))
   end
+
+  # Delegated tasks belong to their caller thread (`T3.Orchestration.Delegation`).
+  def call("delegate_task", args, caller) do
+    with {:ok, me} <- caller_row(caller),
+         do: T3.Orchestration.Delegation.delegate(me, caller.instance, args)
+  end
+
+  def call("task_status", %{"taskId" => id}, caller),
+    do: T3.Orchestration.Delegation.task_status(caller.thread_id, id)
+
+  def call("task_cancel", %{"taskId" => id}, caller),
+    do: T3.Orchestration.Delegation.cancel(caller.thread_id, id)
 
   def call(name, _args, _caller),
     do: {:error, "capability_denied", "#{name} is not available on this node."}

@@ -340,6 +340,8 @@ defmodule T3.Orchestration do
     thread =
       Entities.thread(Map.put(input, "threadId", thread_id), at)
       |> Map.merge(workspace_fields(strategy))
+      # A delegated task's thread is a subagent of the thread that asked for it.
+      |> Map.merge(Map.take(input, ["lineage"]))
 
     {:ok, created} =
       T3.Streams.transact(thread_id, :thread, fn state ->
@@ -476,9 +478,10 @@ defmodule T3.Orchestration do
   end
 
   # The provider driver for an instance: its own id for ACP agents.
-  defp driver_for("claudeAgent"), do: "claudeAgent"
+  @doc "The driver behind a provider instance."
+  def driver_for("claudeAgent"), do: "claudeAgent"
 
-  defp driver_for(instance) do
+  def driver_for(instance) do
     if T3.Acp.agent?(instance), do: instance, else: "codex"
   end
 

@@ -422,6 +422,61 @@ defmodule T3.OrchestrationTest do
     assert {401, _} = T3.Mcp.handle("Bearer nope", "{}")
   end
 
+  test "a running thread delegates a task, and hears the result when the child finishes" do
+    start_supervised!(T3.Mcp)
+    parent_id = launch("wait here")
+    await_statuses(parent_id, ["running"])
+    :ok = T3.Shell.subscribe(self())
+
+    unless T3.Shell.row(node(), parent_id) do
+      assert_receive {:t3_shell, _}, 2_000
+    end
+
+    %{authorization: auth} = T3.Mcp.server(parent_id, "codex")
+
+    call = fn name, arguments ->
+      {200, %{"result" => result}} =
+        T3.Mcp.handle(
+          auth,
+          JSON.encode!(%{
+            "jsonrpc" => "2.0",
+            "id" => 1,
+            "method" => "tools/call",
+            "params" => %{"name" => name, "arguments" => arguments}
+          })
+        )
+
+      result
+    end
+
+    %{"structuredContent" => %{"taskId" => task_id, "childThreadId" => child_id}} =
+      call.("delegate_task", %{"task" => "hello", "title" => "Say hello"})
+
+    :ok = T3.Streams.subscribe(child_id, self(), nil)
+    await_statuses(child_id, ["completed"])
+
+    child = StreamState.get(current(child_id), "thread")[child_id]
+
+    assert %{"relationshipToParent" => "subagent", "parentThreadId" => ^parent_id} =
+             child["lineage"]
+
+    # The parent is still running, so the result waits in its queue.
+    state = await_statuses(parent_id, ["running", "queued"])
+
+    assert [%{"status" => "completed", "result" => "Hello from codex"}] =
+             StreamState.list(state, "subagent")
+
+    assert Enum.any?(StreamState.list(state, "message"), &(&1["text"] =~ "delegated_task_result"))
+
+    assert %{
+             "structuredContent" => %{
+               "workState" => "result_available",
+               "summary" => "Hello from codex"
+             }
+           } =
+             call.("task_status", %{"taskId" => task_id})
+  end
+
   describe "queued messages" do
     test "a message sent during a run waits in the queue and starts when the run ends" do
       thread_id = launch("wait for it")

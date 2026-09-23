@@ -465,7 +465,13 @@ defmodule T3.Orchestration.TurnWriter do
     # The thread is idle now: its next queued message can start. Off this process,
     # since starting a turn calls back into the runtime that is finishing this one.
     thread_id = state.thread_id
-    Task.start(fn -> Orchestration.start_next(thread_id) end)
+
+    Task.start(fn ->
+      Orchestration.start_next(thread_id)
+      # A delegated task reports back to the thread that asked for it.
+      T3.Orchestration.Delegation.finished(thread_id, ids.run, status)
+    end)
+
     :ok
   end
 
