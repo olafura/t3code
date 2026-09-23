@@ -46,7 +46,8 @@ defmodule T3.Environment do
       "keybindings" => [],
       "issues" => [],
       "providers" =>
-        Enum.reject([T3.Codex.Provider.entry(), T3.Claude.Provider.entry()], &is_nil/1),
+        Enum.reject([T3.Codex.Provider.entry(), T3.Claude.Provider.entry()], &is_nil/1) ++
+          T3.Acp.entries(),
       "availableEditors" => [],
       "observability" => %{
         "logsDirectoryPath" => Path.join(home, "logs"),

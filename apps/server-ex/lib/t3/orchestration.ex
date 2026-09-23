@@ -1,7 +1,8 @@
 defmodule T3.Orchestration do
   @moduledoc """
   Client commands on this node's threads: start a thread, send a message, answer
-  an approval, and interrupt a run, for threads whose provider is Codex or Claude;
+  an approval, and interrupt a run, for threads whose provider is Codex, Claude, or an
+  ACP agent such as OpenCode;
   plus the diffs of their checkpoints.
 
   Each command is decided inside the thread's stream process (`T3.Streams.transact/3`),
@@ -56,7 +57,7 @@ defmodule T3.Orchestration do
 
     result =
       Enum.find_value(
-        [T3.Codex.ThreadRuntime, T3.Claude.ThreadRuntime],
+        [T3.Codex.ThreadRuntime, T3.Claude.ThreadRuntime, T3.Acp.ThreadRuntime],
         {:error, "no pending request"},
         fn runtime ->
           if runtime.respond(thread_id, command["requestId"], decision) == :ok, do: :ok
@@ -99,14 +100,26 @@ defmodule T3.Orchestration do
          do: {:ok, %{"threadId" => thread_id, "resumed" => false}}
   end
 
+  # The provider driver for an instance: its own id for ACP agents.
+  defp driver_for("claudeAgent"), do: "claudeAgent"
+
+  defp driver_for(instance) do
+    if T3.Acp.agent?(instance), do: instance, else: "codex"
+  end
+
   @doc "The runtime module for a provider instance."
   def runtime("claudeAgent"), do: T3.Claude.ThreadRuntime
+
+  def runtime(instance) when is_binary(instance) and instance != "codex" do
+    if T3.Acp.agent?(instance), do: T3.Acp.ThreadRuntime, else: T3.Codex.ThreadRuntime
+  end
+
   def runtime(_codex), do: T3.Codex.ThreadRuntime
 
   # A thread has at most one running turn; interrupt whichever runtime holds it.
   defp interrupt_any(thread_id, run_id) do
     Enum.find_value(
-      [T3.Codex.ThreadRuntime, T3.Claude.ThreadRuntime],
+      [T3.Codex.ThreadRuntime, T3.Claude.ThreadRuntime, T3.Acp.ThreadRuntime],
       {:error, "no running turn"},
       fn runtime ->
         if runtime.interrupt(thread_id, run_id) == :ok, do: :ok
@@ -140,7 +153,7 @@ defmodule T3.Orchestration do
     ordinal = length(runs) + 1
     selection = command["modelSelection"] || thread["modelSelection"]
     instance = selection["instanceId"] || thread["providerInstanceId"] || "codex"
-    driver = runtime(instance).driver()
+    driver = driver_for(instance)
     provider_thread_id = "provider-thread:#{driver}:#{thread_id}"
     session_id = "provider-session:#{driver}:#{thread_id}"
     cwd = thread["worktreePath"] || project_root(thread["projectId"]) || File.cwd!()

@@ -25,6 +25,8 @@ defmodule T3.Application do
           {Registry, keys: :unique, name: T3.Vcs.Registry},
           {DynamicSupervisor, name: T3.Vcs.Supervisor, strategy: :one_for_one},
           Supervisor.child_spec({Task, &T3.Codex.Provider.load/0}, id: :codex_models),
+          {Registry, keys: :unique, name: T3.Acp.Registry},
+          Supervisor.child_spec({Task, &T3.Acp.load/0}, id: :acp_models),
           T3.Web
         ] ++ discovery(home)
       else

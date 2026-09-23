@@ -6,6 +6,7 @@ defmodule T3.OrchestrationTest do
   @moduletag :tmp_dir
   @fake_codex Path.expand("../support/fake_codex.py", __DIR__)
   @fake_claude Path.expand("../support/fake_claude.py", __DIR__)
+  @fake_acp Path.expand("../support/fake_acp.py", __DIR__)
 
   setup %{tmp_dir: dir} do
     # Threads without a project run in the node's cwd; make that a repo of its own so
@@ -19,10 +20,12 @@ defmodule T3.OrchestrationTest do
     Application.put_env(:t3, :home, dir)
     Application.put_env(:t3, :codex_command, ["python3", "-u", @fake_codex])
     Application.put_env(:t3, :claude_command, ["python3", "-u", @fake_claude])
+    Application.put_env(:t3, :acp_commands, %{"opencode" => ["python3", "-u", @fake_acp]})
 
     on_exit(fn ->
       Application.delete_env(:t3, :codex_command)
       Application.delete_env(:t3, :claude_command)
+      Application.delete_env(:t3, :acp_commands)
     end)
 
     start_supervised!({T3.Store, path: Path.join(dir, "t3.sqlite")})
@@ -30,11 +33,12 @@ defmodule T3.OrchestrationTest do
     start_supervised!(T3.Shell)
     start_supervised!({Registry, keys: :unique, name: T3.Codex.Registry})
     start_supervised!({Registry, keys: :unique, name: T3.Claude.Registry}, id: :claude_registry)
+    start_supervised!({Registry, keys: :unique, name: T3.Acp.Registry}, id: :acp_registry)
     start_supervised!({DynamicSupervisor, name: T3.Codex.Supervisor, strategy: :one_for_one})
     %{work: work}
   end
 
-  defp launch(text, instance \\ "codex") do
+  defp launch(text, instance \\ "codex", mode \\ "full-access") do
     thread_id = "thread-#{System.unique_integer([:positive])}"
     :ok = T3.Streams.subscribe(thread_id, self(), nil)
 
@@ -45,7 +49,7 @@ defmodule T3.OrchestrationTest do
         "projectId" => "project-1",
         "title" => "Try codex",
         "modelSelection" => %{"instanceId" => instance, "model" => "gpt-5.4"},
-        "runtimeMode" => "full-access",
+        "runtimeMode" => mode,
         "interactionMode" => "default",
         "workspaceStrategy" => %{"type" => "root"},
         "initialMessage" => %{"messageId" => "msg-user-1", "text" => text, "attachments" => []}
@@ -242,6 +246,71 @@ defmodule T3.OrchestrationTest do
     end
   end
 
+  describe "ACP agents (OpenCode)" do
+    test "a turn streams thinking, a command, and the answer; the session is recorded" do
+      thread_id = launch("list the files", "opencode")
+      state = await_run(thread_id, "completed")
+
+      assert Enum.map(StreamState.list(state, "turn-item"), & &1["type"]) == [
+               "user_message",
+               "reasoning",
+               "command_execution",
+               "assistant_message",
+               "checkpoint"
+             ]
+
+      items = StreamState.list(state, "turn-item")
+
+      assert %{"input" => "ls", "output" => "a.txt\n", "status" => "completed"} =
+               Enum.find(items, &(&1["type"] == "command_execution"))
+
+      assert %{"text" => "Hello from acp", "streaming" => false} =
+               Enum.find(items, &(&1["type"] == "assistant_message"))
+
+      assert [%{"driver" => "opencode", "nativeThreadRef" => %{"nativeId" => "acp-1"}}] =
+               StreamState.list(state, "provider-thread")
+
+      # A follow-up is another prompt on the same session.
+      {:ok, _} =
+        Orchestration.dispatch(%{
+          "type" => "message.dispatch",
+          "threadId" => thread_id,
+          "messageId" => "msg-user-2",
+          "text" => "again"
+        })
+
+      state = await_runs(thread_id, 2)
+      assert Enum.all?(StreamState.list(state, "run"), &(&1["status"] == "completed"))
+    end
+
+    test "a supervised thread asks before a command, and the answer goes to the agent" do
+      thread_id = launch("approve the command", "opencode", "approval-required")
+      request = await_request(thread_id)
+      assert %{"kind" => "command"} = request
+
+      {:ok, _} =
+        Orchestration.dispatch(%{
+          "type" => "runtime-request.respond",
+          "threadId" => thread_id,
+          "requestId" => request["id"],
+          "decision" => "decline"
+        })
+
+      state = await_run(thread_id, "completed")
+      assert Enum.any?(StreamState.list(state, "turn-item"), &(&1["text"] == "not allowed"))
+    end
+
+    test "interrupt cancels the prompt" do
+      thread_id = launch("wait for it", "opencode")
+      await_item(thread_id, "command_execution")
+
+      assert {:ok, _} =
+               Orchestration.dispatch(%{"type" => "run.interrupt", "threadId" => thread_id})
+
+      await_run(thread_id, "interrupted")
+    end
+  end
+
   describe "checkpoints" do
     test "a completed run records what it changed, and its diff is served", %{work: dir} do
       File.write!(Path.join(dir, "before.txt"), "already here\n")
@@ -288,6 +357,31 @@ defmodule T3.OrchestrationTest do
                  "threadId" => thread_id,
                  "toTurnCount" => 1
                })
+    end
+  end
+
+  defp await_runs(thread_id, count) do
+    receive do
+      {:t3_stream, ^thread_id, _} ->
+        state = current(thread_id)
+        runs = StreamState.list(state, "run")
+
+        if length(runs) == count and Enum.all?(runs, &(&1["status"] == "completed")),
+          do: state,
+          else: await_runs(thread_id, count)
+    after
+      5_000 -> flunk("runs never completed")
+    end
+  end
+
+  defp await_item(thread_id, type) do
+    receive do
+      {:t3_stream, ^thread_id, _} ->
+        if Enum.any?(StreamState.list(current(thread_id), "turn-item"), &(&1["type"] == type)),
+          do: :ok,
+          else: await_item(thread_id, type)
+    after
+      5_000 -> flunk("no #{type} item")
     end
   end
 
