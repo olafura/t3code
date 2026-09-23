@@ -70,6 +70,17 @@ defmodule T3.Codex.ThreadRuntime do
   def rollback(thread_id, plan),
     do: thread_id |> ensure() |> GenServer.call({:rollback, plan}, 60_000)
 
+  @doc """
+  `provider.uploadFeedback`: sends Codex a bug report with its logs for this
+  thread's provider thread. Needs the thread's session to be running.
+  """
+  def upload_feedback(thread_id, reason) do
+    case Registry.lookup(T3.Codex.Registry, thread_id) do
+      [{pid, _}] -> GenServer.call(pid, {:upload_feedback, reason}, 60_000)
+      [] -> {:error, "The provider session is no longer running. Send a message first."}
+    end
+  end
+
   def start_link(thread_id),
     do:
       GenServer.start_link(__MODULE__, thread_id,
@@ -163,6 +174,24 @@ defmodule T3.Codex.ThreadRuntime do
       {:error, reason, state} -> {:reply, {:error, rpc_message(reason)}, state}
       {:error, reason} -> {:reply, {:error, rpc_message(reason)}, state}
     end
+  end
+
+  def handle_call({:upload_feedback, reason}, _from, state) do
+    params =
+      %{"classification" => "bug", "includeLogs" => true, "threadId" => state.native_thread_id}
+      |> then(&if(is_binary(reason), do: Map.put(&1, "reason", reason), else: &1))
+
+    reply =
+      with conn when conn != nil <- state.conn,
+           true <- is_binary(state.native_thread_id),
+           {:ok, %{"threadId" => id}} <- Connection.call(conn, "feedback/upload", params) do
+        {:ok, %{"feedbackId" => id}}
+      else
+        {:error, reason} -> {:error, rpc_message(reason)}
+        _ -> {:error, "The provider session is no longer running. Send a message first."}
+      end
+
+    {:reply, reply, state}
   end
 
   def handle_call({:steer, _run_id, _text}, _from, state),

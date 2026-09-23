@@ -379,14 +379,7 @@ defmodule T3.StorageCleanup do
 
   defp within?(path, root), do: path == root or String.starts_with?(path, root <> "/")
 
-  defp real(path) do
-    case System.cmd("realpath", [path], stderr_to_stdout: true) do
-      {out, 0} -> {:ok, String.trim(out)}
-      _ -> :error
-    end
-  rescue
-    _ -> :error
-  end
+  defp real(path), do: T3.Paths.real(path)
 
   defp real_or_self(path), do: with({:ok, real} <- real(path), do: real, else: (_ -> path))
 

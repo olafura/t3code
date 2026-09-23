@@ -46,6 +46,9 @@ defmodule T3.Rpc do
      }}
   end
 
+  def handle("provider.uploadFeedback", input),
+    do: T3.Orchestration.handle("provider.uploadFeedback", input)
+
   def handle("filesystem.browse", input), do: T3.Projects.browse(input)
   def handle("shell.openInEditor", input), do: T3.Editors.open(input)
   def handle("server.discoverSourceControl", input), do: T3.SourceControl.discover(input)

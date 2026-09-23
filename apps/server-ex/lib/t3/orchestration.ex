@@ -32,6 +32,31 @@ defmodule T3.Orchestration do
   def handle("orchestration.dispatchCommand", command), do: dispatch(command)
   def handle("orchestration.launchThread", input), do: launch_thread(input)
   def handle("orchestration.searchThreads", input), do: T3.Search.threads(input)
+  def handle("orchestration.getWorkflowScript", input), do: T3.WorkflowScripts.read(input)
+
+  def handle("provider.uploadFeedback", %{"threadId" => thread_id} = input) do
+    instance =
+      case T3.Shell.row(node(), thread_id) do
+        {"thread", row} -> row["providerInstanceId"]
+        _ -> nil
+      end
+
+    result =
+      case instance && driver_for(instance) do
+        nil -> {:error, "No provider session has run in this thread yet."}
+        "codex" -> T3.Codex.ThreadRuntime.upload_feedback(thread_id, input["reason"])
+        driver -> {:error, "Provider '#{driver}' does not support feedback uploads."}
+      end
+
+    with {:error, message} <- result,
+         do:
+           {:error,
+            %{
+              "_tag" => "ProviderUploadFeedbackError",
+              "threadId" => thread_id,
+              "cause" => message
+            }}
+  end
 
   # This node's archived threads, with the projects they belong to.
   def handle("orchestration.getArchivedShellSnapshot", _input) do

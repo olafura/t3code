@@ -74,6 +74,8 @@ import {
   WsRpcGroup,
   PreviewAutomationStreamEvent,
   EnvironmentTheme,
+  OrchestrationGetWorkflowScriptError,
+  ProviderUploadFeedbackError,
   type PreviewAutomationHost,
 } from "@t3tools/contracts";
 import {
@@ -147,6 +149,7 @@ const decodeTelemetry = Schema.decodeUnknownSync(Schema.toCodecJson(ResourceTele
 const decodeAuthAccess = Schema.decodeUnknownSync(Schema.toCodecJson(AuthAccessStreamEvent));
 const decodeSetupError = Schema.decodeUnknownOption(ProviderSetupError);
 const decodeTerminalError = Schema.decodeUnknownOption(TerminalError);
+const decodeWorkflowScriptError = Schema.decodeUnknownOption(OrchestrationGetWorkflowScriptError);
 const settingsCodec = Schema.toCodecJson(ServerSettings);
 const isServerSettingsError = Schema.is(ServerSettingsError);
 const decodeSettings = Schema.decodeUnknownEffect(settingsCodec);
@@ -517,6 +520,29 @@ export function makeV3Session(input: {
     const searchThreads = forward(
       ORCHESTRATION_V2_WS_METHODS.searchThreads,
       (_request: object, message) => new OrchestrationSearchThreadsError({ message }),
+    );
+
+    const workflowScript = forward(
+      ORCHESTRATION_V2_WS_METHODS.getWorkflowScript,
+      (request: { readonly scriptPath: string }, _message, cause) =>
+        decodeWorkflowScriptError(cause instanceof ClusterRpcError ? cause.detail : undefined).pipe(
+          Option.getOrElse(
+            () =>
+              new OrchestrationGetWorkflowScriptError({
+                reason: "read-failed",
+                scriptPath: request.scriptPath,
+              }),
+          ),
+        ),
+    );
+
+    const uploadFeedback = forward(
+      WS_METHODS.providerUploadFeedback,
+      (request: { readonly threadId: string }, message) =>
+        new ProviderUploadFeedbackError({
+          threadId: ThreadId.make(request.threadId),
+          cause: message,
+        }),
     );
 
     const archivedShell = forward(
@@ -998,6 +1024,8 @@ export function makeV3Session(input: {
       [ORCHESTRATION_V2_WS_METHODS.subscribeThread]: thread,
       [ORCHESTRATION_V2_WS_METHODS.getThreadProjection]: threadProjection,
       [ORCHESTRATION_V2_WS_METHODS.searchThreads]: searchThreads,
+      [ORCHESTRATION_V2_WS_METHODS.getWorkflowScript]: workflowScript,
+      [WS_METHODS.providerUploadFeedback]: uploadFeedback,
       [WS_METHODS.serverUpsertKeybinding]: keybindingCommand("t3.upsertKeybinding"),
       [WS_METHODS.serverRemoveKeybinding]: keybindingCommand("t3.removeKeybinding"),
       [WS_METHODS.shellOpenInEditor]: openInEditor,

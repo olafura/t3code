@@ -219,6 +219,25 @@ defmodule T3.OrchestrationTest do
     assert %{"context" => %{"records" => [^skill]}} = StreamState.get(state, "message")["m1"]
   end
 
+  test "feedback goes to Codex for the thread's provider thread" do
+    thread_id = launch("list the files")
+    _ = await_run(thread_id, "completed")
+    :ok = T3.Shell.subscribe(self())
+    await_shell_row(thread_id, &(&1["providerInstanceId"] == "codex"))
+
+    assert {:ok, %{"feedbackId" => "feedback-for-" <> _}} =
+             Orchestration.handle("provider.uploadFeedback", %{
+               "threadId" => thread_id,
+               "reason" => "wrong answer"
+             })
+
+    :ok = Orchestration.release_session(thread_id)
+
+    assert {:error,
+            %{"_tag" => "ProviderUploadFeedbackError", "cause" => "The provider session" <> _}} =
+             Orchestration.handle("provider.uploadFeedback", %{"threadId" => thread_id})
+  end
+
   describe "thread settings and plan mode" do
     test "thread commands set the thread's own fields" do
       thread_id = launch("list the files")

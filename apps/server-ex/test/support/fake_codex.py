@@ -38,6 +38,8 @@ for line in sys.stdin:
         continue
     if method == "initialize":
         send({"id": mid, "result": {"userAgent": "fake", "platformOs": "test"}})
+    elif method == "feedback/upload":
+        send({"id": mid, "result": {"threadId": f"feedback-for-{params['threadId']}"}})
     elif method in ("thread/start", "thread/resume"):
         send({"id": mid, "result": {"thread": {"id": thread_id}}})
     elif method == "turn/start":
