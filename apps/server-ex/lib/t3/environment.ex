@@ -26,8 +26,8 @@ defmodule T3.Environment do
 
   @doc """
   The client's `ServerConfig` for this node. Only what a node serves today is
-  filled in: Codex and Claude when installed, and empty keybinding and editor lists;
-  settings decode to their defaults.
+  filled in: Codex and Claude when installed, empty keybinding and editor lists, and
+  the stored settings (`T3.Settings`), which decode to their defaults.
   """
   @spec server_config() :: map
   def server_config do
@@ -55,7 +55,7 @@ defmodule T3.Environment do
         "otlpMetricsEnabled" => false,
         "otlpLogsEnabled" => false
       },
-      "settings" => %{}
+      "settings" => T3.Settings.settings()
     }
   end
 

@@ -1,0 +1,97 @@
+defmodule T3.Settings do
+  @moduledoc """
+  This node's `ServerSettings`, kept in `<home>/settings.json` (owner-only, since
+  provider environments can hold secrets).
+
+  The node stores the document; it does not interpret patches. A client applies a
+  `server.updateSettings` patch with the shared `applyServerSettingsPatch` to the
+  version it read and writes the whole result back with `put/2`, which refuses a
+  stale version so concurrent editors retry instead of overwriting each other.
+  Watchers (client sockets) get `{:t3_settings, node, settings}` on every change.
+  """
+
+  use GenServer
+
+  require Logger
+
+  def start_link(_), do: GenServer.start_link(__MODULE__, nil, name: __MODULE__)
+
+  @doc "The settings document (`%{}` when never written; clients fill in defaults)."
+  def settings, do: elem(get(), 0)
+
+  @doc "`{settings, version}`."
+  def get do
+    GenServer.call(__MODULE__, :get)
+  catch
+    # A node started without settings (tests, tools) has defaults.
+    :exit, {:noproc, _} -> {%{}, 0}
+  end
+
+  @doc "Replaces the document if it is still at `version`; returns the new version."
+  def put(settings, version), do: GenServer.call(__MODULE__, {:put, settings, version})
+
+  def watch(pid) do
+    GenServer.call(__MODULE__, {:watch, pid})
+  catch
+    :exit, {:noproc, _} -> :ok
+  end
+
+  def unwatch(pid), do: GenServer.cast(__MODULE__, {:unwatch, pid})
+
+  @impl true
+  def init(nil) do
+    path = Path.join(Application.fetch_env!(:t3, :home), "settings.json")
+
+    settings =
+      with {:ok, text} <- File.read(path),
+           {:ok, %{} = settings} <- JSON.decode(text) do
+        settings
+      else
+        {:error, :enoent} ->
+          %{}
+
+        other ->
+          Logger.warning("ignoring unreadable #{path}: #{inspect(other)}")
+          %{}
+      end
+
+    {:ok, %{path: path, settings: settings, version: 0, watchers: %{}}}
+  end
+
+  @impl true
+  def handle_call(:get, _from, state), do: {:reply, {state.settings, state.version}, state}
+
+  def handle_call({:put, settings, version}, _from, %{version: version} = state) do
+    write!(state.path, settings)
+    for {pid, _} <- state.watchers, do: send(pid, {:t3_settings, node(), settings})
+    {:reply, {:ok, version + 1}, %{state | settings: settings, version: version + 1}}
+  end
+
+  def handle_call({:put, _settings, _version}, _from, state),
+    do: {:reply, {:error, :stale}, state}
+
+  def handle_call({:watch, pid}, _from, state) do
+    watchers = Map.put_new_lazy(state.watchers, pid, fn -> Process.monitor(pid) end)
+    {:reply, :ok, %{state | watchers: watchers}}
+  end
+
+  @impl true
+  def handle_cast({:unwatch, pid}, state) do
+    {ref, watchers} = Map.pop(state.watchers, pid)
+    if ref, do: Process.demonitor(ref, [:flush])
+    {:noreply, %{state | watchers: watchers}}
+  end
+
+  @impl true
+  def handle_info({:DOWN, _ref, :process, pid, _}, state),
+    do: {:noreply, %{state | watchers: Map.delete(state.watchers, pid)}}
+
+  # Written to a temporary file and renamed, so a crash never leaves half a file.
+  defp write!(path, settings) do
+    File.mkdir_p!(Path.dirname(path))
+    tmp = path <> ".tmp"
+    File.write!(tmp, JSON.encode_to_iodata!(settings))
+    File.chmod!(tmp, 0o600)
+    File.rename!(tmp, path)
+  end
+end

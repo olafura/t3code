@@ -13,6 +13,7 @@ defmodule T3.Application do
         [
           {T3.Store, path: Path.join(home, "t3.sqlite")},
           T3.Auth,
+          T3.Settings,
           T3.Streams,
           T3.Shell,
           {Registry, keys: :unique, name: T3.Codex.Registry},

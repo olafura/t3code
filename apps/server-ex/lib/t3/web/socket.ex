@@ -91,6 +91,17 @@ defmodule T3.Web.Socket do
     end
   end
 
+  def handle_info({:t3_settings, node, settings}, state) do
+    case state.by_terminal do
+      %{{:settings, ^node} => id} ->
+        frame = %{"t" => "config.settings", "id" => id, "settings" => settings}
+        {:push, Protocol.encode(frame), state}
+
+      _ ->
+        {:ok, state}
+    end
+  end
+
   def handle_info({:t3_vcs, cwd, event}, state) do
     case state.by_terminal do
       %{{:vcs, ^cwd} => id} ->
@@ -211,17 +222,21 @@ defmodule T3.Web.Socket do
     end
   end
 
-  defp subscribe(state, id, {:config, node}, _offset) do
-    frame =
-      case remote(node, T3.Environment, :server_config, []) do
-        {:ok, config} ->
-          %{"t" => "config", "id" => id, "node" => Atom.to_string(node), "config" => config}
+  # The node's config, then its settings as they change.
+  defp subscribe(state, id, {:config, node} = shape, _offset) do
+    with {:ok, :ok} <- remote(node, T3.Settings, :watch, [self()]),
+         {:ok, config} <- remote(node, T3.Environment, :server_config, []) do
+      frame = %{"t" => "config", "id" => id, "node" => Atom.to_string(node), "config" => config}
 
-        {:error, reason} ->
-          error_frame(id, reason)
-      end
-
-    {:push, Protocol.encode(frame), state}
+      {:push, Protocol.encode(frame),
+       %{
+         state
+         | subs: Map.put(state.subs, id, shape),
+           by_terminal: Map.put(state.by_terminal, {:settings, node}, id)
+       }}
+    else
+      {_, reason} -> {:push, Protocol.encode(error_frame(id, reason)), state}
+    end
   end
 
   defp subscribe(state, id, {:stream, node, stream_id} = shape, offset) do
@@ -348,6 +363,10 @@ defmodule T3.Web.Socket do
           | subs: subs,
             by_terminal: Map.delete(state.by_terminal, {:git_action, action_id})
         }
+
+      {{:config, node}, subs} ->
+        :erpc.cast(node, T3.Settings, :unwatch, [self()])
+        %{state | subs: subs, by_terminal: Map.delete(state.by_terminal, {:settings, node})}
 
       {{:terminals, node} = shape, subs} ->
         :erpc.cast(node, T3.Terminal.Hub, :unwatch, [self()])

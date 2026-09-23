@@ -3,8 +3,9 @@ defmodule T3.TextGeneration do
   Short structured text from a coding agent's CLI: commit messages and pull request
   titles and bodies for `T3.GitActions`, with the prompts the Node server uses.
 
-  Runs `claude -p` with a JSON schema and no tools, or `codex exec` in a read-only
-  sandbox when Claude Code is not installed.
+  Runs the agent chosen in the node's `textGenerationModelSelection` setting when
+  there is one; otherwise `claude -p` (Haiku) with a JSON schema and no tools, or
+  `codex exec` in a read-only sandbox when Claude Code is not installed.
   """
 
   @timeout 180_000
@@ -89,18 +90,31 @@ defmodule T3.TextGeneration do
       "additionalProperties" => false
     }
 
+    selection = T3.Settings.settings()["textGenerationModelSelection"] || %{}
+    model = selection["model"]
+
     cond do
-      System.find_executable(claude_command()) -> claude(cwd, prompt, schema)
-      System.find_executable(codex_command()) -> codex(cwd, prompt, schema)
-      true -> {:error, "Install Claude Code or Codex to generate this text."}
+      selection["instanceId"] == "codex" and System.find_executable(codex_command()) ->
+        codex(cwd, prompt, schema, model)
+
+      selection["instanceId"] == "claudeAgent" and System.find_executable(claude_command()) ->
+        claude(cwd, prompt, schema, model || "haiku")
+
+      System.find_executable(claude_command()) ->
+        claude(cwd, prompt, schema, "haiku")
+
+      System.find_executable(codex_command()) ->
+        codex(cwd, prompt, schema, nil)
+
+      true ->
+        {:error, "Install Claude Code or Codex to generate this text."}
     end
   end
 
-  defp claude(cwd, prompt, schema) do
+  defp claude(cwd, prompt, schema, model) do
     args =
       ~w(-p --output-format json --json-schema) ++
-        [JSON.encode!(schema)] ++
-        ~w(--model haiku --tools) ++
+        [JSON.encode!(schema), "--model", model, "--tools"] ++
         ["", "--disable-slash-commands", "--strict-mcp-config", "--permission-mode", "dontAsk"]
 
     with {:ok, out} <- run([claude_command() | args], cwd, prompt),
@@ -121,7 +135,7 @@ defmodule T3.TextGeneration do
 
   defp structured(_), do: nil
 
-  defp codex(cwd, prompt, schema) do
+  defp codex(cwd, prompt, schema, model) do
     dir = Path.join(System.tmp_dir!(), "t3-text-#{System.unique_integer([:positive])}")
     File.mkdir_p!(dir)
     schema_path = Path.join(dir, "schema.json")
@@ -129,8 +143,9 @@ defmodule T3.TextGeneration do
     File.write!(schema_path, JSON.encode!(schema))
 
     args =
-      ~w(exec --ephemeral --skip-git-repo-check -s read-only --output-schema) ++
-        [schema_path, "--output-last-message", output_path, "-"]
+      ~w(exec --ephemeral --skip-git-repo-check -s read-only) ++
+        if(model, do: ["--model", model], else: []) ++
+        ["--output-schema", schema_path, "--output-last-message", output_path, "-"]
 
     try do
       with {:ok, _} <- run([codex_command() | args], cwd, prompt),

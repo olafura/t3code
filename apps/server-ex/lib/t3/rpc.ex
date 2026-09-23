@@ -13,6 +13,22 @@ defmodule T3.Rpc do
     do: T3.Orchestration.handle(method, payload)
 
   def handle("projects.mutate", mutation), do: T3.Projects.mutate(mutation)
+  def handle("server.getSettings", _input), do: {:ok, T3.Settings.settings()}
+
+  # A client applies settings patches itself and writes the whole document back
+  # with the version it read (see `T3.Settings`).
+  def handle("t3.readSettings", _input) do
+    {settings, version} = T3.Settings.get()
+    {:ok, %{"settings" => settings, "version" => version}}
+  end
+
+  def handle("t3.writeSettings", %{"settings" => %{} = settings, "version" => version}) do
+    case T3.Settings.put(settings, version) do
+      {:ok, version} -> {:ok, %{"version" => version}}
+      {:error, :stale} -> {:error, %{"_tag" => "StaleSettings", "message" => "settings changed"}}
+    end
+  end
+
   def handle("filesystem.browse", input), do: T3.Projects.browse(input)
   def handle("agentSessions.scan", input), do: T3.AgentSessions.scan(input)
   def handle("agentSessions.import", input), do: T3.AgentSessions.import_project(input)

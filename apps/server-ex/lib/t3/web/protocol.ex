@@ -9,7 +9,7 @@ defmodule T3.Web.Protocol do
       summary on it
     * `{"type": "stream", "node": n, "stream": id}`: one project or thread
     * `{"type": "config", "node": n}` or `{"type": "config", "environment": id}`:
-      that node's `ServerConfig` and name, sent once
+      that node's `ServerConfig` and name, then its settings whenever they change
     * `{"type": "terminal", "node": n, "input": TerminalAttachInput}`: one terminal,
       opened if needed; a snapshot, then its events
     * `{"type": "terminals", "node": n}`: that node's terminal summaries, then changes
@@ -40,6 +40,7 @@ defmodule T3.Web.Protocol do
       {"t": "resync", "id", "offset"}   (fell behind: resubscribe from offset)
       {"t": "error", "id", "reason"}
       {"t": "config", "id", "node", "config"}
+      {"t": "config.settings", "id", "settings"}   (the node's ServerSettings changed)
       {"t": "terminal", "id", "event"}   (TerminalAttachStreamEvent)
       {"t": "terminals", "id", "event"}  (TerminalMetadataStreamEvent)
       {"t": "vcs", "id", "event"}        (VcsStatusStreamEvent)
