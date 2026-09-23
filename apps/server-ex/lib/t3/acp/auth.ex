@@ -113,11 +113,26 @@ defmodule T3.Acp.Auth do
 
   # The client opens the URL after the user consents; the agent watches for the result.
   defp elicit(
-         %{"mode" => "url", "url" => "https://" <> _ = url, "elicitationId" => id},
+         %{"mode" => "url", "url" => raw, "elicitationId" => id},
          server,
          flow_id
        )
-       when is_binary(id) and byte_size(id) <= 128 do
+       when is_binary(raw) and byte_size(raw) <= 2048 and is_binary(id) and
+              byte_size(id) <= 128 do
+    with %URI{scheme: scheme, host: host} = url
+         when scheme in ["http", "https"] and host not in [nil, ""] <-
+           URI.parse(raw),
+         id when id != "" <- String.trim(id) do
+      ask(URI.to_string(url), id, server, flow_id)
+    else
+      _ -> %{"action" => "decline"}
+    end
+  end
+
+  defp elicit(_params, _server, _flow_id), do: %{"action" => "decline"}
+
+  # Local sign-in pages (http://localhost:…) count as much as hosted ones.
+  defp ask(url, id, server, flow_id) do
     interaction = %{"type" => "browser", "id" => id, "url" => url, "requiresConsent" => true}
     send(server, {:auth_interaction, flow_id, interaction, self()})
 
@@ -126,8 +141,6 @@ defmodule T3.Acp.Auth do
       {:auth_response, %{"type" => "browser"}} -> %{"action" => "decline"}
     end
   end
-
-  defp elicit(_params, _server, _flow_id), do: %{"action" => "decline"}
 
   # The agent's login command, in a PTY the client sees and types into.
   defp terminal(command, env, method, cwd, server, flow_id) do
