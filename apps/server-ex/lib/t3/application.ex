@@ -25,6 +25,8 @@ defmodule T3.Application do
           {DynamicSupervisor, name: T3.Terminal.Supervisor, strategy: :one_for_one},
           T3.Terminal.Hub,
           {Registry, keys: :unique, name: T3.Vcs.Registry},
+          {Registry, keys: :unique, name: T3.ProviderAuth.Registry},
+          {DynamicSupervisor, name: T3.ProviderAuth.Supervisor, strategy: :one_for_one},
           {DynamicSupervisor, name: T3.Vcs.Supervisor, strategy: :one_for_one},
           Supervisor.child_spec({Task, &T3.Codex.Provider.load/0}, id: :codex_models),
           {Registry, keys: :unique, name: T3.Acp.Registry},

@@ -10,6 +10,8 @@ import {
   OrchestrationGetFullThreadDiffError,
   OrchestrationGetTurnDiffError,
   ProjectMutationError,
+  ProviderAuthState,
+  ProviderSetupError,
   ReviewDiffPreviewError,
   VcsError,
   OrchestrationV2DispatchCommandError,
@@ -54,6 +56,8 @@ import { ThreadShapeFold, type ShapeEvent, type ShapeRow } from "./threadShape.t
 
 const decodeConfig = Schema.decodeUnknownSync(Schema.toCodecJson(ServerConfig));
 const decodeProviders = Schema.decodeUnknownSync(Schema.toCodecJson(ServerProviders));
+const decodeAuthState = Schema.decodeUnknownSync(Schema.toCodecJson(ProviderAuthState));
+const decodeSetupError = Schema.decodeUnknownOption(ProviderSetupError);
 const decodeTerminalError = Schema.decodeUnknownOption(TerminalError);
 const settingsCodec = Schema.toCodecJson(ServerSettings);
 const isServerSettingsError = Schema.is(ServerSettingsError);
@@ -404,6 +408,37 @@ export function makeV3Session(input: {
         ),
       );
 
+    // Signing a provider in happens on the node that runs it.
+    const setupError = (instanceId: string, operation: string, message: string, detail: unknown) =>
+      decodeSetupError(detail).pipe(
+        Option.getOrElse(
+          () =>
+            new ProviderSetupError({
+              instanceId: instanceId as ProviderSetupError["instanceId"],
+              operation,
+              detail: message,
+            }),
+        ),
+      );
+
+    const providerAuthCommand = (tag: string, operation: string) =>
+      forward(tag, (request: { readonly instanceId: string }, message, cause) =>
+        setupError(
+          request.instanceId,
+          operation,
+          message,
+          cause instanceof ClusterRpcError ? cause.detail : undefined,
+        ),
+      );
+
+    const providerAuthSubscribe = (request: { readonly instanceId: string }) =>
+      shapeStream(
+        socket,
+        { type: "providerAuth", node, instanceId: request.instanceId },
+        (frame) => (frame.t === "providerAuth" ? [decodeAuthState(frame.state)] : []),
+        (frame) => setupError(request.instanceId, "subscribe", String(frame.reason), frame.detail),
+      );
+
     // ACP Registry search and installs run on the node that will run the agent.
     const acpRegistryCommand = (tag: string) =>
       forward(tag, (_request: object, message, cause) =>
@@ -574,6 +609,18 @@ export function makeV3Session(input: {
         WS_METHODS.serverDisableAcpRegistryProvider,
       ),
       [WS_METHODS.serverLogoutAcpRegistry]: acpRegistryCommand(WS_METHODS.serverLogoutAcpRegistry),
+      [WS_METHODS.providerAuthSubscribe]: providerAuthSubscribe,
+      [WS_METHODS.providerAuthStart]: providerAuthCommand(WS_METHODS.providerAuthStart, "start"),
+      [WS_METHODS.providerAuthRespond]: providerAuthCommand(
+        WS_METHODS.providerAuthRespond,
+        "respond",
+      ),
+      [WS_METHODS.providerAuthCancel]: providerAuthCommand(WS_METHODS.providerAuthCancel, "cancel"),
+      [WS_METHODS.providerAuthLogout]: providerAuthCommand(WS_METHODS.providerAuthLogout, "logout"),
+      [WS_METHODS.providerAuthComplete]: providerAuthCommand(
+        WS_METHODS.providerAuthComplete,
+        "complete",
+      ),
       [WS_METHODS.agentSessionsScan]: agentSessionCommand(WS_METHODS.agentSessionsScan),
       [WS_METHODS.agentSessionsImport]: agentSessionCommand(WS_METHODS.agentSessionsImport),
       [WS_METHODS.subscribeVcsStatus]: vcsStatus,

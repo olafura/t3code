@@ -1,6 +1,19 @@
 # Fake ACP agent (like `opencode acp`) for tests. A prompt containing "wait" runs
 # until session/cancel; "approve" asks permission for a command first.
-import json, sys
+import json, os, sys
+
+# With FAKE_AUTH_FILE set, sessions need a sign-in, which creates that file: the
+# "browser" method asks the client to open a URL; "cli" runs `fake_acp.py login`.
+AUTH_FILE = os.environ.get("FAKE_AUTH_FILE")
+if len(sys.argv) > 1 and sys.argv[1] == "login":
+    sys.stdout.write("Paste code: ")
+    sys.stdout.flush()
+    code = sys.stdin.readline().strip()
+    if code == "ok":
+        open(AUTH_FILE, "w").write("signed in")
+        print("Signed in.")
+        sys.exit(0)
+    sys.exit(1)
 
 def send(msg):
     msg["jsonrpc"] = "2.0"
@@ -31,8 +44,25 @@ for line in sys.stdin:
         pid, sid = pending
         finish_turn(pid, sid, outcome.get("optionId") == "allow")
         continue
+    if method is None and mid == "elic-1":
+        if msg["result"]["action"] == "accept":
+            open(AUTH_FILE, "w").write("signed in")
+            send({"id": authenticating, "result": {}})
+        else:
+            send({"id": authenticating, "error": {"code": -32000, "message": "declined"}})
+        continue
+    if method == "authenticate":
+        authenticating = mid
+        send({"id": "elic-1", "method": "elicitation/create", "params": {"mode": "url",
+              "url": "https://example.com/login", "elicitationId": "e1", "message": "Sign in"}})
+        continue
+    if method in ("session/new", "session/resume") and AUTH_FILE and not os.path.exists(AUTH_FILE):
+        send({"id": mid, "error": {"code": -32000, "message": "Authentication required"}})
+        continue
     if method == "initialize":
         send({"id": mid, "result": {"protocolVersion": 1, "agentInfo": {"name": "Fake", "version": "9.9"},
+              "authMethods": [{"id": "browser", "name": "Browser login"},
+                              {"id": "cli", "name": "CLI login", "type": "terminal", "args": ["login"]}],
               "agentCapabilities": {"loadSession": True,
                   "sessionCapabilities": {"resume": {}, "list": {}, "delete": {}},
                   "providers": {}, "auth": {"logout": {}}}}})

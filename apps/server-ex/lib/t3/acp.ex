@@ -70,7 +70,8 @@ defmodule T3.Acp do
 
     case override || instance(instance) do
       [_ | _] = command ->
-        {:ok, command, []}
+        {_driver, entry} = instance(instance) || {nil, %{}}
+        {:ok, command, instance_env(entry)}
 
       {@registry, entry} ->
         with {:ok, command, env} <- T3.Acp.Catalog.command(entry["config"] || %{}),
@@ -144,6 +145,7 @@ defmodule T3.Acp do
       )
       |> then(&if(failure, do: Map.put(&1, "message", failure), else: &1))
       |> Map.merge(capability_fields(capabilities(id)))
+      |> Map.merge(access(id, base["setup"]))
     else
       _ -> nil
     end
@@ -164,7 +166,12 @@ defmodule T3.Acp do
            "iconUrl" => "https://cdn.agentclientprotocol.com/registry/v1/latest/#{agent_id}.svg",
            "version" => :persistent_term.get({__MODULE__, id, :version}, agent.version)
          }
-         |> then(&if(agent.website, do: Map.put(&1, "setup", setup(agent.website)), else: &1))}
+         |> then(
+           &if(agent.website,
+             do: Map.put(&1, "setup", %{"documentationUrl" => agent.website}),
+             else: &1
+           )
+         )}
     end
   end
 
@@ -178,7 +185,7 @@ defmodule T3.Acp do
     end
   end
 
-  # What the agent can do with its own sessions and model providers, and logout.
+  # What the agent can do with its own sessions and model providers.
   defp capability_fields(nil), do: %{}
 
   defp capability_fields(caps) do
@@ -191,16 +198,29 @@ defmodule T3.Acp do
         "canResume" => is_map(sessions["resume"]),
         "canDelete" => is_map(sessions["delete"])
       },
-      "configurableProviders" => is_map(caps["providers"]),
-      "auth" => %{
-        "status" => "authenticated",
-        "canLogout" => is_map(get_in(caps, ["auth", "logout"]))
-      }
+      "configurableProviders" => is_map(caps["providers"])
     }
   end
 
-  defp setup(url),
-    do: %{"canAuthenticate" => false, "canInstall" => false, "documentationUrl" => url}
+  # Whether the agent can be signed in here (`T3.ProviderAuth`), and whether it must be.
+  defp access(id, setup) do
+    methods = :persistent_term.get({__MODULE__, id, :auth_methods}, 0)
+    signed_out = :persistent_term.get({__MODULE__, id, :unauthenticated}, false)
+
+    %{
+      "setup" =>
+        Map.merge(%{"canAuthenticate" => methods > 0, "canInstall" => false}, setup || %{}),
+      "auth" => %{
+        "status" =>
+          cond do
+            signed_out -> "unauthenticated"
+            capabilities(id) == nil -> "unknown"
+            true -> "authenticated"
+          end,
+        "canLogout" => is_map(get_in(capabilities(id) || %{}, ["auth", "logout"]))
+      }
+    }
+  end
 
   @doc "Reads each enabled agent's version and models from a throwaway session."
   def load do
@@ -249,9 +269,18 @@ defmodule T3.Acp do
 
     try do
       case read_agent(id, dir) do
-        :ok -> :persistent_term.erase({__MODULE__, id, :error})
-        {:error, reason} -> :persistent_term.put({__MODULE__, id, :error}, describe(reason))
-        _ -> :ok
+        :ok ->
+          :persistent_term.erase({__MODULE__, id, :error})
+
+        {:error, :unauthenticated} ->
+          :persistent_term.put({__MODULE__, id, :error}, "Sign in to use this agent.")
+          :persistent_term.put({__MODULE__, id, :unauthenticated}, true)
+
+        {:error, reason} ->
+          :persistent_term.put({__MODULE__, id, :error}, describe(reason))
+
+        _ ->
+          :ok
       end
     catch
       _, _ -> :ok
@@ -267,12 +296,16 @@ defmodule T3.Acp do
 
   defp read_agent(id, dir) do
     with_agent(id, dir, fn conn, init ->
-      with {:ok, session} <-
-             Connection.call(conn, "session/new", %{"cwd" => dir, "mcpServers" => []}, 60_000) do
-        version = get_in(init, ["agentInfo", "version"]) || "unknown"
-        :persistent_term.put({__MODULE__, id, :version}, version)
-        :persistent_term.put({__MODULE__, id, :capabilities}, init["agentCapabilities"] || %{})
-        :persistent_term.put({__MODULE__, id, :models}, models(session))
+      version = get_in(init, ["agentInfo", "version"]) || "unknown"
+      :persistent_term.put({__MODULE__, id, :version}, version)
+      :persistent_term.put({__MODULE__, id, :capabilities}, init["agentCapabilities"] || %{})
+      :persistent_term.put({__MODULE__, id, :auth_methods}, length(init["authMethods"] || []))
+
+      case Connection.call(conn, "session/new", %{"cwd" => dir, "mcpServers" => []}, 60_000) do
+        {:ok, session} -> :persistent_term.put({__MODULE__, id, :models}, models(session))
+        # ACP's "authentication required".
+        {:error, %{"code" => -32000}} -> {:error, :unauthenticated}
+        {:error, _} = error -> error
       end
     end)
   end
@@ -286,15 +319,7 @@ defmodule T3.Acp do
          {:ok, conn} <-
            Connection.start_link(cmd: command, handler: self(), cd: cwd, env: env, dialect: :v2) do
       try do
-        with {:ok, init} <-
-               Connection.call(conn, "initialize", %{
-                 "protocolVersion" => 1,
-                 "clientCapabilities" => %{
-                   "fs" => %{"readTextFile" => false, "writeTextFile" => false},
-                   "terminal" => false
-                 },
-                 "clientInfo" => %{"name" => "t3code", "version" => "0.1.0"}
-               }),
+        with {:ok, init} <- Connection.call(conn, "initialize", initialize_params()),
              do: fun.(conn, init)
       after
         Connection.stop(conn)
@@ -302,12 +327,37 @@ defmodule T3.Acp do
     end
   end
 
+  @doc """
+  `initialize` for management and sign-in connections: the client can show a URL
+  (`elicitation/create`) and run a login command in a terminal.
+  """
+  def initialize_params do
+    %{
+      "protocolVersion" => 1,
+      "clientCapabilities" => %{
+        "fs" => %{"readTextFile" => false, "writeTextFile" => false},
+        "terminal" => false,
+        "auth" => %{"terminal" => true},
+        "elicitation" => %{"url" => %{}}
+      },
+      "clientInfo" => %{"name" => "t3code", "version" => "0.1.0"}
+    }
+  end
+
   @doc "The agent capabilities an instance reported when it was last probed, or `nil`."
   def capabilities(id), do: :persistent_term.get({__MODULE__, id, :capabilities}, nil)
 
   @doc "Forgets what was read from an instance's agent, so it is probed again."
   def forget(id) do
-    for key <- [:models, :version, :capabilities, :error, :loading],
+    for key <- [
+          :models,
+          :version,
+          :capabilities,
+          :auth_methods,
+          :unauthenticated,
+          :error,
+          :loading
+        ],
         do: :persistent_term.erase({__MODULE__, id, key})
 
     :ok

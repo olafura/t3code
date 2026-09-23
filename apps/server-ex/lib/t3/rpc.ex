@@ -46,6 +46,11 @@ defmodule T3.Rpc do
     do: T3.Acp.Sessions.disable_provider(input)
 
   def handle("server.logoutAcpRegistry", input), do: T3.Acp.Sessions.logout(input)
+  def handle("provider.auth.start", input), do: T3.ProviderAuth.start(input)
+  def handle("provider.auth.respond", input), do: T3.ProviderAuth.respond(input)
+  def handle("provider.auth.cancel", input), do: T3.ProviderAuth.cancel(input)
+  def handle("provider.auth.logout", input), do: T3.ProviderAuth.logout(input)
+  def handle("provider.auth.complete", input), do: T3.ProviderAuth.complete(input)
 
   def handle("agentSessions.scan", input), do: T3.AgentSessions.scan(input)
   def handle("agentSessions.import", input), do: T3.AgentSessions.import_project(input)

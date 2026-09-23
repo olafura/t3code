@@ -26,6 +26,11 @@ export type TerminalShape = {
 };
 export type TerminalsShape = { readonly type: "terminals"; readonly node: string };
 export type VcsShape = { readonly type: "vcs"; readonly node: string; readonly cwd: string };
+export type ProviderAuthShape = {
+  readonly type: "providerAuth";
+  readonly node: string;
+  readonly instanceId: string;
+};
 export type GitActionShape = {
   readonly type: "gitAction";
   readonly node: string;
@@ -38,7 +43,8 @@ export type Shape =
   | TerminalShape
   | TerminalsShape
   | VcsShape
-  | GitActionShape;
+  | GitActionShape
+  | ProviderAuthShape;
 
 /** A failed RPC or subscription; `detail` is the contract error as `{_tag, ...fields}`. */
 export class ClusterRpcError extends Error {

@@ -14,6 +14,8 @@ defmodule T3.Web.Protocol do
       opened if needed; a snapshot, then its events
     * `{"type": "terminals", "node": n}`: that node's terminal summaries, then changes
     * `{"type": "vcs", "node": n, "cwd": dir}`: a checkout's git status, then changes
+    * `{"type": "providerAuth", "node": n, "instanceId": id}`: that provider
+      instance's sign-in state (`ProviderAuthState`), then changes
     * `{"type": "gitAction", "node": n, "input": GitRunStackedActionInput}`: runs the
       action once and streams its progress, ending with action_finished or
       action_failed
@@ -46,6 +48,7 @@ defmodule T3.Web.Protocol do
       {"t": "terminals", "id", "event"}  (TerminalMetadataStreamEvent)
       {"t": "vcs", "id", "event"}        (VcsStatusStreamEvent)
       {"t": "gitAction", "id", "event"}  (GitActionProgressEvent)
+      {"t": "providerAuth", "id", "state"} (ProviderAuthState)
       {"t": "rpc.result", "id", "result"} / {"t": "rpc.error", "id", "error", "detail"?}
         (`detail` is the contract error as `{"_tag", ...fields}` when there is one)
       {"t": "pong"}
@@ -130,6 +133,11 @@ defmodule T3.Web.Protocol do
        )
        when is_binary(id) do
     with {:ok, node} <- known_node(node, nodes), do: {:ok, {:git_action, node, input}}
+  end
+
+  defp decode_shape(%{"type" => "providerAuth", "node" => node, "instanceId" => id}, nodes)
+       when is_binary(id) do
+    with {:ok, node} <- known_node(node, nodes), do: {:ok, {:provider_auth, node, id}}
   end
 
   defp decode_shape(%{"type" => "terminals", "node" => node}, nodes) do
