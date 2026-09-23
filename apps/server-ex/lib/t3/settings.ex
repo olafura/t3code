@@ -85,13 +85,6 @@ defmodule T3.Settings do
 
   def unwatch(pid), do: GenServer.cast(__MODULE__, {:unwatch, pid})
 
-  @doc "Whether any client watches this node's config; background refreshes wait for one."
-  def watched? do
-    GenServer.call(__MODULE__, :watched?)
-  catch
-    :exit, {:noproc, _} -> false
-  end
-
   @doc "Tells watchers to read the provider list again, such as after a model probe."
   def notify_providers, do: GenServer.cast(__MODULE__, :providers_changed)
 
@@ -145,8 +138,6 @@ defmodule T3.Settings do
 
   def handle_call({:put, _settings, _version}, _from, state),
     do: {:reply, {:error, :stale}, state}
-
-  def handle_call(:watched?, _from, state), do: {:reply, state.watchers != %{}, state}
 
   def handle_call({:watch, pid}, _from, state) do
     watchers = Map.put_new_lazy(state.watchers, pid, fn -> Process.monitor(pid) end)

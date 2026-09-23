@@ -172,7 +172,9 @@ defmodule T3.UsageLimitSources do
 
   @impl true
   def handle_info(:tick, state) do
-    if T3.Settings.watched?() and T3.ProviderUsageLimits.interval() != :off, do: read_all()
+    if T3.ProviderUsageLimits.wanted?() and T3.ProviderUsageLimits.interval() != :off,
+      do: read_all()
+
     schedule()
     {:noreply, state}
   end

@@ -7,7 +7,7 @@ defmodule T3.ProviderUsageLimits do
   short-lived `codex app-server`, Claude's `get_usage` from a short-lived `claude`
   session (`T3.ProviderUsageLimits.Codex`, `T3.ProviderUsageLimits.Claude`). Probes run
   at boot, on `server.refreshProviders` (`refresh/1`), and every
-  `providerHealthRefreshInterval` while a client watches this node's config. Turns
+  `providerHealthRefreshInterval` while a client in front shows provider status. Turns
   fill in between: the thread runtimes pass on the rate-limit updates their
   providers stream (`update/2`, `claude_event/1`), which merge by window id.
 
@@ -29,7 +29,6 @@ defmodule T3.ProviderUsageLimits do
   @instances ["codex", "claudeAgent"]
   @kind_order %{"session" => 0, "weekly" => 1, "monthly" => 2, "other" => 3}
   @probe_timeout 30_000
-  @default_interval 5 * 60 * 1000
 
   def start_link(_), do: GenServer.start_link(__MODULE__, nil, name: __MODULE__)
 
@@ -86,11 +85,21 @@ defmodule T3.ProviderUsageLimits do
   `providerHealthRefreshInterval` in ms, or `:off` when it is zero.
   """
   def interval do
-    case T3.Settings.settings()["providerHealthRefreshInterval"] do
+    case T3.BackgroundPolicy.settings()["providerHealthRefreshInterval"] do
       ms when is_number(ms) and ms > 0 -> round(ms)
-      ms when is_number(ms) -> :off
-      _ -> @default_interval
+      _ -> :off
     end
+  end
+
+  @doc "Whether a client in front shows provider status (`T3.BackgroundPolicy`)."
+  def wanted?(instances \\ []) do
+    Enum.any?(
+      [
+        %{"type" => "provider-status"}
+        | for(i <- instances, do: %{"type" => "provider-status", "instanceId" => i})
+      ],
+      &T3.BackgroundPolicy.run_scope_work?/1
+    )
   end
 
   # --- shaping -------------------------------------------------------------------
@@ -252,7 +261,7 @@ defmodule T3.ProviderUsageLimits do
   @impl true
   def handle_info(:tick, state) do
     state =
-      if T3.Settings.watched?() and interval() != :off, do: probe(state, @instances), else: state
+      if wanted?(@instances) and interval() != :off, do: probe(state, @instances), else: state
 
     schedule()
     {:noreply, state}
