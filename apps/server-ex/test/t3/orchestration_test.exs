@@ -279,8 +279,8 @@ defmodule T3.OrchestrationTest do
       assert %{"text" => "third, edited"} = StreamState.get(state, "message")["m3"]
     end
 
-    test "steering a queued message interrupts the run and starts it next" do
-      thread_id = launch("wait for it")
+    test "an agent that cannot be steered is interrupted, and the steered message goes next" do
+      thread_id = launch("wait for it", "opencode")
       _ = await_run(thread_id, "running")
       {:ok, _} = send_message(thread_id, "m2", "second")
       {:ok, _} = send_message(thread_id, "m3", "third")
@@ -307,12 +307,59 @@ defmodule T3.OrchestrationTest do
       assert order == ["m3", "m2"]
     end
 
+    for instance <- ["codex", "claudeAgent"] do
+      test "#{instance}: a message sent during a run steers it" do
+        thread_id = launch("wait for it", unquote(instance))
+        _ = await_run(thread_id, "running")
+
+        {:ok, _} =
+          send_message(thread_id, "m2", "look here instead", %{
+            "dispatchMode" => %{"type" => "start_immediately"},
+            "deliveryIntent" => "auto"
+          })
+
+        state = await_statuses(thread_id, ["completed"])
+        items = StreamState.list(state, "turn-item")
+
+        assert %{"inputIntent" => "steer", "runId" => run_id} =
+                 Enum.find(items, &(&1["messageId"] == "m2"))
+
+        assert [%{"id" => ^run_id}] = runs(state)
+        assert Enum.any?(items, &(&1["text"] == "steered: look here instead"))
+      end
+    end
+
+    test "a queued message promoted to steer joins the running turn" do
+      thread_id = launch("wait for it")
+      _ = await_run(thread_id, "running")
+      {:ok, _} = send_message(thread_id, "m2", "second")
+      [active, queued] = runs(await_statuses(thread_id, ["running", "queued"]))
+
+      {:ok, _} =
+        Orchestration.dispatch(%{
+          "type" => "queued-message.promote-to-steer",
+          "threadId" => thread_id,
+          "queuedRunId" => queued["id"],
+          "targetRunId" => active["id"]
+        })
+
+      state = await_statuses(thread_id, ["completed", "cancelled"])
+
+      assert %{"inputIntent" => "promoted_queued_to_steer", "runId" => run_id} =
+               Enum.find(StreamState.list(state, "turn-item"), &(&1["messageId"] == "m2"))
+
+      assert run_id == active["id"]
+    end
+
     test "restart interrupts the running turn and starts the message next" do
       thread_id = launch("wait for it")
       _ = await_run(thread_id, "running")
 
       {:ok, _} =
-        send_message(thread_id, "m2", "do this instead", %{"deliveryIntent" => "restart"})
+        send_message(thread_id, "m2", "do this instead", %{
+          "dispatchMode" => %{"type" => "start_immediately"},
+          "deliveryIntent" => "restart"
+        })
 
       state = await_statuses(thread_id, ["interrupted", "completed"])
       assert Enum.any?(StreamState.list(state, "turn-item"), &(&1["messageId"] == "m2"))
@@ -647,8 +694,7 @@ defmodule T3.OrchestrationTest do
           "messageId" => message_id,
           "text" => text,
           "attachments" => [],
-          "dispatchMode" => %{"type" => "start_immediately"},
-          "deliveryIntent" => "auto"
+          "dispatchMode" => %{"type" => "queue_after_active"}
         },
         extra
       )

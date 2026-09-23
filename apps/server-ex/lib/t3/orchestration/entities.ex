@@ -110,6 +110,15 @@ defmodule T3.Orchestration.Entities do
   def driver(ids), do: Map.get(ids, :driver, "codex")
   def instance(ids), do: Map.get(ids, :instance, driver(ids))
 
+  # Codex (turn/steer) and Claude (a "now" message) take a message mid-turn.
+  defp capabilities(driver) do
+    put_in(
+      @codex_capabilities,
+      ["turns", "supportsActiveSteering"],
+      driver in ["codex", "claudeAgent"]
+    )
+  end
+
   def provider_session(id, cwd, model, at, driver \\ "codex", instance \\ "codex") do
     %{
       "id" => id,
@@ -118,7 +127,7 @@ defmodule T3.Orchestration.Entities do
       "status" => "ready",
       "cwd" => cwd,
       "model" => model,
-      "capabilities" => @codex_capabilities,
+      "capabilities" => capabilities(driver),
       "createdAt" => at,
       "updatedAt" => at,
       "lastError" => nil

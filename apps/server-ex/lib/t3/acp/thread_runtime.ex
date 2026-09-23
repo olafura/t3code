@@ -37,6 +37,9 @@ defmodule T3.Acp.ThreadRuntime do
     end
   end
 
+  @doc "ACP has no way to add to a running prompt."
+  def steer(_thread_id, _run_id, _text), do: {:error, "ACP agents cannot be steered"}
+
   @spec respond(String.t(), String.t(), map) :: :ok | {:error, String.t()}
   def respond(thread_id, request_id, response) do
     case lookup(thread_id) do

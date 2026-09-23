@@ -49,6 +49,9 @@ defmodule T3.Orchestration do
       {:ok, :queued} ->
         {:ok, %{"sequence" => sequence(thread_id)}}
 
+      {:ok, {:steer, run}} ->
+        steer(thread_id, run, command)
+
       {:ok, {:restart, active_run_id}} ->
         # The queued message goes first; the interrupted run's end starts it.
         _ = interrupt_any(thread_id, active_run_id)
@@ -155,22 +158,45 @@ defmodule T3.Orchestration do
     with :ok <- result, do: {:ok, %{"sequence" => sequence(thread_id)}}
   end
 
-  # Nodes do not steer a running turn; a queued message "steers" by going first and
-  # interrupting the run, which starts it next.
+  # A queued message steers the running turn when its provider can take it; otherwise
+  # it goes first and the run is interrupted, which starts it next.
   def dispatch(%{"type" => "queued-message.promote-to-steer", "threadId" => thread_id} = command) do
-    queued_id = command["queuedRunId"]
+    state = T3.Streams.Server.state(T3.Streams.ensure(thread_id))
+    runs = StreamState.get(state, "run")
+    queued = runs[command["queuedRunId"]]
+    target = runs[command["targetRunId"]]
+    message = queued && StreamState.get(state, "message")[queued["userMessageId"]]
 
-    with {:ok, result} <-
-           queue_change(thread_id, fn state ->
-             order = [
-               queued_id | queued_runs(state) |> Enum.map(& &1["id"]) |> List.delete(queued_id)
-             ]
+    if queued && message && target && target["status"] in @active_statuses &&
+         steerable?(target) &&
+         runtime(target["providerInstanceId"]).steer(thread_id, target["id"], message["text"]) ==
+           :ok do
+      T3.Streams.transact(thread_id, :thread, fn state ->
+        at = Entities.now()
 
-             for {id, position} <- Enum.with_index(order, 1),
-                 do: upsert(state, "run", id, &Map.put(&1, "queuePosition", position))
-           end) do
-      _ = interrupt_any(thread_id, command["targetRunId"])
-      {:ok, result}
+        changes =
+          [
+            upsert(
+              state,
+              "run",
+              queued["id"],
+              &Map.merge(&1, %{
+                "status" => "cancelled",
+                "queuePosition" => nil,
+                "completedAt" => at
+              })
+            ),
+            upsert(state, "message", message["id"], &Map.put(&1, "runId", target["id"]))
+          ] ++
+            steer_changes(state, target, message["id"], message, "promoted_queued_to_steer", at)
+
+        {Enum.reject(changes, &is_nil/1), :ok}
+      end)
+
+      T3.Streams.transact(thread_id, :thread, fn state -> {renumber(state), :ok} end)
+      {:ok, %{"sequence" => sequence(thread_id)}}
+    else
+      restart_promoted(thread_id, command)
     end
   end
 
@@ -290,6 +316,87 @@ defmodule T3.Orchestration do
   end
 
   defp sequence(thread_id), do: T3.Streams.Server.state(T3.Streams.ensure(thread_id)).seq
+
+  defp restart_promoted(thread_id, command) do
+    queued_id = command["queuedRunId"]
+
+    with {:ok, result} <-
+           queue_change(thread_id, fn state ->
+             order = [
+               queued_id | queued_runs(state) |> Enum.map(& &1["id"]) |> List.delete(queued_id)
+             ]
+
+             for {id, position} <- Enum.with_index(order, 1),
+                 do: upsert(state, "run", id, &Map.put(&1, "queuePosition", position))
+           end) do
+      _ = interrupt_any(thread_id, command["targetRunId"])
+      {:ok, result}
+    end
+  end
+
+  defp steerable?(run),
+    do: driver_for(run["providerInstanceId"] || "codex") in ["codex", "claudeAgent"]
+
+  # The provider takes the message first; only then does it join the run. If the turn
+  # ended meanwhile, the message is sent like any other (queued or started).
+  defp steer(thread_id, run, command) do
+    text = command["text"] || ""
+
+    case runtime(run["providerInstanceId"] || "codex").steer(thread_id, run["id"], text) do
+      :ok ->
+        T3.Streams.transact(thread_id, :thread, fn state ->
+          at = Entities.now()
+          message_id = command["messageId"] || Entities.new_id("message")
+          ids = %{thread: thread_id, run: run["id"], root_node: run["rootNodeId"]}
+
+          message =
+            Entities.message(ids, message_id, "user", text, false, at)
+            |> Map.merge(%{
+              "attachments" => command["attachments"] || [],
+              "createdBy" => command["createdBy"] || "user",
+              "creationSource" => command["creationSource"] || "web"
+            })
+
+          {[create("message", message_id, message)] ++
+             steer_changes(state, run, message_id, message, "steer", at), :ok}
+        end)
+
+        {:ok, %{"sequence" => sequence(thread_id)}}
+
+      {:error, _reason} ->
+        command
+        |> Map.put("dispatchMode", %{"type" => "queue_after_active"})
+        |> Map.delete("deliveryIntent")
+        |> dispatch()
+    end
+  end
+
+  # The steered message's place in the transcript, inside the run it joined.
+  defp steer_changes(state, run, message_id, message, intent, at) do
+    item_id = "turn-item:user:#{message_id}"
+
+    ids = %{
+      thread: run["threadId"],
+      run: run["id"],
+      root_node: run["rootNodeId"],
+      provider_thread: run["providerThreadId"]
+    }
+
+    [
+      create(
+        "turn-item",
+        item_id,
+        Entities.turn_item(ids, item_id, "user_message", next_ordinal(state), "completed", at, %{
+          "createdBy" => message["createdBy"] || "user",
+          "creationSource" => message["creationSource"] || "web",
+          "messageId" => message_id,
+          "inputIntent" => intent,
+          "text" => message["text"] || "",
+          "attachments" => message["attachments"] || []
+        })
+      )
+    ]
+  end
 
   # The thread fields a command sets, as the Node server's projector sets them.
   defp thread_fields("thread.archive", _, _, at), do: %{"archivedAt" => at}
@@ -427,11 +534,29 @@ defmodule T3.Orchestration do
         {[], {:error, "unknown thread #{thread_id}"}}
 
       active = Enum.find(runs, &(&1["status"] in @active_statuses)) ->
-        restart =
-          command["deliveryIntent"] == "restart" or
-            get_in(command, ["dispatchMode", "type"]) == "restart_active"
+        intent = command["deliveryIntent"]
+        mode = get_in(command, ["dispatchMode", "type"])
+        steer = intent == "steer" or mode == "steer_active"
 
-        queue_run(state, thread, runs, command, if(restart, do: active["id"]))
+        # As the Node server resolves it: steer a running turn that can take it,
+        # else queue; a restart (or a steer that cannot be) interrupts and goes first.
+        auto_steer =
+          intent in [nil, "auto"] and mode != "queue_after_active" and
+            active["status"] in ["running", "waiting"]
+
+        cond do
+          intent == "restart" or mode == "restart_active" ->
+            queue_run(state, thread, runs, command, active["id"])
+
+          (steer or auto_steer) and steerable?(active) ->
+            {[], {:ok, {:steer, active}}}
+
+          steer ->
+            queue_run(state, thread, runs, command, active["id"])
+
+          true ->
+            queue_run(state, thread, runs, command, nil)
+        end
 
       true ->
         new_run(state, thread, runs, command)

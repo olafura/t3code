@@ -53,14 +53,18 @@ defmodule T3.Claude.Protocol do
       })
 
   @spec user_message(String.t() | [map]) :: iodata
-  def user_message(content),
-    do:
-      JSON.encode_to_iodata!(%{
-        "type" => "user",
-        "message" => %{"role" => "user", "content" => content},
-        "parent_tool_use_id" => nil,
-        "session_id" => ""
-      })
+  def user_message(content, opts \\ []) do
+    message = %{
+      "type" => "user",
+      "message" => %{"role" => "user", "content" => content},
+      "parent_tool_use_id" => nil,
+      "session_id" => ""
+    }
+
+    # "now" steers the running turn instead of waiting for it to end.
+    message = if opts[:priority], do: Map.put(message, "priority", opts[:priority]), else: message
+    JSON.encode_to_iodata!(message)
+  end
 
   @spec permission_reply(String.t(), :allow | {:allow, map} | {:deny, String.t()}, map) :: iodata
   def permission_reply(request_id, decision, original_input) do

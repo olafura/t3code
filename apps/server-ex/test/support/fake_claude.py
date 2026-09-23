@@ -28,6 +28,13 @@ for line in sys.stdin:
         continue
     if msg.get("type") != "user":
         continue
+    # A steer cuts the running turn short and answers the new message in the same turn.
+    if msg.get("priority") == "now":
+        steer_text = msg["message"]["content"] if isinstance(msg["message"]["content"], str) else ""
+        send({"type": "result", "subtype": "error_during_execution", "is_error": True, "terminal_reason": "aborted_streaming", "session_id": session})
+        send({"type": "assistant", "session_id": session, "message": {"id": "m-steer", "role": "assistant", "content": [{"type": "text", "text": "steered: " + steer_text}]}})
+        send({"type": "result", "subtype": "success", "is_error": False, "result": "done", "session_id": session})
+        continue
     turn += 1
     text = msg["message"]["content"] if isinstance(msg["message"]["content"], str) else ""
     send({"type": "system", "subtype": "init", "session_id": session, "model": "claude-haiku"})

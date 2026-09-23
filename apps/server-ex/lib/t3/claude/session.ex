@@ -19,8 +19,9 @@ defmodule T3.Claude.Session do
   @spec start_link(keyword) :: GenServer.on_start()
   def start_link(opts), do: GenServer.start_link(__MODULE__, opts, hibernate_after: 15_000)
 
-  @spec send_message(GenServer.server(), String.t() | [map]) :: :ok
-  def send_message(session, content), do: GenServer.cast(session, {:user_message, content})
+  @spec send_message(GenServer.server(), String.t() | [map], keyword) :: :ok
+  def send_message(session, content, opts \\ []),
+    do: GenServer.cast(session, {:user_message, content, opts})
 
   @spec answer_permission(
           GenServer.server(),
@@ -67,8 +68,11 @@ defmodule T3.Claude.Session do
   end
 
   @impl true
-  def handle_cast({:user_message, content}, state) do
-    :ok = Subprocess.write_line(state.sub, Protocol.user_message(content))
+  def handle_cast({:user_message, content}, state),
+    do: handle_cast({:user_message, content, []}, state)
+
+  def handle_cast({:user_message, content, opts}, state) do
+    :ok = Subprocess.write_line(state.sub, Protocol.user_message(content, opts))
     {:noreply, state}
   end
 

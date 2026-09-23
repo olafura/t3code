@@ -20,7 +20,7 @@ defmodule T3.Claude.ThreadRuntime do
   alias T3.Orchestration
   alias T3.Orchestration.Entities
 
-  @state_version 2
+  @state_version 3
 
   # runtimeMode -> the CLI's permission mode; prompts it raises become approval
   # requests the user answers in the client.
@@ -45,6 +45,15 @@ defmodule T3.Claude.ThreadRuntime do
     case Registry.lookup(T3.Claude.Registry, thread_id) do
       [{pid, _}] -> GenServer.call(pid, :interrupt, 15_000)
       [] -> {:error, "no active Claude turn in this thread"}
+    end
+  end
+
+  @doc "Adds a message to the running turn of `run_id`; Claude takes it at once."
+  @spec steer(String.t(), String.t(), String.t()) :: :ok | {:error, String.t()}
+  def steer(thread_id, run_id, text) do
+    case Registry.lookup(T3.Claude.Registry, thread_id) do
+      [{pid, _}] -> GenServer.call(pid, {:steer, run_id, text})
+      [] -> {:error, "no running turn"}
     end
   end
 
@@ -94,7 +103,10 @@ defmodule T3.Claude.ThreadRuntime do
        # Open permission prompts: request id -> the CLI's control request id.
        requests: %{},
        # The session's permission mode, switched before a turn that needs another.
-       permission_mode: nil
+       permission_mode: nil,
+       # A steer ends the turn's current part with an "aborted" result; that one
+       # result is not the end of the turn.
+       steered: false
      }}
   end
 
@@ -169,6 +181,15 @@ defmodule T3.Claude.ThreadRuntime do
   end
 
   def handle_call(:interrupt, _from, state), do: {:reply, {:error, "no running turn"}, state}
+
+  def handle_call({:steer, run_id, text}, _from, %{turn: %{ids: %{run: run_id}}} = state)
+      when state.session != nil do
+    Session.send_message(state.session, text, priority: "now")
+    {:reply, :ok, %{state | steered: true}}
+  end
+
+  def handle_call({:steer, _run_id, _text}, _from, state),
+    do: {:reply, {:error, "no running turn"}, state}
 
   def handle_call({:respond, request_id, response}, _from, state) do
     case Map.pop(state.requests, request_id) do
@@ -261,7 +282,12 @@ defmodule T3.Claude.ThreadRuntime do
 
   @impl true
   def code_change(_old, state, _extra),
-    do: {:ok, state |> Map.put_new(:permission_mode, nil) |> Map.put(:v, @state_version)}
+    do:
+      {:ok,
+       state
+       |> Map.put_new(:permission_mode, nil)
+       |> Map.put_new(:steered, false)
+       |> Map.put(:v, @state_version)}
 
   # AskUserQuestion's questions; each is keyed by its text, as Claude keys answers.
   defp claude_questions(input) do
@@ -381,7 +407,14 @@ defmodule T3.Claude.ThreadRuntime do
     end)
   end
 
+  # The part of a steered turn that the new message cut short; the turn goes on.
+  defp message(%{"type" => "result", "terminal_reason" => reason}, %{steered: true} = state)
+       when reason in ["aborted_streaming", "aborted_tools"] and not state.interrupted,
+       do: %{state | steered: false}
+
   defp message(%{"type" => "result"} = result, state) do
+    state = %{state | steered: false}
+
     status =
       cond do
         state.interrupted -> "interrupted"

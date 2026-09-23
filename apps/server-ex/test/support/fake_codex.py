@@ -44,6 +44,7 @@ for line in sys.stdin:
         ctx = {"threadId": thread_id, "turnId": turn_id}
         send({"method": "turn/started", "params": {**ctx, "turn": {"id": turn_id, "status": "inProgress"}}})
         if "wait" in text:
+            waiting_ctx = ctx
             continue
         if "plan" in text:
             mode = (params.get("collaborationMode") or {}).get("mode")
@@ -77,6 +78,16 @@ for line in sys.stdin:
             send({"method": "item/agentMessage/delta", "params": {**ctx, "itemId": "msg-1", "delta": delta}})
         send({"method": "item/completed", "params": {**ctx, "item": {"type": "agentMessage", "id": "msg-1", "text": "Hello from codex"}}})
         send({"method": "turn/completed", "params": {**ctx, "turn": {"id": turn_id, "status": "completed"}}})
+    elif method == "turn/steer":
+        ctx = waiting_ctx
+        if params["expectedTurnId"] != ctx["turnId"]:
+            send({"id": mid, "error": {"code": -32600, "message": "turn moved on"}})
+            continue
+        send({"id": mid, "result": {"turnId": ctx["turnId"]}})
+        text = "steered: " + params["input"][0]["text"]
+        send({"method": "item/started", "params": {**ctx, "item": {"type": "agentMessage", "id": "msg-steer", "text": ""}}})
+        send({"method": "item/completed", "params": {**ctx, "item": {"type": "agentMessage", "id": "msg-steer", "text": text}}})
+        send({"method": "turn/completed", "params": {**ctx, "turn": {"id": ctx["turnId"], "status": "completed"}}})
     elif method == "turn/interrupt":
         send({"id": mid, "result": {}})
         send({"method": "turn/completed", "params": {"threadId": thread_id, "turn": {"id": params["turnId"], "status": "interrupted"}}})

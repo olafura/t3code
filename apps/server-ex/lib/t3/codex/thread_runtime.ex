@@ -44,6 +44,15 @@ defmodule T3.Codex.ThreadRuntime do
     end
   end
 
+  @doc "Adds a message to the running turn of `run_id` (`turn/steer`)."
+  @spec steer(String.t(), String.t(), String.t()) :: :ok | {:error, String.t()}
+  def steer(thread_id, run_id, text) do
+    case Registry.lookup(T3.Codex.Registry, thread_id) do
+      [{pid, _}] -> GenServer.call(pid, {:steer, run_id, text}, 30_000)
+      [] -> {:error, "no running turn"}
+    end
+  end
+
   @doc """
   Answers a prompt: an approval's `%{"decision" => ProviderApprovalDecision}`,
   questions' `%{"answers" => answers}`, or `%{"dismissed" => true}`.
@@ -115,6 +124,27 @@ defmodule T3.Codex.ThreadRuntime do
   end
 
   def handle_call(:interrupt, _from, state), do: {:reply, {:error, "no running turn"}, state}
+
+  # Codex refuses the steer if its turn has moved on, so a late steer fails cleanly.
+  def handle_call(
+        {:steer, run_id, text},
+        _from,
+        %{turn: %{ids: %{run: run_id}, native_turn_id: turn_id}} = state
+      ) do
+    params = %{
+      "threadId" => state.native_thread_id,
+      "expectedTurnId" => turn_id,
+      "input" => [%{"type" => "text", "text" => text}]
+    }
+
+    case Connection.call(state.conn, "turn/steer", params) do
+      {:ok, _} -> {:reply, :ok, state}
+      {:error, reason} -> {:reply, {:error, inspect(reason)}, state}
+    end
+  end
+
+  def handle_call({:steer, _run_id, _text}, _from, state),
+    do: {:reply, {:error, "no running turn"}, state}
 
   def handle_call({:respond, request_id, response}, _from, state) do
     case Map.pop(state.requests, request_id) do
