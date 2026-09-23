@@ -1,5 +1,7 @@
 import {
   FilesystemBrowseError,
+  OrchestrationGetFullThreadDiffError,
+  OrchestrationGetTurnDiffError,
   ProjectMutationError,
   OrchestrationV2DispatchCommandError,
   OrchestrationV2ThreadLaunchError,
@@ -146,57 +148,72 @@ export function makeV3Session(input: {
         })),
       );
 
-    // Commands run on the environment's node; failures surface as the contract errors.
-    const dispatchCommand = (command: { readonly commandId: string; readonly type: string }) =>
-      Effect.tryPromise({
-        try: () =>
-          socket.call(input.environmentId, ORCHESTRATION_V2_WS_METHODS.dispatchCommand, command),
-        catch: (cause) =>
-          new OrchestrationV2DispatchCommandError({
-            commandId: command.commandId as never,
-            commandType: command.type as never,
-            message: cause instanceof Error ? cause.message : String(cause),
-          }),
-      });
+    // RPCs run on the environment's node; a failure surfaces as the method's contract error.
+    const forward =
+      <R extends object, E>(
+        tag: string,
+        toError: (request: R, message: string, cause: unknown) => E,
+      ) =>
+      (request: R) =>
+        Effect.tryPromise({
+          try: () => socket.call(input.environmentId, tag, request),
+          catch: (cause) =>
+            toError(request, cause instanceof Error ? cause.message : String(cause), cause),
+        });
 
-    const launchThread = (request: { readonly commandId: string; readonly projectId: string }) =>
-      Effect.tryPromise({
-        try: () =>
-          socket.call(input.environmentId, ORCHESTRATION_V2_WS_METHODS.launchThread, request),
-        catch: (cause) =>
-          new OrchestrationV2ThreadLaunchError({
-            commandId: request.commandId as never,
-            projectId: request.projectId as never,
-            message: cause instanceof Error ? cause.message : String(cause),
-          }),
-      });
+    const dispatchCommand = forward(
+      ORCHESTRATION_V2_WS_METHODS.dispatchCommand,
+      (command: { readonly commandId: string; readonly type: string }, message) =>
+        new OrchestrationV2DispatchCommandError({
+          commandId: command.commandId as never,
+          commandType: command.type as never,
+          message,
+        }),
+    );
 
-    const mutateProject = (mutation: { readonly commandId: string }) =>
-      Effect.tryPromise({
-        try: () => socket.call(input.environmentId, WS_METHODS.projectsMutate, mutation),
-        catch: (cause) =>
-          new ProjectMutationError({
-            commandId: mutation.commandId as never,
-            message: cause instanceof Error ? cause.message : String(cause),
-          }),
-      });
+    const launchThread = forward(
+      ORCHESTRATION_V2_WS_METHODS.launchThread,
+      (request: { readonly commandId: string; readonly projectId: string }, message) =>
+        new OrchestrationV2ThreadLaunchError({
+          commandId: request.commandId as never,
+          projectId: request.projectId as never,
+          message,
+        }),
+    );
 
-    const browse = (request: { readonly partialPath: string }) =>
-      Effect.tryPromise({
-        try: () => socket.call(input.environmentId, WS_METHODS.filesystemBrowse, request),
-        catch: (cause) =>
-          new FilesystemBrowseError({
-            partialPath: request.partialPath as never,
-            failure: "read_directory_failed",
-            cause,
-          }),
-      });
+    const mutateProject = forward(
+      WS_METHODS.projectsMutate,
+      (mutation: { readonly commandId: string }, message) =>
+        new ProjectMutationError({ commandId: mutation.commandId as never, message }),
+    );
+
+    const browse = forward(
+      WS_METHODS.filesystemBrowse,
+      (request: { readonly partialPath: string }, _message, cause) =>
+        new FilesystemBrowseError({
+          partialPath: request.partialPath as never,
+          failure: "read_directory_failed",
+          cause,
+        }),
+    );
+
+    const getTurnDiff = forward(
+      ORCHESTRATION_V2_WS_METHODS.getTurnDiff,
+      (_request: object, message) => new OrchestrationGetTurnDiffError({ message }),
+    );
+
+    const getFullThreadDiff = forward(
+      ORCHESTRATION_V2_WS_METHODS.getFullThreadDiff,
+      (_request: object, message) => new OrchestrationGetFullThreadDiffError({ message }),
+    );
 
     const served: Record<string, (request: never) => unknown> = {
       [WS_METHODS.projectsMutate]: mutateProject,
       [WS_METHODS.filesystemBrowse]: browse,
       [ORCHESTRATION_V2_WS_METHODS.dispatchCommand]: dispatchCommand,
       [ORCHESTRATION_V2_WS_METHODS.launchThread]: launchThread,
+      [ORCHESTRATION_V2_WS_METHODS.getTurnDiff]: getTurnDiff,
+      [ORCHESTRATION_V2_WS_METHODS.getFullThreadDiff]: getFullThreadDiff,
       [ORCHESTRATION_V2_WS_METHODS.subscribeShell]: shell,
       [ORCHESTRATION_V2_WS_METHODS.subscribeThread]: thread,
       [WS_METHODS.serverGetConfig]: () => initialConfig,

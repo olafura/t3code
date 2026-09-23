@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vite-plus/test";
 import { ClusterSocket, type ShapeFrame } from "./clusterSocket.ts";
 
 class FakeSocket {
-  readyState = 0;
+  readyState: WebSocket["readyState"] = 0;
   sent: Array<Record<string, unknown>> = [];
   onopen: ((event: Event) => void) | null = null;
   onmessage: ((event: MessageEvent) => void) | null = null;
