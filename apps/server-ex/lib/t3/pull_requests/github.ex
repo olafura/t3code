@@ -316,22 +316,36 @@ defmodule T3.PullRequests.GitHub do
         if(cwd && File.dir?(cwd), do: [cd: cwd], else: []) ++
         if(opts[:input], do: [input: [opts[:input]]], else: [])
 
+    max = opts[:max_bytes] || :infinity
+
+    # Output past `:max_bytes` is dropped rather than held, and the answer refused.
     task =
       Task.async(fn ->
         [path | args]
         |> Exile.stream(exile)
-        |> Enum.reduce({[], [], nil}, fn
-          {:stdout, data}, {out, err, status} -> {[out, data], err, status}
-          {:stderr, data}, {out, err, status} -> {out, [err, data], status}
-          {:exit, status}, {out, err, _} -> {out, err, status}
+        |> Enum.reduce({[], [], 0, nil}, fn
+          {:stdout, data}, {out, err, size, status} when size < max ->
+            {[out, data], err, size + byte_size(data), status}
+
+          {:stdout, data}, {out, err, size, status} ->
+            {out, err, size + byte_size(data), status}
+
+          {:stderr, data}, {out, err, size, status} ->
+            {out, [err, data], size, status}
+
+          {:exit, status}, {out, err, size, _} ->
+            {out, err, size, status}
         end)
       end)
 
     case Task.yield(task, opts[:timeout] || @timeout) || Task.shutdown(task, :brutal_kill) do
-      {:ok, {out, _, {:status, 0}}} ->
+      {:ok, {_, _, size, {:status, 0}}} when size > max ->
+        {:error, {:too_large, "gh answered with more than #{max} bytes."}}
+
+      {:ok, {out, _, _, {:status, 0}}} ->
         {:ok, IO.iodata_to_binary(out)}
 
-      {:ok, {out, err, _}} ->
+      {:ok, {out, err, _, _}} ->
         {:error, failure(IO.iodata_to_binary(err), IO.iodata_to_binary(out))}
 
       nil ->
@@ -1365,6 +1379,157 @@ defmodule T3.PullRequests.GitHub do
   end
 
   # --- diffs ------------------------------------------------------------------------
+
+  @diff_timeout 60_000
+  @diff_max_bytes 8 * 1024 * 1024
+  @files_page 100
+
+  @doc """
+  `PullRequestDiffResult`: a slice of the patch. The whole change comes from `gh pr
+  diff` in one slice; GitHub refuses that past 300 files, and it can be too large to
+  hold, so then (and for one commit, or a cursor) the files API is read a page of a
+  hundred files at a time, the cursor being the page number.
+  """
+  def diff(ctx, cursor, commit) do
+    page = cursor && Regex.match?(~r/^[1-9][0-9]{0,6}$/, cursor) && String.to_integer(cursor)
+
+    cond do
+      commit != nil and not sha?(commit) ->
+        {:error, {:failed, "The commit is not one this change can name."}}
+
+      cursor != nil and not is_integer(page) ->
+        {:error, {:failed, "The diff cannot be carried on from that cursor."}}
+
+      cursor != nil or commit != nil ->
+        files_page(ctx, page || 1, commit)
+
+      true ->
+        args = ["pr", "diff", "#{ctx.number}"] ++ repo_args(ctx) ++ ["--color", "never"]
+
+        case gh(ctx.cwd, args, timeout: @diff_timeout, max_bytes: @diff_max_bytes) do
+          {:ok, patch} ->
+            {:ok, %{"patch" => patch, "truncated" => false, "nextCursor" => nil}}
+
+          # Refused (past 300 files) or too large: the files API serves it in pages. A
+          # fallback that fails too reports the refusal, which explains the page.
+          {:error, {reason, _}} = refused when reason in [:failed, :too_large] ->
+            with {:error, _} <- files_page(ctx, 1, nil), do: refused
+
+          error ->
+            error
+        end
+    end
+  end
+
+  # One page of files as a unified patch: the files API gives each file's hunks with
+  # no `diff --git` header, so the headers are written here.
+  defp files_page(ctx, page, commit) do
+    {owner, name} = split(ctx.repository)
+    paging = "per_page=#{@files_page}&page=#{page}"
+
+    args =
+      if commit,
+        do: ["repos/#{owner}/#{name}/commits/#{commit}?#{paging}", "--jq", ".files // []"],
+        else: ["repos/#{owner}/#{name}/pulls/#{ctx.number}/files?#{paging}"]
+
+    case gh(ctx.cwd, ["api", "--hostname", ctx.host | args],
+           timeout: @diff_timeout,
+           max_bytes: @diff_max_bytes
+         ) do
+      {:ok, out} ->
+        case JSON.decode(out) do
+          {:ok, files} when is_list(files) ->
+            sections =
+              for %{"filename" => path} = file when is_binary(path) <- files, do: file_patch(file)
+
+            omitted = for {_, stat} <- sections, stat, do: stat
+
+            {:ok,
+             %{
+               "patch" => Enum.map_join(sections, &elem(&1, 0)),
+               "truncated" => omitted != [],
+               # Counted before decoding, so a page of unreadable files still pages on.
+               "nextCursor" => if(length(files) >= @files_page, do: "#{page + 1}")
+             }
+             |> put_present("omittedFileStats", if(omitted != [], do: omitted))}
+
+          _ ->
+            decoded(:error)
+        end
+
+      {:error, {:too_large, _}} ->
+        {:error, {:failed, "Page #{page} of the changed files was too large to read."}}
+
+      error ->
+        error
+    end
+  end
+
+  # A file's section and, for one whose hunks GitHub withheld (binary, or too large to
+  # inline), its own line counts. A pure rename has no hunks and nothing withheld.
+  defp file_patch(file) do
+    path = file["filename"]
+    hunks = file["patch"] || ""
+    status = String.downcase(file["status"] || "")
+    old = if status == "renamed", do: trimmed(file["previous_filename"]) || path, else: path
+    additions = file["additions"] || 0
+    deletions = file["deletions"] || 0
+
+    header =
+      ["diff --git #{quote_path("a/" <> old)} #{quote_path("b/" <> path)}"] ++
+        if(status == "added", do: ["new file mode 100644"], else: []) ++
+        if(status == "removed", do: ["deleted file mode 100644"], else: []) ++
+        if(status == "renamed",
+          do: ["rename from #{quote_path(old)}", "rename to #{quote_path(path)}"],
+          else: []
+        ) ++
+        [
+          "--- " <> if(status == "added", do: "/dev/null", else: quote_path("a/" <> old)),
+          "+++ " <> if(status == "removed", do: "/dev/null", else: quote_path("b/" <> path))
+        ]
+
+    body = if hunks == "" or String.ends_with?(hunks, "\n"), do: hunks, else: hunks <> "\n"
+
+    stat =
+      if hunks == "" and additions + deletions > 0,
+        do: %{"path" => path, "additions" => additions, "deletions" => deletions}
+
+    {Enum.join(header, "\n") <> "\n" <> body, stat}
+  end
+
+  @escapes %{
+    ?" => "\\\"",
+    ?\\ => "\\\\",
+    7 => "\\a",
+    ?\b => "\\b",
+    ?\t => "\\t",
+    ?\n => "\\n",
+    ?\v => "\\v",
+    ?\f => "\\f",
+    ?\r => "\\r"
+  }
+
+  @doc """
+  A path as a patch header carries it, as `quoteGitPatchPath` writes it: git's quoted
+  form when it holds a quote, a backslash or a control character.
+  """
+  def quote_path(path) do
+    escaped =
+      for <<char::utf8 <- path>>, into: "" do
+        cond do
+          escape = @escapes[char] ->
+            escape
+
+          char < 0x20 or char == 0x7F ->
+            "\\" <> String.pad_leading(Integer.to_string(char, 8), 3, "0")
+
+          true ->
+            <<char::utf8>>
+        end
+      end
+
+    if escaped == path, do: path, else: ~s("#{escaped}")
+  end
 
   @doc "Both sides of one file of the pull request (or of one of its commits)."
   def file_contents(ctx, input) do

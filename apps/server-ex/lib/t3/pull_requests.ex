@@ -424,6 +424,28 @@ defmodule T3.PullRequests do
         GitHub.set_files_viewed(ctx, input["files"] || [])
       end)
 
+  @doc "`POST /api/pull-requests/diff`: a slice of the patch (`PullRequestDiffResult`)."
+  def diff(input),
+    do:
+      read(input, "diff", fn _project, ctx ->
+        GitHub.diff(ctx, input["cursor"], input["commit"])
+      end)
+
+  @doc "`diff/1` on the node that holds the project, for a request that reached any node."
+  def diff_on_project_node(input) do
+    id = input["projectId"]
+
+    owner =
+      Enum.find_value(T3.Shell.rows(), node(), fn
+        {{node, ^id}, {"project", _}} -> node
+        _ -> nil
+      end)
+
+    :erpc.call(owner, __MODULE__, :diff, [input], 150_000)
+  catch
+    _, _ -> refuse("diff", "The node holding this project is unavailable.")
+  end
+
   @doc "The host-native stack a pull request is in, or nil."
   def stack(ref), do: read(ref, "stack", fn _project, ctx -> GitHub.stack(ctx) end)
 

@@ -165,6 +165,22 @@ defmodule T3.Web.Router do
     end)
   end
 
+  # A pull request's patch, which is large enough to want HTTP rather than the socket.
+  post "/api/pull-requests/diff" do
+    with_scope(conn, "orchestration:read", fn _session ->
+      with {:ok, input} <- json_body(conn) do
+        case T3.PullRequests.diff_on_project_node(input) do
+          {:ok, result} ->
+            {200, result}
+
+          {:error, %{"_tag" => tag} = error} ->
+            status = if tag == "PullRequestUnavailableError", do: 503, else: 502
+            {status, Map.delete(error, "message")}
+        end
+      end
+    end)
+  end
+
   get "/ws" do
     conn = fetch_query_params(conn)
 
@@ -220,7 +236,17 @@ defmodule T3.Web.Router do
         end
 
       :error ->
-        json(conn, 401, %{"_tag" => "EnvironmentAuthorizationError", "message" => "unauthorized"})
+        reason =
+          if get_req_header(conn, "authorization") == [],
+            do: "missing_credential",
+            else: "invalid_credential"
+
+        json(conn, 401, %{
+          "_tag" => "EnvironmentAuthInvalidError",
+          "code" => "auth_invalid",
+          "reason" => reason,
+          "traceId" => trace_id()
+        })
     end
   end
 

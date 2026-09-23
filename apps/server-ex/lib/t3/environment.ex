@@ -23,6 +23,9 @@ defmodule T3.Environment do
       "capabilities" => %{
         "repositoryIdentity" => false,
         "serverResolvedCommandContext" => true,
+        # GitHub pull requests through `gh` (`T3.PullRequests`), diff over HTTP.
+        "pullRequests" => true,
+        "pullRequestChecks" => true,
         # Files besides images upload to `T3.Attachments` too.
         "fileAttachments" => %{"maxUploadBytes" => 50 * 1024 * 1024}
       }

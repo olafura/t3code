@@ -545,6 +545,125 @@ defmodule T3.PullRequestsTest do
              PullRequests.Checkout.prepare(input)
   end
 
+  describe "POST /api/pull-requests/diff" do
+    setup %{dir: dir} do
+      Application.put_env(:t3, :port, 0)
+      start_supervised!(T3.Auth)
+      {:ok, {_ip, port}} = ThousandIsland.listener_info(start_supervised!(T3.Web))
+      {:ok, _} = Application.ensure_all_started(:inets)
+
+      {:ok, token, _, _} =
+        T3.Auth.exchange(T3.Auth.create_pairing_token(Path.join(dir, "t3.sqlite")))
+
+      %{url: "http://127.0.0.1:#{port}/api/pull-requests/diff", token: token}
+    end
+
+    test "the whole change comes from gh pr diff", %{dir: dir, url: url, token: token} do
+      patch = "diff --git a/a.txt b/a.txt\n--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-a\n+b\n"
+
+      rules!(dir, [
+        %{
+          "args" => ["pr diff 5", "--repo github.com/acme/widgets", "--color never"],
+          "stdout" => patch
+        }
+      ])
+
+      assert {200, %{"patch" => ^patch, "truncated" => false, "nextCursor" => nil}} =
+               post(url, token, @ref)
+    end
+
+    test "a refused diff is read a page of files at a time", %{dir: dir, url: url, token: token} do
+      page_one =
+        for(
+          i <- 1..99,
+          do: %{
+            "filename" => "f#{i}.txt",
+            "status" => "modified",
+            "patch" => "@@ -1 +1 @@\n-a\n+b",
+            "additions" => 1,
+            "deletions" => 1
+          }
+        ) ++
+          [%{"filename" => "logo.png", "status" => "added", "additions" => 5, "deletions" => 0}]
+
+      page_two = [
+        %{
+          "filename" => "new name.txt",
+          "previous_filename" => "old.txt",
+          "status" => "renamed",
+          "additions" => 0,
+          "deletions" => 0
+        }
+      ]
+
+      rules!(dir, [
+        %{
+          "args" => ["pr diff 5"],
+          "exit" => 1,
+          "stderr" => "HTTP 406: Sorry, the diff exceeded the maximum number of files (300)."
+        },
+        %{"args" => ["pulls/5/files?per_page=100&page=1"], "stdout" => page_one},
+        %{"args" => ["pulls/5/files?per_page=100&page=2"], "stdout" => page_two}
+      ])
+
+      assert {200, first} = post(url, token, @ref)
+      assert %{"nextCursor" => "2", "truncated" => true} = first
+
+      assert first["omittedFileStats"] == [
+               %{"path" => "logo.png", "additions" => 5, "deletions" => 0}
+             ]
+
+      assert first["patch"] =~
+               "diff --git a/f1.txt b/f1.txt\n--- a/f1.txt\n+++ b/f1.txt\n@@ -1 +1 @@\n-a\n+b\n"
+
+      assert first["patch"] =~
+               "diff --git a/logo.png b/logo.png\nnew file mode 100644\n--- /dev/null\n+++ b/logo.png\n"
+
+      assert {200, second} = post(url, token, Map.put(@ref, "cursor", "2"))
+      assert %{"nextCursor" => nil, "truncated" => false} = second
+      refute Map.has_key?(second, "omittedFileStats")
+      assert second["patch"] =~ "rename from old.txt\nrename to new name.txt\n"
+
+      assert {502, %{"_tag" => "PullRequestOperationError", "operation" => "diff"}} =
+               post(url, token, Map.put(@ref, "cursor", "nonsense"))
+    end
+
+    test "a client needs orchestration:read, and a host gh can read", %{
+      dir: dir,
+      url: url,
+      token: token
+    } do
+      {:ok, %{"credential" => credential}} =
+        T3.Auth.create_pairing_link(%{"scopes" => ["relay:read"]})
+
+      {:ok, relay_only, _, _} = T3.Auth.exchange(credential)
+
+      assert {403,
+              %{
+                "_tag" => "EnvironmentScopeRequiredError",
+                "requiredScope" => "orchestration:read"
+              }} =
+               post(url, relay_only, @ref)
+
+      assert {401, %{"_tag" => "EnvironmentAuthInvalidError", "reason" => "missing_credential"}} =
+               post(url, nil, @ref)
+
+      project!(dir, "p2", "https://gitlab.com/acme/app.git")
+
+      assert {503, %{"_tag" => "PullRequestUnavailableError", "reason" => "provider-unsupported"}} =
+               post(url, token, %{"projectId" => "p2", "repository" => "acme/app", "number" => 1})
+    end
+  end
+
+  defp post(url, token, body) do
+    headers = if token, do: [{~c"authorization", ~c"Bearer " ++ to_charlist(token)}], else: []
+
+    {:ok, {{_, status, _}, _, resp}} =
+      :httpc.request(:post, {url, headers, ~c"application/json", JSON.encode!(body)}, [], [])
+
+    {status, JSON.decode!(to_string(resp))}
+  end
+
   # --- helpers ------------------------------------------------------------------------
 
   defp git!(cwd, args) do
