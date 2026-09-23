@@ -111,6 +111,41 @@ defmodule T3.Web.SocketTest do
            ] = skipped
   end
 
+  test "command output and file diffs stay on the node", %{port: port} do
+    command = %{"id" => "c1", "type" => "command_execution", "output" => "x", "exitCode" => nil}
+    change = %{"id" => "f1", "type" => "file_change", "path" => "a.ex", "diffStr" => "@@"}
+
+    {:ok, _} =
+      T3.Streams.commit("th-3", :thread, [
+        {"turn-item", "c1", %{"s" => command}},
+        {"turn-item", "f1", %{"s" => change}}
+      ])
+
+    shape = %{"type" => "stream", "node" => Atom.to_string(node()), "stream" => "th-3"}
+    client = connect(port) |> WsClient.send_json(%{"t" => "sub", "id" => 1, "shape" => shape})
+    {_live, [%{"rows" => rows}], client} = WsClient.recv_until(client, &(&1["t"] == "live"))
+
+    assert [["turn-item", "c1", sent_command], ["turn-item", "f1", sent_change]] = Enum.sort(rows)
+    refute Map.has_key?(sent_command, "output")
+    assert sent_change == Map.delete(change, "diffStr")
+
+    # Output streamed after the snapshot is trimmed too; only the failure survives.
+    {:ok, _} =
+      T3.Streams.commit("th-3", :thread, [{"turn-item", "c1", %{"a" => %{"output" => "more"}}}])
+
+    {:ok, last} =
+      T3.Streams.commit("th-3", :thread, [
+        {"turn-item", "c1", %{"a" => %{"output" => "boom"}, "s" => %{"exitCode" => 1}}}
+      ])
+
+    {frames, _} = collect_events(client, last, [])
+
+    assert [[^last, "turn-item", "c1", patch, _]] =
+             Enum.flat_map(frames, & &1["events"])
+
+    assert patch == %{"s" => %{"exitCode" => 1, "outputIndicatesFailure" => true}}
+  end
+
   defp collect_events(client, last, acc) do
     {frame, client} = WsClient.recv(client, 1_000)
     acc = [frame | acc]

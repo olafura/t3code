@@ -12,7 +12,7 @@ defmodule T3.Web.Socket do
 
   @behaviour WebSock
 
-  alias T3.Web.Protocol
+  alias T3.Web.{Protocol, Wire}
 
   @max_buffered 8 * 1024 * 1024
 
@@ -28,6 +28,8 @@ defmodule T3.Web.Socket do
       by_stream: %{},
       by_terminal: %{},
       buffers: %{},
+      # Turn item types by stream subscription, for trimming patches (`T3.Web.Wire`).
+      item_types: %{},
       flush_scheduled: false
     }
 
@@ -734,7 +736,8 @@ defmodule T3.Web.Socket do
           state
           | subs: subs,
             by_stream: Map.delete(state.by_stream, stream_id),
-            buffers: Map.delete(state.buffers, id)
+            buffers: Map.delete(state.buffers, id),
+            item_types: Map.delete(state.item_types, id)
         }
 
       {_, subs} ->
@@ -752,8 +755,11 @@ defmodule T3.Web.Socket do
       "at" => updated_at,
       "part" => part,
       "done" => part_state == :done,
-      "rows" => for({kind, eid, entity} <- rows, do: [kind, eid, entity])
+      "rows" => for({kind, eid, entity} <- rows, do: [kind, eid, Wire.entity(kind, entity)])
     }
+
+    types = Wire.types(frame["rows"], if(part == 0, do: %{}, else: state.item_types[id] || %{}))
+    state = %{state | item_types: Map.put(state.item_types, id, types)}
 
     buffers =
       if part_state == :done,
@@ -788,22 +794,42 @@ defmodule T3.Web.Socket do
   end
 
   defp flush(state) do
-    frames =
-      for {id, %{events: events}} <- state.buffers, events != [] do
-        events = events |> Enum.reverse() |> Protocol.coalesce()
+    {frames, item_types} =
+      for {id, %{events: events}} <- state.buffers,
+          events != [],
+          reduce: {[], state.item_types} do
+        {frames, item_types} ->
+          events = events |> Enum.reverse() |> Protocol.coalesce()
+          {wire, types} = wire_events(events, item_types[id] || %{})
 
-        Protocol.encode(%{
-          "t" => "events",
-          "id" => id,
-          "offset" => List.last(events).seq,
-          "events" => for(e <- events, do: [e.seq, e.kind, e.entity, e.patch, e.at])
-        })
+          # The offset stays the last event's, even when trimming dropped it.
+          frame =
+            Protocol.encode(%{
+              "t" => "events",
+              "id" => id,
+              "offset" => List.last(events).seq,
+              "events" => wire
+            })
+
+          {[frame | frames], Map.put(item_types, id, types)}
       end
 
     buffers =
       Map.new(state.buffers, fn {id, buffer} -> {id, %{buffer | events: [], bytes: 0}} end)
 
-    {frames, %{state | buffers: buffers}}
+    {Enum.reverse(frames), %{state | buffers: buffers, item_types: item_types}}
+  end
+
+  defp wire_events(events, types) do
+    {wire, types} =
+      Enum.reduce(events, {[], types}, fn e, {wire, types} ->
+        case Wire.patch(e.kind, e.entity, e.patch, types) do
+          {nil, types} -> {wire, types}
+          {patch, types} -> {[[e.seq, e.kind, e.entity, patch, e.at] | wire], types}
+        end
+      end)
+
+    {Enum.reverse(wire), types}
   end
 
   # The flush message lands behind everything already in the mailbox, so each

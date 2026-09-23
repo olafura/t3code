@@ -36,7 +36,11 @@ defmodule T3.Rpc do
 
     {:ok,
      %{
-       "rows" => for({kind, id, entity} <- T3.StreamState.rows(state), do: [kind, id, entity]),
+       "rows" =>
+         for(
+           {kind, id, entity} <- T3.StreamState.rows(state),
+           do: [kind, id, T3.Web.Wire.entity(kind, entity)]
+         ),
        "offset" => state.seq,
        "at" => state.updated_at
      }}
