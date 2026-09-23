@@ -122,10 +122,7 @@ defmodule T3.Orchestration do
       end)
 
     with :ok <- detached do
-      for registry <- [T3.Codex.Registry, T3.Claude.Registry, T3.Acp.Registry],
-          {pid, _} <- Registry.lookup(registry, thread_id),
-          do: DynamicSupervisor.terminate_child(T3.Codex.Supervisor, pid)
-
+      stop_runtimes(thread_id)
       {:ok, %{"sequence" => sequence(thread_id)}}
     end
   end
@@ -345,6 +342,47 @@ defmodule T3.Orchestration do
           end
         )
     end)
+  end
+
+  @doc """
+  Stops an idle thread's provider processes and marks its sessions stopped; the
+  next run starts them again and resumes the provider's thread. Refused while a
+  run is active.
+  """
+  def release_session(thread_id) do
+    released =
+      T3.Streams.transact(thread_id, :thread, fn state ->
+        if Enum.any?(StreamState.list(state, "run"), &(&1["status"] in @active_statuses)) do
+          {[], :busy}
+        else
+          at = Entities.now()
+
+          changes =
+            for session <- StreamState.list(state, "provider-session"),
+                session["status"] != "stopped",
+                do:
+                  upsert(
+                    state,
+                    "provider-session",
+                    session["id"],
+                    &Map.merge(&1, %{"status" => "stopped", "updatedAt" => at})
+                  )
+
+          {changes, :ok}
+        end
+      end)
+
+    if released == :ok, do: stop_runtimes(thread_id)
+    released
+  end
+
+  defp stop_runtimes(thread_id) do
+    for registry <- [T3.Codex.Registry, T3.Claude.Registry, T3.Acp.Registry],
+        Process.whereis(registry) != nil,
+        {pid, _} <- Registry.lookup(registry, thread_id),
+        do: DynamicSupervisor.terminate_child(T3.Codex.Supervisor, pid)
+
+    :ok
   end
 
   defp respond(thread_id, request_id, response) do
@@ -1041,7 +1079,12 @@ defmodule T3.Orchestration do
             state,
             "provider-session",
             session_id,
-            &Map.put(&1, "capabilities", fresh_session["capabilities"])
+            # A session stopped while idle is ready again.
+            &Map.merge(&1, %{
+              "capabilities" => fresh_session["capabilities"],
+              "status" => "ready",
+              "cwd" => cwd
+            })
           ),
         else: create("provider-session", session_id, fresh_session)
 

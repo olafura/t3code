@@ -1240,6 +1240,32 @@ defmodule T3.OrchestrationTest do
       assert "resumed at None fork False history True" in replies(state)
     end
 
+    test "an idle session is stopped, and the next run starts it again" do
+      Application.put_env(:t3, :idle_session_check_ms, nil)
+      Application.put_env(:t3, :session_idle_ms, 0)
+
+      on_exit(fn ->
+        Application.delete_env(:t3, :idle_session_check_ms)
+        Application.delete_env(:t3, :session_idle_ms)
+      end)
+
+      start_supervised!(T3.Orchestration.IdleSessions)
+      thread_id = launch("list the files")
+      _ = await_run(thread_id, "completed")
+      :ok = T3.Shell.subscribe(self())
+      await_shell_row(thread_id, &(&1["activeRunId"] == nil))
+
+      assert T3.Orchestration.IdleSessions.check() == [thread_id]
+      assert Registry.lookup(T3.Codex.Registry, thread_id) == []
+
+      assert [%{"status" => "stopped"}] =
+               StreamState.list(current(thread_id), "provider-session")
+
+      {:ok, _} = send_message(thread_id, "m2", "list the files again")
+      state = await_statuses(thread_id, ["completed", "completed"])
+      assert [%{"status" => "ready"}] = StreamState.list(state, "provider-session")
+    end
+
     test "a stopped session starts again on the next run and resumes its thread" do
       thread_id = launch("hello")
       await_statuses(thread_id, ["completed"])
@@ -1290,6 +1316,24 @@ defmodule T3.OrchestrationTest do
       # Only the fork's own work, not the history it started with.
       assert summary =~ "User: write fork.txt"
       refute summary =~ "User: hello"
+    end
+  end
+
+  defp await_shell_row(thread_id, done?) do
+    case T3.Shell.row(node(), thread_id) do
+      {"thread", row} ->
+        if done?.(row), do: :ok, else: await_shell_message(thread_id, done?)
+
+      _ ->
+        await_shell_message(thread_id, done?)
+    end
+  end
+
+  defp await_shell_message(thread_id, done?) do
+    receive do
+      {:t3_shell, {:rows, _, _}} -> await_shell_row(thread_id, done?)
+    after
+      5_000 -> flunk("the sidebar row never got there")
     end
   end
 
