@@ -30,6 +30,11 @@ defmodule T3.Rpc do
   end
 
   def handle("filesystem.browse", input), do: T3.Projects.browse(input)
+  def handle("projects.searchEntries", input), do: T3.Workspace.search_entries(input)
+  def handle("projects.listEntries", input), do: T3.Workspace.list_entries(input)
+  def handle("projects.readFile", input), do: T3.Workspace.read_file(input)
+  def handle("projects.writeFile", input), do: T3.Workspace.write_file(input)
+  def handle("projects.searchContents", input), do: T3.Workspace.search_contents(input)
   def handle("server.searchAcpRegistry", input), do: T3.Acp.Catalog.search(input)
   def handle("server.prepareAcpRegistryAgent", input), do: T3.Acp.Catalog.prepare(input)
 

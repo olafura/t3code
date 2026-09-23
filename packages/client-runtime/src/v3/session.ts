@@ -9,7 +9,17 @@ import {
   GitManagerServiceError,
   OrchestrationGetFullThreadDiffError,
   OrchestrationGetTurnDiffError,
+  ProjectListEntriesError,
+  type ProjectListEntriesInput,
   ProjectMutationError,
+  ProjectReadFileError,
+  type ProjectReadFileInput,
+  ProjectSearchContentsError,
+  type ProjectSearchContentsInput,
+  ProjectSearchEntriesError,
+  type ProjectSearchEntriesInput,
+  ProjectWriteFileError,
+  type ProjectWriteFileInput,
   ProviderAuthState,
   ProviderSetupError,
   ReviewDiffPreviewError,
@@ -408,6 +418,18 @@ export function makeV3Session(input: {
         ),
       );
 
+    // A project's files are read and searched on its node.
+    const projectFiles = <R extends { readonly cwd: string }, E>(
+      tag: string,
+      decodeError: (detail: unknown) => Option.Option<E>,
+      fallback: (request: R, message: string) => E,
+    ) =>
+      forward(tag, (request: R, message, cause) =>
+        decodeError(cause instanceof ClusterRpcError ? cause.detail : undefined).pipe(
+          Option.getOrElse(() => fallback(request, message)),
+        ),
+      );
+
     // Signing a provider in happens on the node that runs it.
     const setupError = (instanceId: string, operation: string, message: string, detail: unknown) =>
       decodeSetupError(detail).pipe(
@@ -609,6 +631,56 @@ export function makeV3Session(input: {
         WS_METHODS.serverDisableAcpRegistryProvider,
       ),
       [WS_METHODS.serverLogoutAcpRegistry]: acpRegistryCommand(WS_METHODS.serverLogoutAcpRegistry),
+      [WS_METHODS.projectsSearchEntries]: projectFiles(
+        WS_METHODS.projectsSearchEntries,
+        Schema.decodeUnknownOption(ProjectSearchEntriesError),
+        (request: ProjectSearchEntriesInput, detail) =>
+          new ProjectSearchEntriesError({
+            cwd: request.cwd,
+            queryLength: request.query.length,
+            limit: request.limit,
+            failure: "search_index_search_failed",
+            detail,
+          }),
+      ),
+      [WS_METHODS.projectsListEntries]: projectFiles(
+        WS_METHODS.projectsListEntries,
+        Schema.decodeUnknownOption(ProjectListEntriesError),
+        (request: ProjectListEntriesInput, detail) =>
+          new ProjectListEntriesError({
+            cwd: request.cwd,
+            failure: "directory_list_failed",
+            detail,
+          }),
+      ),
+      [WS_METHODS.projectsSearchContents]: projectFiles(
+        WS_METHODS.projectsSearchContents,
+        Schema.decodeUnknownOption(ProjectSearchContentsError),
+        (request: ProjectSearchContentsInput, detail) =>
+          new ProjectSearchContentsError({
+            cwd: request.cwd,
+            queryLength: request.query.length,
+            limit: request.limit,
+            failure: "search_index_search_failed",
+            detail,
+          }),
+      ),
+      [WS_METHODS.projectsReadFile]: projectFiles(
+        WS_METHODS.projectsReadFile,
+        Schema.decodeUnknownOption(ProjectReadFileError),
+        (request: ProjectReadFileInput) =>
+          new ProjectReadFileError({ ...request, failure: "operation_failed" }),
+      ),
+      [WS_METHODS.projectsWriteFile]: projectFiles(
+        WS_METHODS.projectsWriteFile,
+        Schema.decodeUnknownOption(ProjectWriteFileError),
+        (request: ProjectWriteFileInput) =>
+          new ProjectWriteFileError({
+            cwd: request.cwd,
+            relativePath: request.relativePath,
+            failure: "operation_failed",
+          }),
+      ),
       [WS_METHODS.providerAuthSubscribe]: providerAuthSubscribe,
       [WS_METHODS.providerAuthStart]: providerAuthCommand(WS_METHODS.providerAuthStart, "start"),
       [WS_METHODS.providerAuthRespond]: providerAuthCommand(
