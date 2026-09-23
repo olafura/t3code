@@ -297,41 +297,6 @@ defmodule T3.Checkpoint do
   defp count("-"), do: 0
   defp count(n), do: String.to_integer(n)
 
-  # Runs git in `cwd`. Output past `:max_bytes` is dropped.
-  defp git(cwd, args, opts \\ []) do
-    max = Keyword.get(opts, :max_bytes, 50_000_000)
+  defp git(cwd, args, opts \\ []), do: T3.Git.ok(cwd, args, opts)
 
-    {out, err, status} =
-      ["git" | args]
-      |> Exile.stream(
-        cd: cwd,
-        env: Keyword.get(opts, :env, []),
-        stderr: :consume,
-        ignore_epipe: true
-      )
-      |> Enum.reduce({[], [], 0, nil}, fn
-        {:stdout, data}, {out, err, size, status} when size < max ->
-          {[out, data], err, size + IO.iodata_length(data), status}
-
-        {:stdout, _}, acc ->
-          acc
-
-        {:stderr, data}, {out, err, size, status} ->
-          {out, [err, data], size, status}
-
-        {:exit, status}, {out, err, size, _} ->
-          {out, err, size, status}
-      end)
-      |> then(fn {out, err, _size, status} -> {out, err, status} end)
-
-    case status do
-      {:status, 0} ->
-        {:ok, IO.iodata_to_binary(out) |> binary_part(0, min(IO.iodata_length(out), max))}
-
-      other ->
-        {:error, {other, IO.iodata_to_binary(err) |> String.trim()}}
-    end
-  rescue
-    error -> {:error, Exception.message(error)}
-  end
 end

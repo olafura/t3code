@@ -14,6 +14,8 @@ defmodule T3.Rpc do
 
   def handle("projects.mutate", mutation), do: T3.Projects.mutate(mutation)
   def handle("filesystem.browse", input), do: T3.Projects.browse(input)
+  def handle("review.getDiffPreview", input), do: T3.Review.diff_preview(input)
+  def handle("review.getDiffFileContents", input), do: T3.Review.file_contents(input)
   def handle("terminal.open", input), do: T3.Terminal.open(input)
   def handle("terminal.write", input), do: T3.Terminal.write(input)
   def handle("terminal.resize", input), do: T3.Terminal.resize(input)
