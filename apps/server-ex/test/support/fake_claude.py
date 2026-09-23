@@ -1,7 +1,8 @@
 # Fake `claude -p --input-format stream-json --output-format stream-json` for tests.
 # Plays one turn per user message: thinking, a Bash tool call, and a streamed answer.
 # A message containing "wait" stays open until an interrupt control request; "approve"
-# asks permission for a command and "ask" asks a question (AskUserQuestion).
+# asks permission for a command, "ask" asks a question (AskUserQuestion), and "where"
+# says which message the session resumed at (--resume-session-at).
 import json, sys
 
 def send(msg):
@@ -10,6 +11,7 @@ def send(msg):
 
 session = "fake-session-1"
 turn = 0
+resume_at = next((a.split("=", 1)[1] for a in sys.argv if a.startswith("--resume-session-at=")), None)
 for line in sys.stdin:
     msg = json.loads(line)
     if msg.get("type") == "control_response":
@@ -40,6 +42,10 @@ for line in sys.stdin:
     send({"type": "system", "subtype": "init", "session_id": session, "model": "claude-haiku"})
     if "wait" in text:
         continue
+    if "where" in text:
+        send({"type": "assistant", "session_id": session, "uuid": f"uuid-{turn}", "message": {"id": f"m{turn}w", "role": "assistant", "content": [{"type": "text", "text": f"resumed at {resume_at}"}]}})
+        send({"type": "result", "subtype": "success", "is_error": False, "result": "done", "session_id": session})
+        continue
     if "approve" in text:
         send({"type": "control_request", "request_id": "perm-1", "request": {"subtype": "can_use_tool", "tool_name": "Bash", "input": {"command": "touch x"}}})
         continue
@@ -65,5 +71,5 @@ for line in sys.stdin:
     for d in ["Hel", "lo from ", "claude"]:
         ev({"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": d}})
     ev({"type": "content_block_stop", "index": 0})
-    send({"type": "assistant", "session_id": session, "message": {"id": f"m{turn}c", "role": "assistant", "content": [{"type": "text", "text": "Hello from claude"}]}})
+    send({"type": "assistant", "session_id": session, "uuid": f"uuid-{turn}", "message": {"id": f"m{turn}c", "role": "assistant", "content": [{"type": "text", "text": "Hello from claude"}]}})
     send({"type": "result", "subtype": "success", "is_error": False, "result": "Hello from claude", "session_id": session})

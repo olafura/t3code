@@ -48,6 +48,21 @@ defmodule T3.Acp.ThreadRuntime do
     end
   end
 
+  @doc """
+  ACP has no conversation truncation: a rollback starts the next turn in a new
+  session, without any of the old conversation.
+  """
+  @spec rollback(String.t(), map) :: {:ok, map} | {:error, String.t()}
+  def rollback(thread_id, _plan) do
+    reply =
+      case Registry.lookup(@registry, thread_id) do
+        [{pid, _}] -> GenServer.call(pid, :rollback)
+        [] -> :ok
+      end
+
+    with :ok <- reply, do: {:ok, %{"nativeThreadRef" => nil}}
+  end
+
   def start_link(thread_id),
     do:
       GenServer.start_link(__MODULE__, thread_id, name: {:via, Registry, {@registry, thread_id}})
@@ -135,6 +150,12 @@ defmodule T3.Acp.ThreadRuntime do
   end
 
   def handle_call(:interrupt, _from, state), do: {:reply, {:error, "no running turn"}, state}
+
+  def handle_call(:rollback, _from, %{turn: nil} = state),
+    do: {:reply, :ok, %{state | session_id: nil}}
+
+  def handle_call(:rollback, _from, state),
+    do: {:reply, {:error, "Interrupt the current turn before rewinding."}, state}
 
   def handle_call({:respond, request_id, decision}, _from, state) do
     case Map.pop(state.requests, request_id) do

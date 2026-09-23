@@ -55,6 +55,11 @@ defmodule T3.Orchestration do
     end
   end
 
+  def dispatch(%{"type" => "checkpoint.rollback", "threadId" => thread_id} = command) do
+    with :ok <- T3.Orchestration.Rollback.run(command),
+         do: {:ok, %{"sequence" => sequence(thread_id)}}
+  end
+
   def dispatch(%{"type" => "run.interrupt", "threadId" => thread_id} = command) do
     with :ok <- interrupt_any(thread_id, command["runId"]),
          do: {:ok, %{"sequence" => sequence(thread_id)}}
@@ -826,7 +831,12 @@ defmodule T3.Orchestration do
             state,
             "provider-thread",
             provider_thread_id,
-            &Map.merge(&1, %{"lastRunOrdinal" => ordinal, "providerSessionId" => session_id})
+            # A rolled-back head is where this run resumes the conversation.
+            &Map.merge(&1, %{
+              "lastRunOrdinal" => ordinal,
+              "providerSessionId" => session_id,
+              "nativeConversationHeadRef" => nil
+            })
           )
         ]
       else
@@ -935,7 +945,8 @@ defmodule T3.Orchestration do
             path: path
           }
         ),
-      native_thread_id: get_in(provider_thread || %{}, ["nativeThreadRef", "nativeId"])
+      native_thread_id: get_in(provider_thread || %{}, ["nativeThreadRef", "nativeId"]),
+      head: get_in(provider_thread || %{}, ["nativeConversationHeadRef", "nativeId"])
     }
 
     {changes, {:ok, turn}}

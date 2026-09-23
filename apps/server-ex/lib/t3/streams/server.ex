@@ -197,13 +197,7 @@ defmodule T3.Streams.Server do
 
   defp send_snapshot(state, pid) do
     # Creation order, which is the order lists such as runs and turn items are shown in.
-    created = state.stream.created
-
-    rows =
-      for({kind, by_id} <- state.stream.entities, {id, entity} <- by_id, do: {kind, id, entity})
-      |> Enum.sort_by(fn {kind, id, _} -> Map.get(created, {kind, id}, 0) end)
-
-    chunks = chunk_rows(rows, [], 0, [])
+    chunks = chunk_rows(StreamState.rows(state.stream), [], 0, [])
     last = length(chunks) - 1
 
     for {chunk, i} <- Enum.with_index(chunks),

@@ -172,6 +172,52 @@ defmodule T3.Checkpoint do
   defp diff_result(thread_id, from, to, diff),
     do: %{"threadId" => thread_id, "fromTurnCount" => from, "toTurnCount" => to, "diff" => diff}
 
+  @doc """
+  Puts the worktree back to the checkpoint at `ref`: tracked files as captured,
+  files the checkpoint lacks removed (ignored ones kept), the index left at HEAD.
+  """
+  def restore(cwd, ref) do
+    with {:ok, commit} <- git(cwd, ["rev-parse", "--verify", "--quiet", "#{ref}^{commit}"]),
+         commit = String.trim(commit),
+         {:ok, tracked} <-
+           git(cwd, ["ls-files", "--cached", "--with-tree=#{commit}", "-z", "--", "."]),
+         # An empty index and checkpoint have nothing for the pathspec to match.
+         {:ok, _} <-
+           if(tracked == "",
+             do: {:ok, ""},
+             else: git(cwd, ~w(restore --source #{commit} --worktree --staged -- .))
+           ),
+         # Restoring away the last tracked file can remove a nested workspace directory.
+         :ok <- File.mkdir_p(cwd),
+         :ok <- clean(cwd) do
+      if exists?(cwd, "HEAD"), do: git(cwd, ~w(reset --quiet -- .))
+      :ok
+    else
+      {:error, _} = error -> error
+      _ -> {:error, "checkpoint #{ref} is missing"}
+    end
+  end
+
+  defp clean(cwd) do
+    case git(cwd, ~w(clean -fd -- .)) do
+      {:ok, _} ->
+        :ok
+
+      # Git can remove every child, then fail to remove `./` itself.
+      {:error, {1, "warning: failed to remove ./" <> _}} = error ->
+        if File.ls(cwd) == {:ok, []}, do: :ok, else: error
+
+      error ->
+        error
+    end
+  end
+
+  @doc "Deletes a checkpoint ref; a missing one is fine."
+  def delete_ref(cwd, ref) do
+    git(cwd, ["update-ref", "-d", ref])
+    :ok
+  end
+
   @doc "Whether `cwd` is inside a git worktree."
   def repo?(cwd),
     do: File.dir?(cwd) and git(cwd, ~w(rev-parse --is-inside-work-tree)) == {:ok, "true\n"}

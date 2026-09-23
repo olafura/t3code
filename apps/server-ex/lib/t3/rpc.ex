@@ -29,6 +29,19 @@ defmodule T3.Rpc do
     end
   end
 
+  # One thread's entities at once, for a client that needs its projection without
+  # subscribing (a socket holds one subscription per stream).
+  def handle("t3.threadRows", %{"threadId" => thread_id}) do
+    state = T3.Streams.Server.state(T3.Streams.ensure(thread_id))
+
+    {:ok,
+     %{
+       "rows" => for({kind, id, entity} <- T3.StreamState.rows(state), do: [kind, id, entity]),
+       "offset" => state.seq,
+       "at" => state.updated_at
+     }}
+  end
+
   def handle("filesystem.browse", input), do: T3.Projects.browse(input)
   def handle("projects.searchEntries", input), do: T3.Workspace.search_entries(input)
   def handle("attachments.createUploadUrl", input), do: T3.Attachments.create_upload_url(input)

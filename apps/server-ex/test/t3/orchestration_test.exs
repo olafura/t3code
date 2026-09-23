@@ -704,6 +704,135 @@ defmodule T3.OrchestrationTest do
     end
   end
 
+  describe "checkpoint rollback" do
+    # A thread working in `work` as its own worktree, so files can be restored.
+    defp launch_in(work, text, instance) do
+      thread_id = "thread-#{System.unique_integer([:positive])}"
+      :ok = T3.Streams.subscribe(thread_id, self(), nil)
+
+      {:ok, _} =
+        Orchestration.launch_thread(%{
+          "commandId" => "cmd-1",
+          "threadId" => thread_id,
+          "projectId" => "project-1",
+          "title" => "Rewind",
+          "modelSelection" => %{"instanceId" => instance, "model" => "gpt-5.4"},
+          "runtimeMode" => "full-access",
+          "interactionMode" => "default",
+          "workspaceStrategy" => %{
+            "type" => "existing_worktree",
+            "worktreePath" => work,
+            "branch" => "main"
+          },
+          "initialMessage" => %{"messageId" => "msg-user-1", "text" => text, "attachments" => []}
+        })
+
+      thread_id
+    end
+
+    defp rollback(thread_id, ordinal, extra \\ %{}) do
+      scope_id = T3.Checkpoint.scope_id(thread_id)
+
+      Orchestration.dispatch(
+        Map.merge(
+          %{
+            "type" => "checkpoint.rollback",
+            "commandId" => "cmd-rollback",
+            "threadId" => thread_id,
+            "scopeId" => scope_id,
+            "checkpointId" => T3.Checkpoint.checkpoint_id(scope_id, ordinal)
+          },
+          extra
+        )
+      )
+    end
+
+    test "Codex drops the later turns, the files go back, and the next run diffs from there",
+         %{work: work} do
+      thread_id = launch_in(work, "write a.txt", "codex")
+      await_statuses(thread_id, ["completed"])
+      {:ok, _} = send_message(thread_id, "msg-user-2", "write b.txt")
+      await_statuses(thread_id, ["completed", "completed"])
+
+      assert {:ok, _} = rollback(thread_id, 1)
+
+      state = current(thread_id)
+      assert ["completed", "rolled_back"] = Enum.map(runs(state), & &1["status"])
+      assert File.exists?(Path.join(work, "a.txt"))
+      refute File.exists?(Path.join(work, "b.txt"))
+
+      assert [%{"lastRunOrdinal" => 1, "nativeThreadRef" => %{"nativeId" => native}}] =
+               StreamState.list(state, "provider-thread")
+
+      # Paginated history is cut before the first dropped turn.
+      assert native == "native-thread-1-before-native-turn-2"
+
+      assert %{"status" => "stale"} =
+               StreamState.get(state, "checkpoint")[
+                 T3.Checkpoint.checkpoint_id(T3.Checkpoint.scope_id(thread_id), 2)
+               ]
+
+      {:ok, _} = send_message(thread_id, "msg-user-3", "write c.txt")
+      state = await_statuses(thread_id, ["completed", "rolled_back", "completed"])
+
+      assert %{"files" => [%{"path" => "c.txt"}]} =
+               StreamState.get(state, "checkpoint")[
+                 T3.Checkpoint.checkpoint_id(T3.Checkpoint.scope_id(thread_id), 3)
+               ]
+    end
+
+    test "a legacy Codex thread drops its later turns by count", %{work: work} do
+      Application.put_env(:t3, :codex_command, [
+        "env",
+        "FAKE_CODEX_LEGACY=1",
+        "python3",
+        "-u",
+        @fake_codex
+      ])
+
+      thread_id = launch_in(work, "write a.txt", "codex")
+      await_statuses(thread_id, ["completed"])
+      {:ok, _} = send_message(thread_id, "msg-user-2", "write b.txt")
+      await_statuses(thread_id, ["completed", "completed"])
+
+      assert {:ok, _} = rollback(thread_id, 1)
+
+      assert [%{"nativeThreadRef" => %{"nativeId" => "native-thread-1-dropped-1"}}] =
+               StreamState.list(current(thread_id), "provider-thread")
+    end
+
+    test "files are only restored in a worktree of the thread's own" do
+      thread_id = launch("write a.txt")
+      await_statuses(thread_id, ["completed"])
+      {:ok, _} = send_message(thread_id, "msg-user-2", "write b.txt")
+      await_statuses(thread_id, ["completed", "completed"])
+
+      assert {:error, "File restore requires an isolated worktree." <> _} = rollback(thread_id, 1)
+
+      # Rewinding only the conversation leaves the files alone.
+      assert {:ok, _} = rollback(thread_id, 1, %{"restoreFiles" => false})
+      assert ["completed", "rolled_back"] = Enum.map(runs(current(thread_id)), & &1["status"])
+      assert File.exists?("b.txt")
+    end
+
+    test "Claude resumes the next turn at the last message of the kept turn", %{work: work} do
+      thread_id = launch_in(work, "hello", "claudeAgent")
+      await_statuses(thread_id, ["completed"])
+      {:ok, _} = send_message(thread_id, "msg-user-2", "hello again")
+      await_statuses(thread_id, ["completed", "completed"])
+
+      assert {:ok, _} = rollback(thread_id, 1, %{"restoreFiles" => false})
+
+      {:ok, _} = send_message(thread_id, "msg-user-3", "where are we")
+      state = await_statuses(thread_id, ["completed", "rolled_back", "completed"])
+
+      assert Enum.any?(
+               StreamState.list(state, "message"),
+               &(&1["text"] == "resumed at uuid-1")
+             )
+    end
+  end
+
   defp await_runs(thread_id, count) do
     receive do
       {:t3_stream, ^thread_id, _} ->

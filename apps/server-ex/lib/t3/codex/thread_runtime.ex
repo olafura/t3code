@@ -65,6 +65,11 @@ defmodule T3.Codex.ThreadRuntime do
     end
   end
 
+  @doc "Drops the last `drop` turns of the thread's Codex conversation (`thread/rollback`)."
+  @spec rollback(String.t(), map) :: {:ok, map} | {:error, String.t()}
+  def rollback(thread_id, plan),
+    do: thread_id |> ensure() |> GenServer.call({:rollback, plan}, 60_000)
+
   def start_link(thread_id),
     do:
       GenServer.start_link(__MODULE__, thread_id,
@@ -140,6 +145,23 @@ defmodule T3.Codex.ThreadRuntime do
     case Connection.call(state.conn, "turn/steer", params) do
       {:ok, _} -> {:reply, :ok, state}
       {:error, reason} -> {:reply, {:error, inspect(reason)}, state}
+    end
+  end
+
+  def handle_call({:rollback, _plan}, _from, %{turn: turn} = state) when turn != nil,
+    do: {:reply, {:error, "Interrupt the current turn before rewinding."}, state}
+
+  def handle_call({:rollback, plan}, _from, state) do
+    turn = %{cwd: plan.cwd, model: plan.model, native_thread_id: plan.native_thread_id}
+
+    with {:ok, state} <- connect(state, turn),
+         {:ok, state} <- ensure_native_thread(state, turn),
+         {:ok, %{"thread" => %{"id" => id}}} <- rewind(state, plan) do
+      {:reply, {:ok, %{"nativeThreadRef" => Entities.provider_ref(id)}},
+       %{state | native_thread_id: id}}
+    else
+      {:error, reason, state} -> {:reply, {:error, rpc_message(reason)}, state}
+      {:error, reason} -> {:reply, {:error, rpc_message(reason)}, state}
     end
   end
 
@@ -336,6 +358,30 @@ defmodule T3.Codex.ThreadRuntime do
       {:ok, %{state | turn: turn}}
     end
   end
+
+  # Paginated threads (current Codex) cut history before a turn; legacy threads
+  # only take a count of turns to drop.
+  defp rewind(state, plan) do
+    thread = state.native_thread_id
+
+    with {:error, _} <-
+           if(plan.first_dropped,
+             do:
+               Connection.call(state.conn, "thread/revert", %{
+                 "threadId" => thread,
+                 "beforeTurnId" => plan.first_dropped
+               }),
+             else: {:error, :no_turn_id}
+           ),
+         do:
+           Connection.call(state.conn, "thread/rollback", %{
+             "threadId" => thread,
+             "numTurns" => plan.drop
+           })
+  end
+
+  defp rpc_message(%{"message" => message}) when is_binary(message), do: message
+  defp rpc_message(reason), do: inspect(reason)
 
   defp connect(%{conn: nil} = state, turn) do
     cmd = Application.get_env(:t3, :codex_command, ["codex", "app-server"])

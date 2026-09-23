@@ -69,6 +69,28 @@ defmodule T3.Claude.ThreadRuntime do
     end
   end
 
+  @doc """
+  Rewinds the conversation: drops the live session, so the next turn resumes the
+  recorded session at the new head (`nativeConversationHeadRef`), or starts a new
+  one when the rollback goes back to the thread's start.
+  """
+  @spec rollback(String.t(), map) :: {:ok, map} | {:error, String.t()}
+  def rollback(thread_id, %{head: head}) do
+    reply =
+      case Registry.lookup(T3.Claude.Registry, thread_id) do
+        [{pid, _}] -> GenServer.call(pid, :rollback, 30_000)
+        [] -> :ok
+      end
+
+    with :ok <- reply do
+      {:ok,
+       if(head,
+         do: %{"nativeConversationHeadRef" => Entities.provider_ref(head, "claudeAgent")},
+         else: %{"nativeThreadRef" => nil, "nativeConversationHeadRef" => nil}
+       )}
+    end
+  end
+
   def start_link(thread_id),
     do:
       GenServer.start_link(__MODULE__, thread_id,
@@ -187,6 +209,14 @@ defmodule T3.Claude.ThreadRuntime do
     Session.send_message(state.session, text, priority: "now")
     {:reply, :ok, %{state | steered: true}}
   end
+
+  def handle_call(:rollback, _from, %{turn: nil} = state) do
+    if state.session, do: GenServer.stop(state.session)
+    {:reply, :ok, %{state | session: nil, session_id: nil, permission_mode: nil}}
+  end
+
+  def handle_call(:rollback, _from, state),
+    do: {:reply, {:error, "Interrupt the current turn before rewinding."}, state}
 
   def handle_call({:steer, _run_id, _text}, _from, state),
     do: {:reply, {:error, "no running turn"}, state}
@@ -365,6 +395,7 @@ defmodule T3.Claude.ThreadRuntime do
       model: turn.model,
       permission_mode: permission_mode(turn),
       resume: turn.native_thread_id,
+      resume_at: Map.get(turn, :head),
       partial_messages: true
     ]
 
@@ -406,7 +437,13 @@ defmodule T3.Claude.ThreadRuntime do
   defp message(%{"type" => "stream_event", "event" => event}, state),
     do: stream_event(event, state)
 
-  defp message(%{"type" => "assistant", "message" => %{"id" => id, "content" => content}}, state) do
+  defp message(
+         %{"type" => "assistant", "message" => %{"id" => id, "content" => content}} = message,
+         state
+       ) do
+    # The last assistant message is where a rollback to this turn resumes.
+    state = if message["uuid"], do: put_in(state.turn[:head], message["uuid"]), else: state
+
     content
     |> Enum.with_index()
     |> Enum.reduce(flush(state), fn {block, index}, state ->
@@ -575,6 +612,19 @@ defmodule T3.Claude.ThreadRuntime do
 
     state =
       Enum.reduce(Map.keys(state.requests), state, &resolve_request(&2, &1, nil, "cancelled"))
+
+    if head = state.turn[:head] do
+      commit(state, fn stream ->
+        [
+          Orchestration.upsert(
+            stream,
+            "provider-turn",
+            state.turn.ids.provider_turn,
+            &Map.put(&1, "nativeTurnRef", Entities.provider_ref(head, "claudeAgent"))
+          )
+        ]
+      end)
+    end
 
     finish(state, status, failure)
     %{state | turn: nil, items: %{}, blocks: %{}, requests: %{}}

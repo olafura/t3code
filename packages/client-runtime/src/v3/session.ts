@@ -30,6 +30,7 @@ import {
   ReviewDiffPreviewError,
   VcsError,
   OrchestrationV2DispatchCommandError,
+  OrchestrationV2GetThreadProjectionError,
   OrchestrationV2ThreadLaunchError,
   ORCHESTRATION_V2_WS_METHODS,
   ServerConfig,
@@ -640,6 +641,33 @@ export function makeV3Session(input: {
         ),
       );
 
+    // A thread's projection, from its entities fetched at once: a socket holds one
+    // subscription per stream, and the open thread view usually has it.
+    const threadProjection = (request: { readonly threadId: ThreadId }) => {
+      const failure = (message: string, cause?: unknown) =>
+        new OrchestrationV2GetThreadProjectionError({ threadId: request.threadId, message, cause });
+      return nodeCall("t3.threadRows", { threadId: request.threadId }).pipe(
+        Effect.mapError((cause) => failure(cause.message, cause)),
+        Effect.flatMap((result) => {
+          const { rows, offset, at } = result as {
+            readonly rows: ReadonlyArray<ShapeRow>;
+            readonly offset: number;
+            readonly at: number | null;
+          };
+          const [item] = new ThreadShapeFold(request.threadId).snapshot({
+            rows,
+            part: 0,
+            done: true,
+            offset,
+            at,
+          });
+          return item?.kind === "snapshot"
+            ? Effect.succeed(item.projection)
+            : Effect.fail(failure(`Thread ${request.threadId} was not found.`));
+        }),
+      );
+    };
+
     const served: Record<string, (request: never) => unknown> = {
       [WS_METHODS.projectsMutate]: mutateProject,
       [WS_METHODS.filesystemBrowse]: browse,
@@ -649,6 +677,7 @@ export function makeV3Session(input: {
       [ORCHESTRATION_V2_WS_METHODS.getFullThreadDiff]: getFullThreadDiff,
       [ORCHESTRATION_V2_WS_METHODS.subscribeShell]: shell,
       [ORCHESTRATION_V2_WS_METHODS.subscribeThread]: thread,
+      [ORCHESTRATION_V2_WS_METHODS.getThreadProjection]: threadProjection,
       [WS_METHODS.serverSearchAcpRegistry]: acpRegistryCommand(WS_METHODS.serverSearchAcpRegistry),
       [WS_METHODS.serverPrepareAcpRegistryAgent]: acpRegistryCommand(
         WS_METHODS.serverPrepareAcpRegistryAgent,

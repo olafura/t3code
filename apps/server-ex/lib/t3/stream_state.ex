@@ -56,6 +56,13 @@ defmodule T3.StreamState do
   defp put_kind(entities, kind, by_id) when map_size(by_id) == 0, do: Map.delete(entities, kind)
   defp put_kind(entities, kind, by_id), do: Map.put(entities, kind, by_id)
 
+  @doc "Every entity as `{kind, id, entity}`, in the order they were created."
+  @spec rows(t) :: [{String.t(), String.t(), Patch.entity()}]
+  def rows(state) do
+    for({kind, by_id} <- state.entities, {id, entity} <- by_id, do: {kind, id, entity})
+    |> Enum.sort_by(fn {kind, id, _} -> Map.get(state.created, {kind, id}, 0) end)
+  end
+
   @doc "A kind's entities in the order they were created."
   @spec list(t, String.t()) :: [Patch.entity()]
   def list(state, kind) do

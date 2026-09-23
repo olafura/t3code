@@ -17,7 +17,7 @@ defmodule T3.Orchestration.Entities do
     "threads" => %{
       "canCreateEmptyThread" => true,
       "canReadThreadSnapshot" => true,
-      "canRollbackThread" => false,
+      "canRollbackThread" => true,
       "canForkThread" => false,
       "canForkFromTurn" => false,
       "canForkFromSubagentThread" => false,
@@ -85,7 +85,7 @@ defmodule T3.Orchestration.Entities do
     "checkpointing" => %{
       "appCanCheckpointFilesystem" => false,
       "supportsNestedCheckpointScopes" => false,
-      "providerCanRollbackConversation" => false,
+      "providerCanRollbackConversation" => true,
       "providerRollbackReturnsSnapshot" => false,
       "providerCanReadConversationSnapshot" => false
     },

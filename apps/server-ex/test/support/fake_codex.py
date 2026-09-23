@@ -1,13 +1,16 @@
 # Fake `codex app-server` for tests: answers the handshake and plays a scripted turn.
 # A turn whose text contains "wait" stays running until turn/interrupt; "approve" asks
-# to run a command and "ask" asks a question (item/tool/requestUserInput).
-import json, sys
+# to run a command, "ask" asks a question (item/tool/requestUserInput), and "write NAME"
+# creates the file NAME.
+import json, os, sys
 
 def send(msg):
     sys.stdout.write(json.dumps(msg) + "\n")
     sys.stdout.flush()
 
 thread_id = "native-thread-1"
+# Current Codex keeps paginated history, which only rewinds with thread/revert.
+paginated = os.environ.get("FAKE_CODEX_LEGACY") != "1"
 turns = 0
 for line in sys.stdin:
     msg = json.loads(line)
@@ -46,6 +49,8 @@ for line in sys.stdin:
         if "wait" in text:
             waiting_ctx = ctx
             continue
+        if text.startswith("write "):
+            open(text.split()[1], "w").write(text + "\n")
         if "look" in text:
             kinds = [item["type"] for item in params["input"]]
             saved = "is saved at" in text
@@ -95,6 +100,15 @@ for line in sys.stdin:
         send({"method": "item/started", "params": {**ctx, "item": {"type": "agentMessage", "id": "msg-steer", "text": ""}}})
         send({"method": "item/completed", "params": {**ctx, "item": {"type": "agentMessage", "id": "msg-steer", "text": text}}})
         send({"method": "turn/completed", "params": {**ctx, "turn": {"id": ctx["turnId"], "status": "completed"}}})
+    elif method == "thread/revert" and paginated:
+        thread_id = f"native-thread-1-before-{params['beforeTurnId']}"
+        send({"id": mid, "result": {"thread": {"id": thread_id, "turns": []}}})
+    elif method == "thread/rollback" and paginated:
+        send({"id": mid, "error": {"code": -32600, "message": "paginated threads do not support thread/rollback"}})
+    elif method == "thread/rollback":
+        # The returned id says how many turns were dropped.
+        thread_id = f"native-thread-1-dropped-{params['numTurns']}"
+        send({"id": mid, "result": {"thread": {"id": thread_id}}})
     elif method == "turn/interrupt":
         send({"id": mid, "result": {}})
         send({"method": "turn/completed", "params": {"threadId": thread_id, "turn": {"id": params["turnId"], "status": "interrupted"}}})
