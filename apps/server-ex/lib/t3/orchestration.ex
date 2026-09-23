@@ -68,7 +68,7 @@ defmodule T3.Orchestration do
     # Uploads join the thread before the message names them.
     case T3.Attachments.claim(thread_id, command["attachments"] || []) do
       {:ok, attachments} ->
-        dispatch_message(thread_id, Map.put(command, "attachments", attachments))
+        dispatch_message(thread_id, claimed(command, attachments))
 
       {:error, _} = error ->
         error
@@ -287,12 +287,8 @@ defmodule T3.Orchestration do
 
   # An approval's decision, or answers to questions (`answers`, by question id).
   def dispatch(%{"type" => "runtime-request.respond", "threadId" => thread_id} = command) do
-    response =
-      if is_map(command["answers"]),
-        do: %{"answers" => command["answers"]},
-        else: %{"decision" => command["decision"] || "decline"}
-
-    respond(thread_id, command["requestId"], response)
+    with {:ok, response} <- response(thread_id, command),
+         do: respond(thread_id, command["requestId"], response)
   end
 
   # Closing questions without answering them.
@@ -300,6 +296,56 @@ defmodule T3.Orchestration do
     do: respond(thread_id, command["requestId"], %{"dismissed" => true})
 
   def dispatch(%{"type" => type}), do: {:error, "#{type} is not supported by this node yet"}
+
+  defp response(thread_id, %{"answers" => %{} = answers} = command) do
+    by_question = command["attachmentsByQuestionId"] || %{}
+
+    claimed =
+      Enum.reduce_while(by_question, {:ok, %{}}, fn {question, attachments}, {:ok, acc} ->
+        case T3.Attachments.claim(thread_id, attachments) do
+          {:ok, claimed} -> {:cont, {:ok, Map.put(acc, question, claimed)}}
+          {:error, message} -> {:halt, {:error, message <> " Attach it again."}}
+        end
+      end)
+
+    with {:ok, claimed} <- claimed do
+      answer = %{
+        "requestId" => command["requestId"],
+        "answers" => answers,
+        "attachmentsByQuestionId" => claimed
+      }
+
+      {:ok, %{"answers" => with_attachment_paths(answers, claimed), "questionAnswer" => answer}}
+    end
+  end
+
+  defp response(_thread_id, command), do: {:ok, %{"decision" => command["decision"] || "decline"}}
+
+  # Answers keep their provider's shape; files are named by where they are saved,
+  # as the Node server words it.
+  defp with_attachment_paths(answers, claimed) do
+    Enum.reduce(claimed, answers, fn
+      {_question, []}, answers ->
+        answers
+
+      {question, attachments}, answers ->
+        text =
+          Enum.map_join(attachments, "\n", fn attachment ->
+            "Attached #{attachment["type"] || "file"} #{JSON.encode!(attachment["name"])}: " <>
+              JSON.encode!(T3.Attachments.path(attachment) || "")
+          end)
+
+        Map.put(
+          answers,
+          question,
+          case answers[question] do
+            list when is_list(list) -> list ++ [text]
+            answer when is_binary(answer) and answer != "" -> answer <> "\n\n" <> text
+            _ -> text
+          end
+        )
+    end)
+  end
 
   defp respond(thread_id, request_id, response) do
     result =
@@ -403,10 +449,9 @@ defmodule T3.Orchestration do
     with %{"workspaceRoot" => _} <- project || {:error, "The project is not on this node."},
          {:ok, attachments} <- T3.Attachments.claim(thread_id, command["attachments"] || []),
          command =
-           Map.merge(command, %{
-             "attachments" => attachments,
-             "dispatchMode" => %{"type" => "defer_start"}
-           }),
+           command
+           |> claimed(attachments)
+           |> Map.put("dispatchMode", %{"type" => "defer_start"}),
          {:ok, {:prepared, run_id}} <-
            T3.Streams.transact(thread_id, :thread, &decide_message(&1, thread_id, command)) do
       :ok = T3.WorktreeSetup.start(thread_id, run_id, project, strategy, command["text"])
@@ -567,13 +612,33 @@ defmodule T3.Orchestration do
     end
   end
 
+  # A message's inline context records (`T3.ComposerContext`) travel with its text.
+  defp with_context(entity, %{"context" => %{} = context}),
+    do: Map.put(entity, "context", context)
+
+  defp with_context(entity, _source), do: entity
+
+  # Uploads claimed into the thread, with the context records that name them.
+  defp claimed(command, attachments) do
+    command
+    |> Map.put("attachments", attachments)
+    |> Map.put(
+      "context",
+      T3.ComposerContext.remap_attachments(
+        command["context"],
+        command["attachments"] || [],
+        attachments
+      )
+    )
+  end
+
   defp steerable?(run),
     do: driver_for(run["providerInstanceId"] || "codex") in ["codex", "claudeAgent"]
 
   # The provider takes the message first; only then does it join the run. If the turn
   # ended meanwhile, the message is sent like any other (queued or started).
   defp steer(thread_id, run, command) do
-    text = command["text"] || ""
+    text = T3.ComposerContext.for_provider(command["text"] || "", command["context"])
 
     case runtime(run["providerInstanceId"] || "codex").steer(thread_id, run["id"], text) do
       :ok ->
@@ -583,12 +648,13 @@ defmodule T3.Orchestration do
           ids = %{thread: thread_id, run: run["id"], root_node: run["rootNodeId"]}
 
           message =
-            Entities.message(ids, message_id, "user", text, false, at)
+            Entities.message(ids, message_id, "user", command["text"] || "", false, at)
             |> Map.merge(%{
               "attachments" => command["attachments"] || [],
               "createdBy" => command["createdBy"] || "user",
               "creationSource" => command["creationSource"] || "web"
             })
+            |> with_context(command)
 
           {[create("message", message_id, message)] ++
              steer_changes(state, run, message_id, message, "steer", at), :ok}
@@ -627,6 +693,7 @@ defmodule T3.Orchestration do
           "text" => message["text"] || "",
           "attachments" => message["attachments"] || []
         })
+        |> with_context(message)
       )
     ]
   end
@@ -892,6 +959,7 @@ defmodule T3.Orchestration do
         "createdBy" => command["createdBy"] || "user",
         "creationSource" => command["creationSource"] || "web"
       })
+      |> with_context(command)
 
     # A restart's message goes first; the others move down one.
     shifted =
@@ -1047,6 +1115,7 @@ defmodule T3.Orchestration do
                 Entities.message(ids, message_id, "user", text, false, at, %{
                   "attachments" => command["attachments"] || []
                 })
+                |> with_context(command)
               )
           ),
           create(
@@ -1072,6 +1141,7 @@ defmodule T3.Orchestration do
                 "attachments" => command["attachments"] || []
               }
             )
+            |> with_context(command)
           )
         ]
         |> Kernel.++([implemented_plan(state, thread_id, command["sourcePlanRef"])])
@@ -1083,7 +1153,11 @@ defmodule T3.Orchestration do
     turn = %{
       ids: ids,
       run_ordinal: ordinal,
-      text: T3.Orchestration.Handoff.prompt(handoff.context, text),
+      text:
+        T3.Orchestration.Handoff.prompt(
+          handoff.context,
+          T3.ComposerContext.for_provider(text, command["context"])
+        ),
       # A fork's first run continues the source's native thread from the fork point.
       fork: handoff.fork,
       cwd: cwd,

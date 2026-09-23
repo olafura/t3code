@@ -29,6 +29,12 @@ defmodule T3.Environment do
         # Files besides images upload to `T3.Attachments` too.
         "attachmentUploads" => true,
         "fileAttachments" => %{"maxUploadBytes" => 50 * 1024 * 1024},
+        "questionAttachments" => true,
+        # Context links become markers plus an envelope (`T3.ComposerContext`).
+        "inlineMessageContext" => true,
+        # A worktree that cannot be made fails its run; it never falls back to the root.
+        "requiredWorktreeBootstrap" => true,
+        "usagePriceOverrides" => true,
         # Thread commands `T3.Orchestration` understands (`@thread_updates`).
         "threadSettlement" => true,
         "threadSnooze" => true,

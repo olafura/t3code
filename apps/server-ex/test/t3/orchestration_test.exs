@@ -184,6 +184,41 @@ defmodule T3.OrchestrationTest do
              StreamState.get(state, "message")["m1"]
   end
 
+  test "inline context reaches the agent as markers and an envelope, and stays on the message" do
+    thread_id = "thread-#{System.unique_integer([:positive])}"
+    :ok = T3.Streams.subscribe(thread_id, self(), nil)
+    skill = %{"version" => 1, "contextId" => "ctx_s", "kind" => "skill", "name" => "pinchtab"}
+
+    {:ok, _} =
+      Orchestration.launch_thread(%{
+        "commandId" => "c",
+        "threadId" => thread_id,
+        "projectId" => "project-1",
+        "title" => "Context",
+        "modelSelection" => %{"instanceId" => "codex", "model" => "gpt-5.4"},
+        "runtimeMode" => "full-access",
+        "interactionMode" => "default",
+        "workspaceStrategy" => %{"type" => "root"},
+        "initialMessage" => %{
+          "messageId" => "m1",
+          "text" => "repeat with [$pinchtab](t3-context://v1/skill/ctx_s)",
+          "context" => %{"version" => 1, "records" => [skill]},
+          "attachments" => []
+        }
+      })
+
+    state = await_run(thread_id, "completed")
+
+    assert Enum.any?(
+             StreamState.list(state, "turn-item"),
+             &(&1["text"] ==
+                 "repeat with [Skill: $pinchtab; ref=ctx_s]\n\n<t3_context version=\"1\">\n" <>
+                   ~s(<context kind="skill" id="ctx_s">\nname: pinchtab\n</context>\n</t3_context>))
+           )
+
+    assert %{"context" => %{"records" => [^skill]}} = StreamState.get(state, "message")["m1"]
+  end
+
   describe "thread settings and plan mode" do
     test "thread commands set the thread's own fields" do
       thread_id = launch("list the files")
@@ -765,6 +800,49 @@ defmodule T3.OrchestrationTest do
 
         assert Enum.any?(StreamState.list(state, "turn-item"), &(&1["text"] == unquote(told)))
       end
+    end
+
+    test "a file attached to an answer reaches the agent as where it is saved" do
+      {:ok, %{"attachmentId" => id, "relativeUrl" => "/api/attachments/upload/" <> token}} =
+        T3.Attachments.create_upload_url(%{
+          "type" => "file",
+          "name" => "notes.txt",
+          "mimeType" => "text/plain",
+          "sizeBytes" => 5
+        })
+
+      :ok = T3.Attachments.store(token, "notes")
+      thread_id = launch("ask me")
+      request = await_request(thread_id)
+      file = %{"type" => "file", "id" => id, "name" => "notes.txt", "sizeBytes" => 5}
+
+      {:ok, _} =
+        Orchestration.dispatch(%{
+          "type" => "runtime-request.respond",
+          "threadId" => thread_id,
+          "requestId" => request["id"],
+          "answers" => %{"color" => "Red"},
+          "attachmentsByQuestionId" => %{"color" => [file]}
+        })
+
+      state = await_run(thread_id, "completed")
+
+      assert [%{"questionAnswer" => %{"answers" => %{"color" => "Red"}} = answer}] =
+               state
+               |> StreamState.list("turn-item")
+               |> Enum.filter(&(&1["type"] == "user_input_request"))
+
+      # The file now belongs to the thread, and the agent was told where it is.
+      assert [%{"id" => claimed, "name" => "notes.txt"}] =
+               answer["attachmentsByQuestionId"]["color"]
+
+      path = T3.Attachments.path(%{"id" => claimed})
+      assert File.read!(path) == "notes"
+
+      assert Enum.any?(
+               StreamState.list(state, "turn-item"),
+               &String.contains?(&1["text"] || "", ~s(Attached file \\"notes.txt\\": ))
+             )
     end
 
     test "dismissing a question tells Claude no and cancels the request" do

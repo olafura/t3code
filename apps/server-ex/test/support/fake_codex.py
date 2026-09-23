@@ -56,6 +56,11 @@ for line in sys.stdin:
             send({"method": "item/completed", "params": {**ctx, "item": {"type": "agentMessage", "id": "msg-where", "text": where}}})
             send({"method": "turn/completed", "params": {**ctx, "turn": {"id": turn_id, "status": "completed"}}})
             continue
+        if text.startswith("repeat"):
+            send({"method": "item/started", "params": {**ctx, "item": {"type": "agentMessage", "id": "msg-repeat", "text": ""}}})
+            send({"method": "item/completed", "params": {**ctx, "item": {"type": "agentMessage", "id": "msg-repeat", "text": text}}})
+            send({"method": "turn/completed", "params": {**ctx, "turn": {"id": turn_id, "status": "completed"}}})
+            continue
         if text.startswith("write "):
             open(text.split()[1], "w").write(text + "\n")
         if "look" in text:

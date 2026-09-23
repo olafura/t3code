@@ -364,7 +364,9 @@ defmodule T3.Orchestration.TurnWriter do
           stream,
           "turn-item",
           "turn-item:approval:#{native}",
-          &Map.merge(&1, %{"status" => item_status, "completedAt" => at, "updatedAt" => at})
+          &(&1
+            |> Map.merge(%{"status" => item_status, "completedAt" => at, "updatedAt" => at})
+            |> Map.merge(question_answer(decision)))
         ),
         Orchestration.upsert(
           stream,
@@ -377,6 +379,10 @@ defmodule T3.Orchestration.TurnWriter do
 
     state
   end
+
+  # What the user answered a question with, attachments included, for the question item.
+  defp question_answer(%{"questionAnswer" => answer}), do: %{"questionAnswer" => answer}
+  defp question_answer(_decision), do: %{}
 
   # A decision string, or a response's `decision`/`answers`.
   defp response_fields(nil), do: %{}
