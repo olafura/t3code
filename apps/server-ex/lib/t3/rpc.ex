@@ -44,6 +44,11 @@ defmodule T3.Rpc do
 
   def handle("filesystem.browse", input), do: T3.Projects.browse(input)
   def handle("shell.openInEditor", input), do: T3.Editors.open(input)
+  def handle("scheduledTasks.list", input), do: T3.ScheduledTasks.list(input)
+  def handle("scheduledTasks.upsert", input), do: T3.ScheduledTasks.upsert(input)
+  def handle("scheduledTasks.delete", input), do: T3.ScheduledTasks.delete(input)
+  def handle("scheduledTasks.setEnabled", input), do: T3.ScheduledTasks.set_enabled(input)
+  def handle("scheduledTasks.runNow", input), do: T3.ScheduledTasks.run_now(input)
   def handle("server.refreshProviders", input), do: T3.Environment.refresh_providers(input)
   def handle("t3.upsertKeybinding", input), do: T3.Keybindings.upsert(input)
   def handle("t3.removeKeybinding", input), do: T3.Keybindings.remove(input)

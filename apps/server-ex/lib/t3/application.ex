@@ -28,6 +28,7 @@ defmodule T3.Application do
           {Registry, keys: :unique, name: T3.Vcs.Registry},
           T3.Workspace,
           T3.WorktreeSetup,
+          T3.ScheduledTasks,
           {Registry, keys: :unique, name: T3.ProviderAuth.Registry},
           {DynamicSupervisor, name: T3.ProviderAuth.Supervisor, strategy: :one_for_one},
           {DynamicSupervisor, name: T3.Vcs.Supervisor, strategy: :one_for_one},

@@ -40,6 +40,8 @@ import {
   OrchestrationV2ThreadLaunchError,
   ORCHESTRATION_V2_WS_METHODS,
   type ResolvedKeybindingsConfig,
+  ScheduledTaskError,
+  ScheduledTaskListResult,
   ServerConfig,
   ServerProviders,
   ServerSettings,
@@ -103,6 +105,8 @@ function decodeConfig(raw: unknown): ServerConfig {
 const decodeProviders = Schema.decodeUnknownSync(Schema.toCodecJson(ServerProviders));
 const decodeAuthState = Schema.decodeUnknownSync(Schema.toCodecJson(ProviderAuthState));
 const decodeWorktreeSetup = Schema.decodeUnknownSync(Schema.toCodecJson(WorktreeSetupStreamEvent));
+const decodeScheduledTasks = Schema.decodeUnknownSync(Schema.toCodecJson(ScheduledTaskListResult));
+const decodeScheduledTaskError = Schema.decodeUnknownOption(ScheduledTaskError);
 const decodeSetupError = Schema.decodeUnknownOption(ProviderSetupError);
 const decodeTerminalError = Schema.decodeUnknownOption(TerminalError);
 const settingsCodec = Schema.toCodecJson(ServerSettings);
@@ -538,6 +542,18 @@ export function makeV3Session(input: {
         ),
     );
 
+    // Scheduled tasks run on their node; the list streams whole on every change.
+    const scheduledTasks = () =>
+      shapeStream(socket, { type: "scheduledTasks", node }, (frame) =>
+        frame.t === "scheduledTasks" ? [decodeScheduledTasks({ tasks: frame.tasks })] : [],
+      );
+    const scheduledTaskCommand = (tag: string) =>
+      forward(tag, (_request: object, message, cause) =>
+        decodeScheduledTaskError(cause instanceof ClusterRpcError ? cause.detail : undefined).pipe(
+          Option.getOrElse(() => new ScheduledTaskError({ message })),
+        ),
+      );
+
     // A new thread's worktree is prepared on its node.
     const worktreeSetup = (request: { readonly threadId: string }) =>
       shapeStream(socket, { type: "worktreeSetup", node, threadId: request.threadId }, (frame) =>
@@ -766,6 +782,14 @@ export function makeV3Session(input: {
       [WS_METHODS.serverUpsertKeybinding]: keybindingCommand("t3.upsertKeybinding"),
       [WS_METHODS.serverRemoveKeybinding]: keybindingCommand("t3.removeKeybinding"),
       [WS_METHODS.shellOpenInEditor]: openInEditor,
+      [WS_METHODS.scheduledTasksSubscribe]: scheduledTasks,
+      [WS_METHODS.scheduledTasksList]: scheduledTaskCommand(WS_METHODS.scheduledTasksList),
+      [WS_METHODS.scheduledTasksUpsert]: scheduledTaskCommand(WS_METHODS.scheduledTasksUpsert),
+      [WS_METHODS.scheduledTasksDelete]: scheduledTaskCommand(WS_METHODS.scheduledTasksDelete),
+      [WS_METHODS.scheduledTasksSetEnabled]: scheduledTaskCommand(
+        WS_METHODS.scheduledTasksSetEnabled,
+      ),
+      [WS_METHODS.scheduledTasksRunNow]: scheduledTaskCommand(WS_METHODS.scheduledTasksRunNow),
       [WS_METHODS.serverRefreshProviders]: refreshProviders,
       // Nodes have no background policy that client activity would steer.
       [WS_METHODS.serverReportClientActivity]: () => Effect.void,

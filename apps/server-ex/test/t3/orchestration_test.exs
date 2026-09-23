@@ -329,6 +329,41 @@ defmodule T3.OrchestrationTest do
     assert {:ok, %{"matches" => []}} = T3.Search.threads(%{"query" => "100%"})
   end
 
+  test "a scheduled task sends its prompt into its thread when run" do
+    start_supervised!(T3.ScheduledTasks)
+    thread_id = launch("hello")
+    await_statuses(thread_id, ["completed"])
+
+    {:ok, %{"task" => task}} =
+      T3.ScheduledTasks.upsert(%{
+        "title" => "Nightly",
+        "prompt" => "where are we",
+        "enabled" => false,
+        "schedule" => %{"type" => "fixed_time", "timeOfDay" => "03:00"},
+        "projectId" => "project-1",
+        "threadId" => thread_id,
+        "workspaceStrategy" => %{"type" => "root"},
+        "modelSelection" => %{"instanceId" => "codex", "model" => "gpt-5.4"},
+        "runtimeMode" => "full-access",
+        "interactionMode" => "default"
+      })
+
+    assert %{"nextRunAt" => nil, "lastRunStatus" => "never"} = task
+
+    assert {:ok, %{"task" => %{"lastRunStatus" => "succeeded", "runCount" => 1}}} =
+             T3.ScheduledTasks.run_now(%{"id" => task["id"]})
+
+    state = await_statuses(thread_id, ["completed", "completed"])
+    assert Enum.any?(StreamState.list(state, "message"), &(&1["text"] == "where are we"))
+
+    {:ok, %{"task" => %{"nextRunAt" => next}}} =
+      T3.ScheduledTasks.set_enabled(%{"id" => task["id"], "enabled" => true})
+
+    assert is_binary(next)
+    {:ok, _} = T3.ScheduledTasks.delete(%{"id" => task["id"]})
+    assert {:ok, %{"tasks" => []}} = T3.ScheduledTasks.list()
+  end
+
   describe "queued messages" do
     test "a message sent during a run waits in the queue and starts when the run ends" do
       thread_id = launch("wait for it")
