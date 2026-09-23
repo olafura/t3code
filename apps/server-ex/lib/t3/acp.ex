@@ -16,8 +16,13 @@ defmodule T3.Acp do
 
   @agents %{
     "opencode" => %{binary: "opencode", label: "OpenCode"},
-    "grok" => %{binary: "grok", label: "Grok"}
+    "grok" => %{binary: "grok", label: "Grok"},
+    # The Cursor SDK behind ACP (`packages/cursor-acp`), run by Node.
+    "cursor" => %{binary: "node", label: "Cursor"}
   }
+
+  # The Cursor sidecar: in a release under priv/, in a checkout in packages/.
+  @cursor_checkout Path.expand("../../../../packages/cursor-acp/src/main.ts", __DIR__)
 
   # Instances of this driver run an agent from the ACP Registry (`T3.Acp.Catalog`).
   @registry "acpRegistry"
@@ -77,6 +82,19 @@ defmodule T3.Acp do
         with {:ok, command, env} <- T3.Acp.Catalog.command(entry["config"] || %{}),
              do: {:ok, command, env ++ instance_env(entry)}
 
+      {"cursor", entry} ->
+        # Each instance keeps its own Cursor sign-in, owner-only, under the T3 home.
+        credentials =
+          Path.join([
+            Application.fetch_env!(:t3, :home),
+            "provider-auth",
+            instance,
+            "cursor.json"
+          ])
+
+        {:ok, ["node", cursor_script(), "--mode", runtime_mode || "approval-required"],
+         [{"T3_CURSOR_CREDENTIALS", credentials} | instance_env(entry)]}
+
       {driver, entry} ->
         binary = binary(driver, entry, @agents[driver].binary)
         {:ok, [binary | args(driver, runtime_mode)], instance_env(entry)}
@@ -84,6 +102,11 @@ defmodule T3.Acp do
       nil ->
         {:error, "unknown ACP agent #{instance}"}
     end
+  end
+
+  defp cursor_script do
+    released = Application.app_dir(:t3, "priv/cursor-acp/src/main.ts")
+    if File.exists?(released), do: released, else: @cursor_checkout
   end
 
   # Variables set on the instance in settings, such as an API key.

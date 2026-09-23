@@ -1,0 +1,19 @@
+{
+  "name": "@t3tools/cursor-acp",
+  "private": true,
+  "bin": {
+    "t3-cursor-acp": "./src/main.ts"
+  },
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vp test run"
+  },
+  "dependencies": {
+    "@cursor/sdk": "1.0.31"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "vite-plus": "catalog:"
+  }
+}

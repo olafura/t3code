@@ -37,4 +37,12 @@ defmodule T3.AcpTest do
     refute T3.Acp.enabled?("grok")
     assert {:error, _} = T3.Acp.command("nope")
   end
+
+  test "Cursor runs the SDK sidecar with its sign-in under the T3 home", %{tmp_dir: dir} do
+    assert {:ok, ["node", script, "--mode", "full-access"], env} =
+             T3.Acp.command("cursor", "full-access")
+
+    assert File.exists?(script)
+    assert {"T3_CURSOR_CREDENTIALS", Path.join(dir, "provider-auth/cursor/cursor.json")} in env
+  end
 end
