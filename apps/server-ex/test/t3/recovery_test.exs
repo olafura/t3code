@@ -53,6 +53,6 @@ defmodule T3.Orchestration.RecoveryTest do
     assert %{"status" => "idle"} = StreamState.get(state, "provider-thread")["p1"]
 
     # Settled threads are left alone.
-    assert Recovery.settle("t1") == 0
+    assert Recovery.settle("t1") == {0, nil}
   end
 end

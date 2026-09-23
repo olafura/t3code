@@ -17,7 +17,7 @@ defmodule T3.Application do
           T3.Streams,
           T3.Shell,
           # Turns this node was running when it stopped end as interrupted.
-          Supervisor.child_spec({Task, &T3.Orchestration.Recovery.run/0}, id: :recovery),
+          %{id: :recovery, start: {T3.Orchestration.Recovery, :start_link, []}},
           Supervisor.child_spec({Task, &T3.Search.backfill/0}, id: :search_backfill),
           {Registry, keys: :unique, name: T3.Codex.Registry},
           {Registry, keys: :unique, name: T3.Claude.Registry},
@@ -49,7 +49,9 @@ defmodule T3.Application do
           Supervisor.child_spec({Task, &T3.Codex.Provider.load/0}, id: :codex_models),
           {Registry, keys: :unique, name: T3.Acp.Registry},
           Supervisor.child_spec({Task, &T3.Acp.load/0}, id: :acp_models),
-          T3.Web
+          T3.Web,
+          # Turns the restart cut off go on, where the user asked for that.
+          Supervisor.child_spec({Task, &T3.Orchestration.Recovery.continue/0}, id: :continue)
         ] ++ discovery(home)
       else
         []

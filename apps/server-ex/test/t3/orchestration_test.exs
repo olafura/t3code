@@ -1240,6 +1240,35 @@ defmodule T3.OrchestrationTest do
       assert "resumed at None fork False history True" in replies(state)
     end
 
+    test "a turn a restart cut off goes on when the project asks for that" do
+      start_supervised!(T3.Settings)
+      {_, version} = T3.Settings.get()
+      {:ok, _} = T3.Settings.put(%{"continueThreadsAfterServerUpdate" => true}, version)
+
+      thread_id = launch("wait for it")
+      _ = await_run(thread_id, "running")
+      :ok = T3.Shell.subscribe(self())
+      await_shell_row(thread_id, &(&1["activeRunId"] != nil))
+
+      # The node stops: its provider processes go with it.
+      for {pid, _} <- Registry.lookup(T3.Codex.Registry, thread_id),
+          do: :ok = DynamicSupervisor.terminate_child(T3.Codex.Supervisor, pid)
+
+      assert thread_id in T3.Orchestration.Recovery.run()
+      :ok = T3.Orchestration.Recovery.continue()
+
+      state = await_statuses(thread_id, ["interrupted", "completed"])
+
+      assert %{"text" => "Continue where you left off.", "createdBy" => "agent"} =
+               StreamState.get(state, "message")[
+                 "message:restart-continuation:" <> hd(runs(state))["id"]
+               ]
+
+      # It asks once.
+      :ok = T3.Orchestration.Recovery.continue()
+      assert length(runs(current(thread_id))) == 2
+    end
+
     test "an idle session is stopped, and the next run starts it again" do
       Application.put_env(:t3, :idle_session_check_ms, nil)
       Application.put_env(:t3, :session_idle_ms, 0)

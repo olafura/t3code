@@ -46,6 +46,8 @@ defmodule T3.Environment do
         # Project-scoped settings resolve per project (`T3.Settings.for_project/1`).
         "projectSettingsOverrides" => true,
         # Worktrees and browser artifacts are cleaned up by the rules (`T3.StorageCleanup`).
+        # Turns a restart cut off go on when asked (`T3.Orchestration.Recovery`).
+        "threadRestartContinuation" => true,
         "storageCleanup" => true,
         "projectWorktreeCleanup" => true,
         # Thread commands `T3.Orchestration` understands (`@thread_updates`).

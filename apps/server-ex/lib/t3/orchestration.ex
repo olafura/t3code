@@ -1365,7 +1365,9 @@ defmodule T3.Orchestration do
                 "message",
                 message_id,
                 Entities.message(ids, message_id, "user", text, false, at, %{
-                  "attachments" => command["attachments"] || []
+                  "attachments" => command["attachments"] || [],
+                  "createdBy" => command["createdBy"] || "user",
+                  "creationSource" => command["creationSource"] || "web"
                 })
                 |> with_context(command)
               )
