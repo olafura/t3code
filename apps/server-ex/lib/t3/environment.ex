@@ -39,6 +39,9 @@ defmodule T3.Environment do
         "environmentIcon" => true,
         # Project-scoped settings resolve per project (`T3.Settings.for_project/1`).
         "projectSettingsOverrides" => true,
+        # Worktrees and browser artifacts are cleaned up by the rules (`T3.StorageCleanup`).
+        "storageCleanup" => true,
+        "projectWorktreeCleanup" => true,
         # Thread commands `T3.Orchestration` understands (`@thread_updates`).
         "threadSettlement" => true,
         "threadSnooze" => true,

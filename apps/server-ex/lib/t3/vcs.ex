@@ -116,6 +116,9 @@ defmodule T3.Vcs do
 
   # The branch's latest GitHub pull request, through `gh`. On the default branch
   # only an open one counts: merged or closed matches there are reverse merges.
+  @doc "The newest pull request whose head is `branch`, in any state, or nil."
+  def branch_pull_request(cwd, branch), do: pull_request(cwd, branch, false)
+
   defp pull_request(cwd, branch, default?) do
     with gh when is_binary(gh) <- System.find_executable("gh"),
          {:ok, url} <- Git.ok(cwd, ~w(remote get-url origin)),

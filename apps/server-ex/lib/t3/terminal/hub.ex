@@ -27,12 +27,22 @@ defmodule T3.Terminal.Hub do
   def remove(thread_id, terminal_id),
     do: GenServer.cast(__MODULE__, {:remove, {thread_id, terminal_id}})
 
+  @doc "Every terminal's summary, without watching."
+  def summaries do
+    GenServer.call(__MODULE__, :summaries)
+  catch
+    :exit, {:noproc, _} -> []
+  end
+
   @impl true
   def init(nil) do
     {:ok, %{terminals: %{}, sessions: %{}, watchers: %{}, activity: %{}, polling: false}}
   end
 
   @impl true
+  def handle_call(:summaries, _from, state),
+    do: {:reply, for({_key, {summary, _session}} <- state.terminals, do: summary), state}
+
   def handle_call({:watch, pid}, _from, state) do
     watchers = Map.put_new_lazy(state.watchers, pid, fn -> Process.monitor(pid) end)
     summaries = for {_key, {summary, _session}} <- state.terminals, do: summary
