@@ -1,8 +1,10 @@
 import {
   FilesystemBrowseError,
+  GitCommandError,
   OrchestrationGetFullThreadDiffError,
   OrchestrationGetTurnDiffError,
   ProjectMutationError,
+  ReviewDiffPreviewError,
   OrchestrationV2DispatchCommandError,
   OrchestrationV2ThreadLaunchError,
   ORCHESTRATION_V2_WS_METHODS,
@@ -38,6 +40,11 @@ import { ThreadShapeFold, type ShapeEvent, type ShapeRow } from "./threadShape.t
 
 const decodeConfig = Schema.decodeUnknownSync(Schema.toCodecJson(ServerConfig));
 const decodeTerminalError = Schema.decodeUnknownOption(TerminalError);
+
+// A node's launch result leaves out the thread projection: nothing reads it, and the
+// thread's stream shape already carries that state.
+const UNDECODED_RESULTS: ReadonlySet<string> = new Set([ORCHESTRATION_V2_WS_METHODS.launchThread]);
+const decodeReviewError = Schema.decodeUnknownOption(ReviewDiffPreviewError);
 
 /**
  * Streams one shape's frames, folded into items, for as long as it is consumed. An
@@ -214,12 +221,29 @@ export function makeV3Session(input: {
         tag: string,
         toError: (request: R, message: string, cause: unknown) => E,
       ) =>
-      (request: R) =>
-        Effect.tryPromise({
+      (request: R) => {
+        // Results arrive as JSON; decode them as the Node RPC client would.
+        const rpc = UNDECODED_RESULTS.has(tag) ? undefined : WsRpcGroup.requests.get(tag);
+        const decode = (value: unknown): Effect.Effect<unknown, Schema.SchemaError> =>
+          rpc === undefined
+            ? Effect.succeed(value)
+            : Schema.decodeUnknownEffect(
+                Schema.toCodecJson(rpc.successSchema as Schema.Codec<unknown, unknown>),
+              )(value);
+        return Effect.tryPromise({
           try: () => socket.call(input.environmentId, tag, request),
           catch: (cause) =>
             toError(request, cause instanceof Error ? cause.message : String(cause), cause),
-        });
+        }).pipe(
+          Effect.flatMap((value) =>
+            decode(value).pipe(
+              Effect.mapError((cause) =>
+                toError(request, `The node sent an invalid ${tag} result.`, cause),
+              ),
+            ),
+          ),
+        );
+      };
 
     const dispatchCommand = forward(
       ORCHESTRATION_V2_WS_METHODS.dispatchCommand,
@@ -282,6 +306,21 @@ export function makeV3Session(input: {
         frame.t === "terminals" ? [frame.event] : [],
       );
 
+    const reviewCommand = (tag: string) =>
+      forward(tag, (request: { readonly cwd: string }, message, cause) =>
+        decodeReviewError(cause instanceof ClusterRpcError ? cause.detail : undefined).pipe(
+          Option.getOrElse(
+            () =>
+              new GitCommandError({
+                operation: tag,
+                command: "git",
+                cwd: request.cwd,
+                detail: message,
+              }),
+          ),
+        ),
+      );
+
     const getFullThreadDiff = forward(
       ORCHESTRATION_V2_WS_METHODS.getFullThreadDiff,
       (_request: object, message) => new OrchestrationGetFullThreadDiffError({ message }),
@@ -296,6 +335,8 @@ export function makeV3Session(input: {
       [ORCHESTRATION_V2_WS_METHODS.getFullThreadDiff]: getFullThreadDiff,
       [ORCHESTRATION_V2_WS_METHODS.subscribeShell]: shell,
       [ORCHESTRATION_V2_WS_METHODS.subscribeThread]: thread,
+      [WS_METHODS.reviewGetDiffPreview]: reviewCommand(WS_METHODS.reviewGetDiffPreview),
+      [WS_METHODS.reviewGetDiffFileContents]: reviewCommand(WS_METHODS.reviewGetDiffFileContents),
       [WS_METHODS.terminalAttach]: terminalAttach,
       [WS_METHODS.subscribeTerminalMetadata]: terminalMetadata,
       [WS_METHODS.terminalOpen]: terminalCommand(WS_METHODS.terminalOpen),
