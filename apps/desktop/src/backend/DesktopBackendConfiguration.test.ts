@@ -64,6 +64,7 @@ function makeEnvironmentLayer(
     readonly otlpTracesUrl?: string;
     readonly otlpMetricsUrl?: string;
     readonly otlpLogsUrl?: string;
+    readonly elixirNodeRelease?: string;
   },
 ) {
   return DesktopEnvironment.layer({
@@ -89,6 +90,7 @@ function makeEnvironmentLayer(
           T3CODE_OTLP_TRACES_URL: options?.otlpTracesUrl,
           T3CODE_OTLP_METRICS_URL: options?.otlpMetricsUrl,
           T3CODE_OTLP_LOGS_URL: options?.otlpLogsUrl,
+          T3CODE_DESKTOP_ELIXIR_RELEASE: options?.elixirNodeRelease,
         }),
       ),
     ),
@@ -112,6 +114,7 @@ const withHarness = <A, E, R>(
     | FileSystem.FileSystem
     | DesktopBackendConfiguration.DesktopBackendConfiguration
   >,
+  environmentOptions?: Parameters<typeof makeEnvironmentLayer>[1],
 ) =>
   Effect.gen(function* () {
     const fileSystem = yield* FileSystem.FileSystem;
@@ -126,7 +129,7 @@ const withHarness = <A, E, R>(
           Layer.provideMerge(DesktopAppSettings.layerTest()),
           Layer.provideMerge(DesktopWslEnvironment.layerTest()),
           Layer.provideMerge(DesktopWslServerTree.layerTest()),
-          Layer.provideMerge(makeEnvironmentLayer(baseDir)),
+          Layer.provideMerge(makeEnvironmentLayer(baseDir, environmentOptions)),
         ),
       ),
     );
@@ -253,6 +256,26 @@ describe("DesktopBackendConfiguration", () => {
         assert.match(first.bootstrap.desktopBootstrapToken, /^[0-9a-f]{48}$/i);
         assert.equal(second.bootstrap.desktopBootstrapToken, first.bootstrap.desktopBootstrapToken);
       }),
+    ),
+  );
+
+  it.effect("resolvePrimary starts an Elixir node release with the bootstrap on stdin", () =>
+    withHarness(
+      Effect.gen(function* () {
+        const configuration = yield* DesktopBackendConfiguration.DesktopBackendConfiguration;
+        const config = yield* configuration.resolvePrimary;
+
+        assert.equal(config.executablePath, "/rel/t3/bin/t3");
+        assert.deepEqual(config.args, ["start"]);
+        assert.equal(config.bootstrapDelivery, "stdin");
+        assert.equal(config.env.T3_BOOTSTRAP_STDIN, "1");
+        assert.equal(config.bootstrap.port, 4888);
+        assert.match(config.bootstrap.desktopBootstrapToken, /^[0-9a-f]{48}$/i);
+        // The node has no telemetry fds to write to.
+        assert.isUndefined(config.bootstrap.desktopTelemetryFd);
+        assert.isUndefined(config.bootstrap.desktopTelemetryControlFd);
+      }),
+      { elixirNodeRelease: "/rel/t3/bin/t3" },
     ),
   );
 
