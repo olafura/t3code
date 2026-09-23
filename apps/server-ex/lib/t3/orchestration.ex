@@ -177,23 +177,30 @@ defmodule T3.Orchestration do
         )
       end
 
+    # An imported thread has a provider thread (its native session) but no session yet.
+    session_change =
+      unless StreamState.get(state, "provider-session")[session_id] do
+        create(
+          "provider-session",
+          session_id,
+          Entities.provider_session(session_id, cwd, selection["model"], at, driver, instance)
+        )
+      end
+
     provider_changes =
       if provider_thread do
         [
+          session_change,
           upsert(
             state,
             "provider-thread",
             provider_thread_id,
-            &Map.put(&1, "lastRunOrdinal", ordinal)
+            &Map.merge(&1, %{"lastRunOrdinal" => ordinal, "providerSessionId" => session_id})
           )
         ]
       else
         [
-          create(
-            "provider-session",
-            session_id,
-            Entities.provider_session(session_id, cwd, selection["model"], at, driver, instance)
-          ),
+          session_change,
           create(
             "provider-thread",
             provider_thread_id,

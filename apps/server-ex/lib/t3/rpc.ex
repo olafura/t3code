@@ -14,6 +14,8 @@ defmodule T3.Rpc do
 
   def handle("projects.mutate", mutation), do: T3.Projects.mutate(mutation)
   def handle("filesystem.browse", input), do: T3.Projects.browse(input)
+  def handle("agentSessions.scan", input), do: T3.AgentSessions.scan(input)
+  def handle("agentSessions.import", input), do: T3.AgentSessions.import_project(input)
   def handle("review.getDiffPreview", input), do: T3.Review.diff_preview(input)
   def handle("review.getDiffFileContents", input), do: T3.Review.file_contents(input)
   def handle("terminal.open", input), do: T3.Terminal.open(input)
