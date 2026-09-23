@@ -45,4 +45,23 @@ defmodule T3.AcpTest do
     assert File.exists?(script)
     assert {"T3_CURSOR_CREDENTIALS", Path.join(dir, "provider-auth/cursor/cursor.json")} in env
   end
+
+  test "Pi is offered only where its binary is installed" do
+    {:ok, _} =
+      T3.Settings.put(
+        %{
+          "providerInstances" => %{
+            "pi" => %{
+              "driver" => "pi",
+              "enabled" => true,
+              "config" => %{"binaryPath" => "/nope/pi"}
+            }
+          }
+        },
+        0
+      )
+
+    assert T3.Acp.agent?("pi")
+    assert T3.Acp.entry("pi") == nil
+  end
 end

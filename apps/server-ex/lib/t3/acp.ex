@@ -18,7 +18,9 @@ defmodule T3.Acp do
     "opencode" => %{binary: "opencode", label: "OpenCode"},
     "grok" => %{binary: "grok", label: "Grok"},
     # The Cursor SDK behind ACP (`packages/cursor-acp`), run by Node.
-    "cursor" => %{binary: "node", label: "Cursor"}
+    "cursor" => %{binary: "node", label: "Cursor"},
+    # Pi through the registry's pi-acp adapter, which runs `pi --mode rpc`.
+    "pi" => %{binary: "pi", label: "Pi"}
   }
 
   # The Cursor sidecar: in a release under priv/, in a checkout in packages/.
@@ -94,6 +96,12 @@ defmodule T3.Acp do
 
         {:ok, ["node", cursor_script(), "--mode", runtime_mode || "approval-required"],
          [{"T3_CURSOR_CREDENTIALS", credentials} | instance_env(entry)]}
+
+      {"pi", entry} ->
+        with {:ok, command, env} <- T3.Acp.Catalog.command(%{"agentId" => "pi-acp"}),
+             do:
+               {:ok, command,
+                [{"PI_ACP_PI_COMMAND", binary("pi", entry, "pi")} | env ++ instance_env(entry)]}
 
       {driver, entry} ->
         binary = binary(driver, entry, @agents[driver].binary)
@@ -196,6 +204,11 @@ defmodule T3.Acp do
            )
          )}
     end
+  end
+
+  # Pi is offered where Pi is installed; its adapter installs when first used.
+  defp base_entry(_id, "pi", instance) do
+    if System.find_executable(binary("pi", instance, "pi")), do: {:ok, %{}}, else: :error
   end
 
   defp base_entry(id, _driver, instance) do
