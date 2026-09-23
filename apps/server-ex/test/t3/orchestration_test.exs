@@ -364,6 +364,64 @@ defmodule T3.OrchestrationTest do
     assert {:ok, %{"tasks" => []}} = T3.ScheduledTasks.list()
   end
 
+  test "an agent's MCP credential reads its own project's threads, and nothing else" do
+    start_supervised!(T3.Mcp)
+    thread_id = launch("hello")
+    await_statuses(thread_id, ["completed"])
+    :ok = T3.Shell.subscribe(self())
+
+    unless T3.Shell.row(node(), thread_id) do
+      assert_receive {:t3_shell, _}, 2_000
+    end
+
+    %{authorization: auth} = T3.Mcp.server(thread_id, "codex")
+    rpc = &T3.Mcp.handle(auth, JSON.encode!(Map.merge(%{"jsonrpc" => "2.0", "id" => 1}, &1)))
+
+    assert {200, %{"result" => %{"serverInfo" => %{"name" => "t3-code"}, "instructions" => text}}} =
+             rpc.(%{"method" => "initialize", "params" => %{"protocolVersion" => "2025-06-18"}})
+
+    assert text =~ "t3-code"
+
+    assert {202, nil} =
+             T3.Mcp.handle(auth, ~s({"jsonrpc":"2.0","method":"notifications/initialized"}))
+
+    {200, %{"result" => %{"tools" => tools}}} = rpc.(%{"method" => "tools/list"})
+
+    assert Enum.any?(
+             tools,
+             &(&1["name"] == "t3_thread_list" and &1["inputSchema"]["type"] == "object")
+           )
+
+    {200, %{"result" => %{"structuredContent" => listed}}} =
+      rpc.(%{
+        "method" => "tools/call",
+        "params" => %{"name" => "t3_thread_list", "arguments" => %{}}
+      })
+
+    assert %{"currentThreadId" => ^thread_id, "threads" => [%{"threadId" => ^thread_id}]} = listed
+
+    {200, %{"result" => %{"structuredContent" => read}}} =
+      rpc.(%{
+        "method" => "tools/call",
+        "params" => %{"name" => "t3_thread_read", "arguments" => %{"threadId" => thread_id}}
+      })
+
+    assert Enum.map(read["items"], & &1["type"]) == ["user_message", "assistant_message"]
+
+    # An idle caller cannot change things, and other projects are out of reach.
+    {200, %{"result" => %{"isError" => true, "content" => [%{"text" => denied}]}}} =
+      rpc.(%{
+        "method" => "tools/call",
+        "params" => %{
+          "name" => "t3_thread_send",
+          "arguments" => %{"threadId" => thread_id, "message" => "hi"}
+        }
+      })
+
+    assert denied =~ "parent_not_active"
+    assert {401, _} = T3.Mcp.handle("Bearer nope", "{}")
+  end
+
   describe "queued messages" do
     test "a message sent during a run waits in the queue and starts when the run ends" do
       thread_id = launch("wait for it")

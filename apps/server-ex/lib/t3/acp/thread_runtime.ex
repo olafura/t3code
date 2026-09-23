@@ -22,7 +22,7 @@ defmodule T3.Acp.ThreadRuntime do
   alias T3.Orchestration
   alias T3.Orchestration.Entities
 
-  @state_version 2
+  @state_version 3
   @registry T3.Acp.Registry
 
   @spec start_turn(String.t(), map) :: :ok
@@ -106,7 +106,10 @@ defmodule T3.Acp.ThreadRuntime do
        # Updates `session/load` replays are history, not this turn.
        replaying: false,
        # Open permission prompts: request id -> {rpc id, options}.
-       requests: %{}
+       requests: %{},
+       # ACP has no system prompt: a session given T3's tools hears about them in
+       # its first prompt.
+       announce: false
      }}
   end
 
@@ -122,7 +125,8 @@ defmodule T3.Acp.ThreadRuntime do
       started(state)
       conn = state.conn
       session_id = state.session_id
-      prompt = acp_prompt(turn, state.capabilities)
+      prompt = acp_prompt(turn, state.capabilities, state.announce)
+      state = %{state | announce: false}
 
       task =
         Task.async(fn ->
@@ -226,7 +230,11 @@ defmodule T3.Acp.ThreadRuntime do
 
   # Every older state shape migrates forward here; v2 added the agent's mode.
   defp migrate(%{v: @state_version} = state), do: state
-  defp migrate(%{v: 1} = state), do: state |> Map.put_new(:mode, nil) |> Map.put(:v, 2)
+
+  defp migrate(%{v: 1} = state),
+    do: state |> Map.put_new(:mode, nil) |> Map.put(:v, 2) |> migrate()
+
+  defp migrate(%{v: 2} = state), do: state |> Map.put_new(:announce, false) |> Map.put(:v, 3)
 
   # --- session -------------------------------------------------------------------
 
@@ -266,7 +274,7 @@ defmodule T3.Acp.ThreadRuntime do
          },
          {:ok, session_id, state} <- open_session(state, turn) do
       if session_id != turn.native_thread_id, do: record_session(state, session_id)
-      {:ok, %{state | session_id: session_id}}
+      {:ok, %{state | session_id: session_id, announce: mcp_servers(state, turn) != []}}
     else
       {:error, reason} -> {:error, reason, state}
       {:error, reason, state} -> {:error, reason, state}
@@ -275,7 +283,7 @@ defmodule T3.Acp.ThreadRuntime do
 
   # Continue the recorded session when the agent can; otherwise start a new one.
   defp open_session(state, %{native_thread_id: native} = turn) when is_binary(native) do
-    params = %{"sessionId" => native, "cwd" => turn.cwd, "mcpServers" => []}
+    params = %{"sessionId" => native, "cwd" => turn.cwd, "mcpServers" => mcp_servers(state, turn)}
     caps = state.capabilities
 
     cond do
@@ -306,12 +314,30 @@ defmodule T3.Acp.ThreadRuntime do
     case Connection.call(
            state.conn,
            "session/new",
-           %{"cwd" => turn.cwd, "mcpServers" => []},
+           %{"cwd" => turn.cwd, "mcpServers" => mcp_servers(state, turn)},
            60_000
          ) do
       {:ok, %{"sessionId" => id} = result} -> {:ok, id, remember_model(state, result)}
       {:ok, other} -> {:error, {:unexpected, other}, state}
       {:error, reason} -> {:error, reason, state}
+    end
+  end
+
+  # T3's own MCP server, for agents that take servers over HTTP.
+  defp mcp_servers(state, turn) do
+    with true <- get_in(state.capabilities, ["mcpCapabilities", "http"]) == true,
+         %{url: url, authorization: authorization} <-
+           T3.Mcp.for_agent(state.thread_id, Entities.instance(turn.ids)) do
+      [
+        %{
+          "type" => "http",
+          "name" => "t3-code",
+          "url" => url,
+          "headers" => [%{"name" => "Authorization", "value" => authorization}]
+        }
+      ]
+    else
+      _ -> []
     end
   end
 
@@ -579,9 +605,17 @@ defmodule T3.Acp.ThreadRuntime do
   end
 
   # The message, with where its files are; images inline when the agent takes them.
-  defp acp_prompt(turn, capabilities) do
+  defp acp_prompt(turn, capabilities, announce) do
     attachments = Map.get(turn, :attachments, [])
-    text = [%{"type" => "text", "text" => T3.Attachments.prompt_text(turn.text, attachments)}]
+    message = T3.Attachments.prompt_text(turn.text, attachments)
+
+    message =
+      if announce,
+        do:
+          "<t3_code_orchestration_instructions>#{T3.Mcp.instructions()}</t3_code_orchestration_instructions>\n\n<user_request>\n#{message}\n</user_request>",
+        else: message
+
+    text = [%{"type" => "text", "text" => message}]
 
     if get_in(capabilities || %{}, ["promptCapabilities", "image"]) == true,
       do:

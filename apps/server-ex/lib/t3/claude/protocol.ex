@@ -42,7 +42,32 @@ defmodule T3.Claude.Protocol do
       ) ++
       if(opts[:resume] && opts[:fork_session], do: ["--fork-session"], else: []) ++
       if(opts[:persist_session] == false, do: ["--no-session-persistence"], else: []) ++
-      if(opts[:partial_messages] == true, do: ["--include-partial-messages"], else: [])
+      if(opts[:partial_messages] == true, do: ["--include-partial-messages"], else: []) ++
+      mcp_args(opts[:mcp])
+  end
+
+  # T3's own MCP server, its tools allowed without a prompt, and what it is for.
+  defp mcp_args(nil), do: []
+
+  defp mcp_args(%{url: url, authorization: authorization}) do
+    config = %{
+      "mcpServers" => %{
+        "t3-code" => %{
+          "type" => "http",
+          "url" => url,
+          "headers" => %{"Authorization" => authorization}
+        }
+      }
+    }
+
+    [
+      "--mcp-config",
+      JSON.encode!(config),
+      "--allowedTools",
+      "mcp__t3-code",
+      "--append-system-prompt",
+      T3.Mcp.instructions()
+    ]
   end
 
   defp flag(_name, nil), do: []

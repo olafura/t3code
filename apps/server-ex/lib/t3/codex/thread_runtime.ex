@@ -413,12 +413,9 @@ defmodule T3.Codex.ThreadRuntime do
 
   # A fork's first turn starts from a copy of the source thread, cut after its turn.
   defp ensure_native_thread(state, %{fork: %{thread: source, turn: last}} = turn) do
-    params = %{
-      "threadId" => source,
-      "lastTurnId" => last,
-      "cwd" => turn.cwd,
-      "model" => turn.model
-    }
+    params =
+      thread_params(state, turn)
+      |> Map.merge(%{"threadId" => source, "lastTurnId" => last})
 
     case Connection.call(state.conn, "thread/fork", params) do
       {:ok, %{"thread" => %{"id" => id}}} -> {:ok, %{state | native_thread_id: id}}
@@ -427,7 +424,7 @@ defmodule T3.Codex.ThreadRuntime do
   end
 
   defp ensure_native_thread(state, turn) do
-    params = %{"cwd" => turn.cwd, "model" => turn.model}
+    params = thread_params(state, turn)
 
     result =
       if turn.native_thread_id,
@@ -445,6 +442,28 @@ defmodule T3.Codex.ThreadRuntime do
     end
   end
 
+  # The thread's settings, with T3's own MCP server for the agent when allowed.
+  defp thread_params(state, turn) do
+    params = %{"cwd" => turn.cwd, "model" => turn.model}
+
+    case mcp(state, turn) do
+      nil ->
+        params
+
+      mcp ->
+        Map.put(params, "config", %{
+          "mcp_servers" => %{
+            "t3-code" => %{
+              "url" => mcp.url,
+              "http_headers" => %{"Authorization" => mcp.authorization}
+            }
+          }
+        })
+    end
+  end
+
+  defp mcp(state, turn), do: T3.Mcp.for_agent(state.thread_id, Entities.instance(turn.ids))
+
   defp start_native_turn(state, turn) do
     {approval, sandbox} =
       Map.get(@runtime_policies, turn.runtime_mode, @runtime_policies["full-access"])
@@ -461,7 +480,11 @@ defmodule T3.Codex.ThreadRuntime do
       # Always explicit: Codex keeps the last collaboration mode on a resumed thread.
       "collaborationMode" => %{
         "mode" => if(Map.get(turn, :interaction_mode) == "plan", do: "plan", else: "default"),
-        "settings" => %{"model" => turn.model}
+        "settings" =>
+          if(mcp(state, turn),
+            do: %{"model" => turn.model, "developer_instructions" => T3.Mcp.instructions()},
+            else: %{"model" => turn.model}
+          )
       }
     }
 

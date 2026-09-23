@@ -108,6 +108,21 @@ defmodule T3.Web.Router do
     end
   end
 
+  # The `t3-code` MCP server for agents; each thread's agent has its own bearer.
+  post "/mcp" do
+    {:ok, body, conn} = read_body(conn, length: 10_000_000)
+    authorization = conn |> get_req_header("authorization") |> List.first()
+
+    case T3.Mcp.handle(authorization, body) do
+      {status, nil} -> send_resp(conn, status, "")
+      {status, reply} -> json(conn, status, reply)
+    end
+  end
+
+  # No server-initiated stream: every answer comes back on its request.
+  get "/mcp", do: send_resp(conn, 405, "")
+  delete "/mcp", do: send_resp(conn, 200, "")
+
   # Settings → Connections: pairing links and the clients paired with this node.
   post "/api/auth/pairing-token" do
     with_scope(conn, "access:write", fn _session ->
