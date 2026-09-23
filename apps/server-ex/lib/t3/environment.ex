@@ -27,7 +27,17 @@ defmodule T3.Environment do
         "pullRequests" => true,
         "pullRequestChecks" => true,
         # Files besides images upload to `T3.Attachments` too.
-        "fileAttachments" => %{"maxUploadBytes" => 50 * 1024 * 1024}
+        "attachmentUploads" => true,
+        "fileAttachments" => %{"maxUploadBytes" => 50 * 1024 * 1024},
+        # Thread commands `T3.Orchestration` understands (`@thread_updates`).
+        "threadSettlement" => true,
+        "threadSnooze" => true,
+        "threadPinning" => true,
+        "threadPinReorder" => true,
+        "threadActiveReorder" => true,
+        "threadVisitedTracking" => true,
+        "threadTitleRegeneration" => true,
+        "projectCloneTracking" => true
       }
     }
   end

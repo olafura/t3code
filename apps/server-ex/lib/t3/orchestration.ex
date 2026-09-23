@@ -218,12 +218,17 @@ defmodule T3.Orchestration do
 
               fields ->
                 change = upsert(state, "thread", thread_id, &Map.merge(&1, fields))
-                {Enum.reject([change], &is_nil/1), :ok}
+                {Enum.reject([change | archived_queue(type, state, at)], &is_nil/1), :ok}
             end
         end
       end)
 
-    with :ok <- result, do: {:ok, %{"sequence" => sequence(thread_id)}}
+    with :ok <- result do
+      if type == "thread.metadata.update" and command["regenerateTitle"] == true,
+        do: regenerate_title(thread_id)
+
+      {:ok, %{"sequence" => sequence(thread_id)}}
+    end
   end
 
   # A queued message steers the running turn when its provider can take it; otherwise
@@ -358,7 +363,8 @@ defmodule T3.Orchestration do
         {:ok, result}
 
       message ->
-        if input["generateTitle"] == true, do: generate_title(thread_id, message["text"])
+        if input["generateTitle"] == true and (message["text"] || "") != "",
+          do: generate_title(thread_id, message["text"])
 
         command =
           Map.merge(message, %{
@@ -408,11 +414,10 @@ defmodule T3.Orchestration do
     end
   end
 
-  @doc """
-  Titles a thread from its first message's `text`, in the background; the thread
-  keeps its own title until one arrives.
-  """
-  def generate_title(thread_id, text) when is_binary(text) and text != "" do
+  # Titles a thread from its first message's `text`, in the background; the thread
+  # keeps its own title until one arrives. A regenerated title that fails clears
+  # the thread's in-flight mark.
+  defp generate_title(thread_id, text, regenerating \\ false) do
     Task.start(fn ->
       root =
         case T3.Shell.row(node(), thread_id) do
@@ -420,22 +425,35 @@ defmodule T3.Orchestration do
           _ -> nil
         end
 
-      with {:ok, %{"title" => title}} <-
+      with true <- is_binary(text) and text != "",
+           {:ok, %{"title" => title}} <-
              T3.TextGeneration.thread_title(root || System.tmp_dir!(), text),
            title when title != "" <- title |> String.trim() |> String.slice(0, 80) do
         dispatch(%{"type" => "thread.metadata.update", "threadId" => thread_id, "title" => title})
       else
-        {:error, reason} ->
+        failure ->
           require Logger
-          Logger.warning("thread title not generated: #{inspect(reason)}")
+          Logger.warning("thread title not generated: #{inspect(failure)}")
 
-        _ ->
-          :ok
+          if regenerating,
+            do:
+              dispatch(%{
+                "type" => "thread.metadata.update",
+                "threadId" => thread_id,
+                "regenerateTitle" => false
+              })
       end
     end)
   end
 
-  def generate_title(_thread_id, _text), do: :ok
+  defp regenerate_title(thread_id) do
+    text =
+      T3.Streams.Server.state(T3.Streams.ensure(thread_id))
+      |> StreamState.list("message")
+      |> Enum.find_value(&(&1["role"] == "user" and (&1["text"] || "") != "" and &1["text"]))
+
+    generate_title(thread_id, text, true)
+  end
 
   @doc "Starts the run a prepared workspace was waiting for."
   def release_prepared(thread_id, run_id) do
@@ -691,7 +709,33 @@ defmodule T3.Orchestration do
         command
         |> Map.take(~w(title branch worktreePath limitRecovery linkedPullRequest))
         |> Map.put("updatedAt", at)
+        |> Map.merge(title_regeneration(command, at))
     end
+  end
+
+  # An archived thread's queued messages will not run.
+  defp archived_queue("thread.archive", state, at) do
+    for run <- queued_runs(state) do
+      upsert(
+        state,
+        "run",
+        run["id"],
+        &Map.merge(&1, %{"status" => "cancelled", "queuePosition" => nil, "completedAt" => at})
+      )
+    end
+  end
+
+  defp archived_queue(_type, _state, _at), do: []
+
+  # `regenerateTitle: true` marks a title in flight; a new title, or `false` when
+  # generation failed, clears the mark.
+  defp title_regeneration(%{"regenerateTitle" => true} = command, at),
+    do: %{"titleRegeneration" => %{"requestId" => command["commandId"], "startedAt" => at}}
+
+  defp title_regeneration(command, _at) do
+    if command["regenerateTitle"] == false or Map.has_key?(command, "title"),
+      do: %{"titleRegeneration" => nil},
+      else: %{}
   end
 
   defp other_pull_requests(thread, key) do

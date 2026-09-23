@@ -215,6 +215,25 @@ defmodule T3.OrchestrationTest do
       assert is_binary(pinned) and is_binary(archived)
     end
 
+    test "regenerating a title marks it in flight until the attempt ends" do
+      thread_id = launch("list the files")
+      _ = await_run(thread_id, "completed")
+
+      {:ok, _} =
+        Orchestration.dispatch(%{
+          "type" => "thread.metadata.update",
+          "commandId" => "cmd-regen",
+          "threadId" => thread_id,
+          "regenerateTitle" => true
+        })
+
+      assert %{"titleRegeneration" => %{"requestId" => "cmd-regen"}} =
+               StreamState.get(current(thread_id), "thread")[thread_id]
+
+      # No text generator is installed in tests, so the attempt fails and clears it.
+      await_thread(thread_id, &(&1["titleRegeneration"] == nil))
+    end
+
     test "codex in plan mode proposes a plan and keeps a todo list; implementing completes it" do
       thread_id = launch("make a plan", "codex", "full-access", "plan")
       state = await_run(thread_id, "completed")
@@ -501,6 +520,17 @@ defmodule T3.OrchestrationTest do
                Enum.find(StreamState.list(state, "turn-item"), &(&1["messageId"] == "m2"))
 
       assert Enum.all?(runs(state), &(&1["queuePosition"] == nil))
+    end
+
+    test "archiving a thread cancels what it had queued" do
+      thread_id = launch("wait for it")
+      _ = await_run(thread_id, "running")
+      {:ok, _} = send_message(thread_id, "m2", "then list the files")
+      _ = await_statuses(thread_id, ["running", "queued"])
+
+      {:ok, _} = Orchestration.dispatch(%{"type" => "thread.archive", "threadId" => thread_id})
+
+      assert [_, %{"status" => "cancelled", "queuePosition" => nil}] = runs(current(thread_id))
     end
 
     test "queued runs can be reordered, edited, and cancelled" do
@@ -1182,6 +1212,18 @@ defmodule T3.OrchestrationTest do
       # Only the fork's own work, not the history it started with.
       assert summary =~ "User: write fork.txt"
       refute summary =~ "User: hello"
+    end
+  end
+
+  defp await_thread(thread_id, done?) do
+    if done?.(StreamState.get(current(thread_id), "thread")[thread_id]) do
+      :ok
+    else
+      receive do
+        {:t3_stream, ^thread_id, _} -> await_thread(thread_id, done?)
+      after
+        5_000 -> flunk("the thread never got there")
+      end
     end
   end
 

@@ -161,9 +161,6 @@ defmodule T3.Mcp.Tools.Threads do
                  })
                )
              ) do
-        if action == "regenerate_title",
-          do: Orchestration.generate_title(row["id"], first_message(row["id"]))
-
         thread = thread(row["id"])
 
         {:ok,
@@ -173,7 +170,7 @@ defmodule T3.Mcp.Tools.Threads do
            "commandId" => id,
            "sequence" => sequence,
            "title" => thread["title"],
-           "titleRegeneration" => nil,
+           "titleRegeneration" => thread["titleRegeneration"],
            "linkedPullRequest" => thread["linkedPullRequest"],
            "updatedAt" => thread["updatedAt"]
          }}
@@ -499,7 +496,7 @@ defmodule T3.Mcp.Tools.Threads do
   # The new title comes from the thread's first message, in the background.
   defp metadata_command("regenerate_title", _args, row) do
     if first_message(row["id"]),
-      do: {:ok, %{}},
+      do: {:ok, %{"regenerateTitle" => true}},
       else: {:error, "invalid_request", "The thread has no message to take a title from."}
   end
 
