@@ -42,6 +42,14 @@ A machine that has joined a cluster boots clustered: joining writes
 Run it as a service with `bin/t3-service` (under launchd, systemd, or a terminal): it
 is `bin/t3 start`, started again when the node restarts to finish an update.
 
+## T3 Connect
+
+A node links to a T3 Connect account like the Node server (`T3.Cloud`): from the app
+it serves, with an administrative session (`mix t3.pair --admin`), Settings → Connections
+links it, installs the relay client (`cloudflared`) when needed, and runs the tunnel
+the relay provisions. Clients reaching it through the relay authenticate with DPoP
+(`T3.Dpop`), and agent activity is published for notifications when turned on.
+
 ## Upgrades
 
 A node carries the T3 version (`apps/server/package.json`, or `T3_VERSION` for a

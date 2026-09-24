@@ -117,6 +117,8 @@ defmodule T3.Cloud do
           do: T3.Secrets.put(@endpoint_runtime, JSON.encode!(runtime)),
           else: T3.Secrets.delete(@endpoint_runtime)
 
+        T3.Cloud.Activity.publish_active()
+
         {:ok, %{"ok" => true, "endpointRuntimeStatus" => status}}
       else
         {:error, 503,
@@ -164,6 +166,7 @@ defmodule T3.Cloud do
   @doc "`POST /api/connect/preferences`: whether agent activity is published."
   def set_preferences(%{"publishAgentActivity" => publish}) when is_boolean(publish) do
     T3.Secrets.put(@publish_activity, to_string(publish))
+    if publish, do: T3.Cloud.Activity.publish_active()
     {:ok, link_state()}
   end
 

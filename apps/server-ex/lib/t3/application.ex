@@ -58,6 +58,7 @@ defmodule T3.Application do
           T3.Web,
           # A T3 Connect link's managed tunnel (`T3.Cloud`).
           T3.Cloud.Tunnel,
+          T3.Cloud.Activity,
           # Turns the restart cut off go on, where the user asked for that.
           Supervisor.child_spec({Task, &T3.Orchestration.Recovery.continue/0}, id: :continue),
           # Projects that ask for it are brought up to date.
