@@ -14,6 +14,8 @@ defmodule T3.Application do
           {T3.Store, path: Path.join(home, "t3.sqlite")},
           T3.Auth,
           T3.Settings,
+          # The desktop app's telemetry channel, when it runs this node.
+          desktop_channel(),
           T3.Streams,
           T3.Shell,
           # Turns this node was running when it stopped end as interrupted.
@@ -69,7 +71,17 @@ defmodule T3.Application do
         []
       end
 
-    Supervisor.start_link(children, strategy: :one_for_one, name: T3.Supervisor)
+    Supervisor.start_link(Enum.reject(children, &is_nil/1),
+      strategy: :one_for_one,
+      name: T3.Supervisor
+    )
+  end
+
+  defp desktop_channel do
+    case Application.get_env(:t3, :desktop_channel) do
+      {telemetry, control} -> {T3.Desktop.Channel, transport: {:fd, telemetry, control}}
+      nil -> nil
+    end
   end
 
   # Named nodes find peers listed in T3_PEERS (node names such as t3@192.168.1.20);

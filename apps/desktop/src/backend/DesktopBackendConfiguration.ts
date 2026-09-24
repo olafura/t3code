@@ -513,8 +513,9 @@ const buildObservabilityFragment = (observabilitySettings: BackendObservabilityS
   }),
 });
 
-// An Elixir node release reads the same bootstrap as one JSON line on stdin; it
-// has no telemetry fds. It keeps its state under `<t3Home>/elixir`.
+// An Elixir node release reads the same bootstrap as one JSON line on stdin and
+// speaks the telemetry channel on the same descriptors. It keeps its state under
+// `<t3Home>/elixir`.
 const elixirNodeStartConfig = (
   releaseBin: string,
   bootstrap: DesktopBackendManager.DesktopBackendStartConfig["bootstrap"],
@@ -585,10 +586,9 @@ const resolvePrimaryStartConfig = Effect.fn("desktop.backendConfiguration.resolv
     };
 
     if (Option.isSome(input.elixirNodeRelease)) {
-      const { desktopTelemetryFd: _fd, desktopTelemetryControlFd: _controlFd, ...rest } = bootstrap;
       return elixirNodeStartConfig(
         input.elixirNodeRelease.value,
-        rest,
+        bootstrap,
         backendExposure.httpBaseUrl,
       );
     }

@@ -160,6 +160,7 @@ defmodule T3.Diagnostics do
   end
 
   def handle_call({:subscribe, pid}, _from, state) do
+    if state.watchers == %{}, do: T3.Desktop.Channel.set_diagnostics_demand(true)
     watchers = Map.put_new_lazy(state.watchers, pid, fn -> Process.monitor(pid) end)
     state = sample(%{state | watchers: watchers})
     {:reply, {:ok, snapshot(state)}, state}
@@ -175,7 +176,7 @@ defmodule T3.Diagnostics do
   def handle_cast({:unsubscribe, pid}, state) do
     {ref, watchers} = Map.pop(state.watchers, pid)
     if ref, do: Process.demonitor(ref, [:flush])
-    {:noreply, %{state | watchers: watchers}}
+    {:noreply, unwatched(%{state | watchers: watchers})}
   end
 
   @impl true
@@ -187,7 +188,15 @@ defmodule T3.Diagnostics do
   end
 
   def handle_info({:DOWN, _ref, :process, pid, _}, state),
-    do: {:noreply, %{state | watchers: Map.delete(state.watchers, pid)}}
+    do: {:noreply, unwatched(%{state | watchers: Map.delete(state.watchers, pid)})}
+
+  # The desktop app samples Electron only while someone watches.
+  defp unwatched(%{watchers: watchers} = state) when watchers == %{} do
+    T3.Desktop.Channel.set_diagnostics_demand(false)
+    state
+  end
+
+  defp unwatched(state), do: state
 
   defp sample(state) do
     if state.timer, do: Process.cancel_timer(state.timer)
@@ -244,19 +253,39 @@ defmodule T3.Diagnostics do
 
     backend = aggregate(rows, state.samples)
     empty = aggregate([], [])
+    desktop = T3.Desktop.Channel.telemetry()
+    electron = electron_processes(desktop, at)
+
+    electron_group = %{
+      empty
+      | "processCount" => length(electron),
+        "currentCpuPercent" => electron |> Enum.map(& &1["cpuPercent"]) |> Enum.sum(),
+        "currentRssBytes" => electron |> Enum.map(& &1["residentBytes"]) |> Enum.sum(),
+        "peakRssBytes" => electron |> Enum.map(& &1["peakResidentBytes"]) |> Enum.sum()
+    }
 
     %{
       "readAt" => iso(at),
       "sampleIntervalMs" => interval(state),
-      "processes" => processes,
+      "processes" => processes ++ electron,
       "groups" => %{
         "backend" => backend,
-        "electron" => empty,
+        "electron" => electron_group,
         "monitor" => empty,
-        "allT3" => backend
+        "allT3" => %{
+          backend
+          | "processCount" => backend["processCount"] + electron_group["processCount"],
+            "currentCpuPercent" =>
+              backend["currentCpuPercent"] + electron_group["currentCpuPercent"],
+            "currentRssBytes" => backend["currentRssBytes"] + electron_group["currentRssBytes"]
+        }
       },
-      "power" => power(),
-      "speedLimitPercent" => none(),
+      "power" => (desktop && desktop["power"]) || power(),
+      "speedLimitPercent" =>
+        if(desktop && is_number(desktop["speedLimitPercent"]),
+          do: some(desktop["speedLimitPercent"]),
+          else: none()
+        ),
       "attribution" => %{"readAt" => iso(at), "entries" => []},
       "health" => health(state, length(rows))
     }
@@ -292,7 +321,7 @@ defmodule T3.Diagnostics do
           end,
         "lastError" => none()
       },
-      "desktop" => %{"status" => "unavailable", "lastSampleAt" => none(), "lastError" => none()},
+      "desktop" => desktop_health(),
       "sidecarVersion" => none(),
       "sidecarPid" => none(),
       "restartCount" => 0,
@@ -462,6 +491,66 @@ defmodule T3.Diagnostics do
 
   defp key(row), do: "#{row.pid}:#{row.started}"
   defp identity(row), do: %{"pid" => row.pid, "startTimeMs" => max(row.started, 0)}
+
+  # The desktop app's Electron processes, from its telemetry channel.
+  defp electron_processes(nil, _at), do: []
+
+  defp electron_processes(desktop, at) do
+    for metric <- desktop["electronProcesses"] || [] do
+      category =
+        case metric["type"] do
+          "Browser" -> "electron-main"
+          "Tab" -> "electron-renderer"
+          "GPU" -> "electron-gpu"
+          _ -> "electron-utility"
+        end
+
+      started = metric["creationTimeMs"] || 0
+
+      %{
+        "identity" => %{"pid" => metric["pid"], "startTimeMs" => started},
+        "ppid" => 0,
+        "childPids" => [],
+        "depth" => 0,
+        "name" => metric["name"] || metric["type"],
+        "command" => metric["serviceName"] || metric["name"] || metric["type"],
+        "status" => "running",
+        "category" => category,
+        "electronType" => metric["type"],
+        "cpuPercent" => metric["cpuPercent"] || 0,
+        "cpuTimeMs" => round((metric["cumulativeCpuSeconds"] || 0) * 1000),
+        "residentBytes" => metric["workingSetBytes"] || 0,
+        "peakResidentBytes" => metric["peakWorkingSetBytes"] || 0,
+        "virtualBytes" => 0,
+        "ioReadBytes" => 0,
+        "ioWriteBytes" => 0,
+        "ioReadBytesPerSecond" => 0,
+        "ioWriteBytesPerSecond" => 0,
+        "ioSemantics" => "unavailable",
+        "idleWakeupsPerSecond" => metric["idleWakeupsPerSecond"] || 0,
+        "runTimeMs" => max(at - started, 0),
+        "firstSeenAt" => iso(started),
+        "lastSeenAt" => iso(at)
+      }
+      |> then(
+        &if(metric["serviceName"],
+          do: Map.put(&1, "electronServiceName", metric["serviceName"]),
+          else: &1
+        )
+      )
+    end
+  end
+
+  defp desktop_health do
+    case T3.Desktop.Channel.telemetry() do
+      %{"sampledAtUnixMs" => at} ->
+        %{"status" => "healthy", "lastSampleAt" => some(iso(at)), "lastError" => none()}
+
+      nil ->
+        status = if T3.Desktop.Channel.available?(), do: "starting", else: "unavailable"
+        %{"status" => status, "lastSampleAt" => none(), "lastError" => none()}
+    end
+  end
 
   defp diagnostics_entry(row) do
     %{

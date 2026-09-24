@@ -274,9 +274,9 @@ describe("DesktopBackendConfiguration", () => {
         assert.equal(config.env.T3_NODE_ELECTRON, "1");
         assert.equal(config.bootstrap.port, 4888);
         assert.match(config.bootstrap.desktopBootstrapToken, /^[0-9a-f]{48}$/i);
-        // The node has no telemetry fds to write to.
-        assert.isUndefined(config.bootstrap.desktopTelemetryFd);
-        assert.isUndefined(config.bootstrap.desktopTelemetryControlFd);
+        // The node speaks the telemetry channel on the same descriptors.
+        assert.equal(config.bootstrap.desktopTelemetryFd, 4);
+        assert.equal(config.bootstrap.desktopTelemetryControlFd, 5);
       }),
       { elixirNodeRelease: "/rel/t3/bin/t3" },
     ),

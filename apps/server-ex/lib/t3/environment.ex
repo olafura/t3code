@@ -61,6 +61,8 @@ defmodule T3.Environment do
         # A hot upgrade leaves turns running; a restart into the new version continues
         # them where the project asks (`T3.Orchestration.Recovery.continue/0`).
         "serverUpdateThreadContinuation" => T3.Upgrade.capability() != nil,
+        # The desktop app running this node updates itself when asked.
+        "desktopAppUpdate" => T3.Desktop.Channel.available?(),
         # Agent activity leaves for the T3 Connect relay (`T3.Cloud.Activity`).
         "agentActivityPublishing" => T3.Cloud.publishing?(),
         "projectWorktreeCleanup" => true,

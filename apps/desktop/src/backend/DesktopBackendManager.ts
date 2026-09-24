@@ -461,17 +461,19 @@ export const runBackendProcess = Effect.fn("runBackendProcess")(function* (
       type: "input",
       stream: bootstrapStream,
     };
-    if (options.bootstrap.desktopTelemetryFd !== undefined) {
-      additionalFds[`fd${options.bootstrap.desktopTelemetryFd}`] = {
-        type: "input",
-        stream: options.desktopTelemetryStream,
-      };
-    }
-    if (options.bootstrap.desktopTelemetryControlFd !== undefined) {
-      additionalFds[`fd${options.bootstrap.desktopTelemetryControlFd}`] = {
-        type: "output",
-      };
-    }
+  }
+  // The telemetry channel rides on its own descriptors whichever way the bootstrap
+  // travels; a bootstrap without them (WSL) opens none.
+  if (options.bootstrap.desktopTelemetryFd !== undefined) {
+    additionalFds[`fd${options.bootstrap.desktopTelemetryFd}`] = {
+      type: "input",
+      stream: options.desktopTelemetryStream,
+    };
+  }
+  if (options.bootstrap.desktopTelemetryControlFd !== undefined) {
+    additionalFds[`fd${options.bootstrap.desktopTelemetryControlFd}`] = {
+      type: "output",
+    };
   }
   const command = ChildProcess.make(options.executablePath, options.args, {
     cwd: options.cwd,
@@ -487,7 +489,7 @@ export const runBackendProcess = Effect.fn("runBackendProcess")(function* (
     // wsl.exe drops additional file descriptors when forwarding to the Linux
     // side, so the WSL spawn path delivers the bootstrap envelope via stdin
     // (`--bootstrap-fd 0`) instead.
-    ...(options.bootstrapDelivery === "fd3" ? { additionalFds } : {}),
+    ...(Object.keys(additionalFds).length > 0 ? { additionalFds } : {}),
   });
 
   const handle = yield* spawner.spawn(command).pipe(
@@ -663,13 +665,15 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
     Ref.update(state, withActiveRun(runId, f));
 
   const snapshot = Ref.get(state).pipe(
-    Effect.map((current): DesktopBackendSnapshot => ({
-      desiredRunning: current.desiredRunning,
-      ready: current.ready,
-      activePid: activePid(current.active),
-      restartAttempt: current.restartAttempt,
-      restartScheduled: Option.isSome(current.restartFiber),
-    })),
+    Effect.map(
+      (current): DesktopBackendSnapshot => ({
+        desiredRunning: current.desiredRunning,
+        ready: current.ready,
+        activePid: activePid(current.active),
+        restartAttempt: current.restartAttempt,
+        restartScheduled: Option.isSome(current.restartFiber),
+      }),
+    ),
   );
   const currentConfig = Ref.get(state).pipe(Effect.map((current) => current.config));
 

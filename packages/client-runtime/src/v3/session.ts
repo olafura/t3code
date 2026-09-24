@@ -584,6 +584,8 @@ export function makeV3Session(input: {
         Option.getOrElse(() => new ServerSelfUpdateError({ reason: message })),
       );
     const updateServer = forward(WS_METHODS.serverUpdateServer, updateError);
+    // The desktop app running the node installs the update it prepared; this stops the node.
+    const commitDesktopUpdate = forward(WS_METHODS.serverCommitDesktopUpdate, updateError);
     const updateServerWithProgress = (request: { readonly targetVersion: string }) =>
       shapeStream(
         socket,
@@ -1138,6 +1140,7 @@ export function makeV3Session(input: {
       [WS_METHODS.providerUploadFeedback]: uploadFeedback,
       [WS_METHODS.serverUpdateServer]: updateServer,
       [WS_METHODS.serverUpdateServerWithProgress]: updateServerWithProgress,
+      [WS_METHODS.serverCommitDesktopUpdate]: commitDesktopUpdate,
       [WS_METHODS.cloudGetRelayClientStatus]: relayClientStatus,
       [WS_METHODS.cloudInstallRelayClient]: installRelayClient,
       [WS_METHODS.serverUpsertKeybinding]: keybindingCommand("t3.upsertKeybinding"),

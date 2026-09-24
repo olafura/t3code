@@ -37,8 +37,18 @@ defmodule T3.Upgrade do
   @doc "The release this node runs from, or nil when it runs from a checkout."
   def release_root, do: System.get_env("RELEASE_ROOT")
 
-  @doc "`serverSelfUpdate` for the descriptor: only a release can install a version."
-  def capability, do: if(release_root(), do: "hot-upgrade")
+  @doc """
+  `serverSelfUpdate` for the descriptor. The desktop app's own node comes inside the
+  app, so updating the app updates it (`desktop-managed`, `T3.Desktop.Channel`);
+  otherwise only a release can install a version.
+  """
+  def capability do
+    cond do
+      Application.get_env(:t3, :desktop_token) != nil -> "desktop-managed"
+      release_root() -> "hot-upgrade"
+      true -> nil
+    end
+  end
 
   @doc "This machine's bundle platform, e.g. `darwin-arm64`."
   def platform do
@@ -61,7 +71,16 @@ defmodule T3.Upgrade do
   the new version runs (hot) or is about to (restart).
   """
   def update(input, progress \\ nil) do
-    GenServer.call(__MODULE__, {:update, input, progress}, :timer.minutes(15))
+    if capability() == "desktop-managed" do
+      report = fn stage -> notify(progress, stage) end
+
+      case T3.Desktop.Channel.update(report) do
+        {:ok, result} -> {:ok, result}
+        {:error, reason} -> failure(reason)
+      end
+    else
+      GenServer.call(__MODULE__, {:update, input, progress}, :timer.minutes(15))
+    end
   catch
     :exit, {:noproc, _} -> failure("This node cannot update itself.")
   end

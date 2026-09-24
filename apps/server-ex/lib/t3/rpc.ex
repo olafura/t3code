@@ -49,6 +49,13 @@ defmodule T3.Rpc do
   def handle("server.updateServer", input), do: T3.Upgrade.update(input)
   def handle("cloud.getRelayClientStatus", _input), do: {:ok, T3.Cloud.RelayClient.status()}
 
+  # Installing stops this node; only a failure answers.
+  def handle("server.commitDesktopUpdate", %{"requestId" => id}) do
+    case T3.Desktop.Channel.commit(id) do
+      {:error, reason} -> {:error, %{"_tag" => "ServerSelfUpdateError", "reason" => reason}}
+    end
+  end
+
   def handle("server.acceptAcpRegistryUrlAuth", input), do: T3.Acp.UrlAuth.accept(input)
 
   def handle("provider.uploadFeedback", input),
