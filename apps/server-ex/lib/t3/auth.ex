@@ -84,6 +84,34 @@ defmodule T3.Auth do
   end
 
   @doc """
+  A short-lived administrative session in the store at `path` for the command line
+  (`T3.CLI`), which then calls the running node like any client. Returns its token.
+  """
+  @spec create_cli_session(String.t()) :: String.t()
+  def create_cli_session(path) do
+    with_db(path, fn db ->
+      ensure_schema(db)
+      access = random_token()
+      created = now()
+
+      exec(
+        db,
+        "INSERT INTO auth_sessions (token_hash, scopes, label, created_at, expires_at, id, device_type) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'bot')",
+        [
+          hash(access),
+          Enum.join(@admin_scopes, " "),
+          "t3 command line",
+          created,
+          created + :timer.minutes(5),
+          "session-" <> Base.encode16(:crypto.strong_rand_bytes(8), case: :lower)
+        ]
+      )
+
+      access
+    end)
+  end
+
+  @doc """
   Exchanges a pairing token for `{:ok, access_token, expires_in_s, scopes}`.
   `client` describes who asked: `label`, `device_type`, `os`, `user_agent`.
   With `proof_key`, the thumbprint of the DPoP key the request proved, the session
@@ -156,6 +184,7 @@ defmodule T3.Auth do
   end
 
   def standard_scopes, do: @standard_scopes
+  def admin_scopes, do: @admin_scopes
 
   @doc "Called by a socket of `session_id` once open; it counts as connected until it exits."
   def connected(session_id), do: GenServer.cast(__MODULE__, {:connected, session_id, self()})

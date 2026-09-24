@@ -105,6 +105,20 @@ defmodule T3.Projects do
     })
   end
 
+  @doc "`GET /api/projects`: this node's projects (`ProjectSnapshot`)."
+  def snapshot do
+    projects =
+      for {{node, _id}, {"project", project}} <- T3.Shell.rows(),
+          node == node(),
+          project["deletedAt"] == nil,
+          do: Map.put(project, "deletedAt", nil)
+
+    %{
+      "projects" => Enum.sort_by(projects, & &1["createdAt"]),
+      "updatedAt" => DateTime.utc_now() |> DateTime.to_iso8601()
+    }
+  end
+
   @doc """
   Records in the background which repository a project's workspace is a clone of
   (`T3.Repository`), when that changed. Runs when a project is added, moved or

@@ -41,6 +41,11 @@ A machine that has joined a cluster boots clustered: joining writes
 
 Run it as a service with `bin/t3-service` (under launchd, systemd, or a terminal): it
 is `bin/t3 start`, started again when the node restarts to finish an update.
+`bin/t3ctl service install` sets that up as a launchd agent or systemd user unit.
+
+`bin/t3ctl` is the node's command line (`T3.CLI`), after the Node server's `t3`:
+`pair [--admin]` prints a pairing URL, and `auth`, `project` and `connect` manage
+sessions, projects and the T3 Connect link on the running node.
 
 ## T3 Connect
 

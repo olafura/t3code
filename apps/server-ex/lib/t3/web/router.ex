@@ -526,6 +526,30 @@ defmodule T3.Web.Router do
     _, _ -> {:error, 502, "The node holding this file is unavailable."}
   end
 
+  # Projects over HTTP, as the Node server serves them to its CLI (`T3.CLI`).
+  get "/api/projects" do
+    with_scope(conn, "orchestration:read", fn _session -> {200, T3.Projects.snapshot()} end)
+  end
+
+  post "/api/projects/mutate" do
+    with_scope(conn, "orchestration:operate", fn _session ->
+      with {:ok, mutation} <- json_body(conn) do
+        case T3.Projects.mutate(mutation) do
+          {:ok, project} ->
+            {200, project}
+
+          {:error, message} ->
+            {400,
+             %{
+               "_tag" => "ProjectMutationError",
+               "commandId" => mutation["commandId"] || "",
+               "message" => message
+             }}
+        end
+      end
+    end)
+  end
+
   # T3 Connect (`T3.Cloud`): a client links the node to its account ...
   post "/api/connect/link-proof" do
     conn = no_store(conn)

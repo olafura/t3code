@@ -1,0 +1,5 @@
+#!/bin/sh
+# The node's command line (`T3.CLI`): pairing, sessions, projects, T3 Connect, and
+# running as a service. `bin/t3ctl` with no arguments lists the commands.
+here="$(cd "$(dirname "$0")" && pwd)"
+exec "$here/t3" eval 'T3.CLI.main(System.argv())' "$@"
