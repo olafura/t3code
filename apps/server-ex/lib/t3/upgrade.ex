@@ -271,31 +271,60 @@ defmodule T3.Upgrade do
     end
   end
 
-  # Versioned directories never change once written; only missing ones are copied.
+  # A versioned directory the running release already has is kept when it matches
+  # the bundle's (the running version's own directories always do); a missing or
+  # different one, such as a build's leftover, is replaced.
   defp copy_new(bundle, root, "." = _dir) do
     for erts <- Path.wildcard(Path.join(bundle, "erts-*")),
-        target = Path.join(root, Path.basename(erts)),
-        not File.exists?(target),
-        do: File.cp_r!(erts, target)
+        do: replace_unless_same(erts, Path.join(root, Path.basename(erts)))
 
     :ok
+  rescue
+    error -> {:error, Exception.message(error)}
   end
 
   defp copy_new(bundle, root, dir) do
     for entry <- File.ls!(Path.join(bundle, dir)),
         source = Path.join([bundle, dir, entry]),
         File.dir?(source),
-        target = Path.join([root, dir, entry]),
-        not File.exists?(target) do
-      staged = target <> ".partial"
-      File.rm_rf!(staged)
-      File.cp_r!(source, staged)
-      File.rename!(staged, target)
-    end
+        do: replace_unless_same(source, Path.join([root, dir, entry]))
 
     :ok
   rescue
     error -> {:error, Exception.message(error)}
+  end
+
+  defp replace_unless_same(source, target) do
+    unless same_dir?(source, target) do
+      staged = target <> ".partial"
+      File.rm_rf!(staged)
+      File.cp_r!(source, staged)
+
+      if File.exists?(target) do
+        aside = "#{target}.replaced-#{System.system_time(:millisecond)}"
+        File.rename!(target, aside)
+        File.rename!(staged, target)
+        File.rm_rf!(aside)
+      else
+        File.rename!(staged, target)
+      end
+    end
+  end
+
+  # Compared by what identifies the directory's contents: an application's `.app`,
+  # a release's boot script and manifest, ERTS's emulator.
+  defp same_dir?(source, target) do
+    markers =
+      Path.wildcard(Path.join(source, "ebin/*.app")) ++
+        Enum.filter(
+          Enum.map(~w(start.boot upgrade.json bin/beam.smp), &Path.join(source, &1)),
+          &File.exists?/1
+        )
+
+    File.dir?(target) and markers != [] and
+      Enum.all?(markers, fn marker ->
+        File.read(Path.join(target, Path.relative_to(marker, source))) == File.read(marker)
+      end)
   end
 
   defp copy_bin(bundle, root) do

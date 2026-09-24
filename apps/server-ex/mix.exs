@@ -120,15 +120,35 @@ defmodule T3.MixProject do
           {name, digest.(libs)}
         end,
       "config" =>
-        digest.(
-          for f <- ~w(sys.config runtime.exs vm.args),
-              File.exists?(Path.join(rel, f)),
-              do: Path.join(rel, f)
-        )
+        [
+          app_config(Path.join(rel, "sys.config")),
+          digest.(
+            for f <- ~w(runtime.exs vm.args),
+                File.exists?(Path.join(rel, f)),
+                do: Path.join(rel, f)
+          )
+        ]
+        |> :erlang.term_to_binary()
+        |> then(&Base.encode16(:crypto.hash(:sha256, &1), case: :lower))
     }
 
     File.write!(Path.join(rel, "upgrade.json"), JSON.encode!(manifest))
     release
+  end
+
+  # The applications' configuration in sys.config, as terms in a fixed order. The
+  # release's own config-provider setup is left out: it names the release
+  # directory and lists compile-time checks in no stable order.
+  defp app_config(path) do
+    {:ok, [config]} = :file.consult(String.to_charlist(path))
+
+    config
+    |> Enum.map(fn
+      {:elixir, env} -> {:elixir, Keyword.delete(env, :config_provider_init)}
+      entry -> entry
+    end)
+    |> Enum.map(fn {app, env} -> {app, Enum.sort(env)} end)
+    |> Enum.sort()
   end
 
   defp platform do

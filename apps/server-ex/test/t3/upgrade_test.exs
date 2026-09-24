@@ -132,4 +132,29 @@ defmodule T3.UpgradeTest do
     assert state.v == 1
     assert state.by_terminal[{:settings, node()}] == [1]
   end
+
+  test "installing replaces a leftover directory and keeps a matching one", %{tmp_dir: dir} do
+    bundle = Path.join(dir, "b")
+    root = Path.join(dir, "root")
+
+    for base <- [bundle, root] do
+      File.mkdir_p!(Path.join([base, "lib", "dep-1.0", "ebin"]))
+      File.write!(Path.join([base, "lib", "dep-1.0", "ebin", "dep.app"]), "dep 1.0")
+    end
+
+    # The running release's own copy, which must not be touched.
+    File.write!(Path.join([root, "lib", "dep-1.0", "ebin", "in-use"]), "")
+    File.mkdir_p!(Path.join([bundle, "lib", "t3-2.0.0", "ebin"]))
+    File.write!(Path.join([bundle, "lib", "t3-2.0.0", "ebin", "t3.app"]), "t3 2.0.0")
+    File.mkdir_p!(Path.join([bundle, "releases", "2.0.0"]))
+    File.write!(Path.join([bundle, "releases", "2.0.0", "upgrade.json"]), "{}")
+    # A build's leftover: the directory without its code.
+    File.mkdir_p!(Path.join([root, "lib", "t3-2.0.0", "priv"]))
+    File.mkdir_p!(Path.join(root, "releases"))
+
+    assert :ok = Upgrade.install(bundle, root, "2.0.0")
+    assert File.read!(Path.join([root, "lib", "t3-2.0.0", "ebin", "t3.app"])) == "t3 2.0.0"
+    assert File.exists?(Path.join([root, "lib", "dep-1.0", "ebin", "in-use"]))
+    assert File.read!(Path.join([root, "releases", "2.0.0", "upgrade.json"])) == "{}"
+  end
 end
