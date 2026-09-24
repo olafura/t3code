@@ -78,6 +78,10 @@ import {
   PreviewAutomationStreamEvent,
   EnvironmentTheme,
   OrchestrationGetWorkflowScriptError,
+  ExecutionEnvironmentDescriptor,
+  ServerSelfUpdateError,
+  ServerSelfUpdateOutcome,
+  ServerSelfUpdateProgressEvent,
   ProviderUploadFeedbackError,
   type PreviewAutomationHost,
 } from "@t3tools/contracts";
@@ -123,6 +127,15 @@ function resolveKeybindings(rules: unknown): ResolvedKeybindingsConfig {
 }
 
 /** A node sends its raw keybinding rules; clients compile them. */
+const decodeDescriptor = Schema.decodeUnknownSync(
+  Schema.toCodecJson(ExecutionEnvironmentDescriptor),
+);
+const decodeUpdateOutcome = Schema.decodeUnknownSync(Schema.toCodecJson(ServerSelfUpdateOutcome));
+const decodeSelfUpdateProgress = Schema.decodeUnknownSync(
+  Schema.toCodecJson(ServerSelfUpdateProgressEvent),
+);
+const decodeSelfUpdateError = Schema.decodeUnknownOption(ServerSelfUpdateError);
+
 function decodeConfig(raw: unknown): ServerConfig {
   const config = decodeServerConfig(raw);
   const rules = (raw as { readonly keybindingRules?: unknown }).keybindingRules;
@@ -436,33 +449,46 @@ export function makeV3Session(input: {
 
     // A node never bootstraps a project from its cwd, so its welcome is complete at
     // once; the stream then stays open like the Node server's lifecycle stream.
-    const serverLifecycle = () =>
-      Stream.concat(
-        Stream.make(
-          {
-            version: 1 as const,
-            sequence: 0,
-            type: "welcome" as const,
-            payload: {
-              environment: config.environment,
-              cwd: config.cwd,
-              projectName:
-                config.cwd.split(/[\\/]/).findLast((part) => part.length > 0) ?? config.cwd,
-              bootstrapStatus: "complete" as const,
+    // A welcome and ready for each (re)connection, and a ready again whenever the node
+    // moves to another version in place; readies carry how its last update went.
+    const serverLifecycle = () => {
+      let sequence = 0;
+      const ready = (environment: ServerConfig["environment"], outcome: unknown) => ({
+        version: 1 as const,
+        sequence: sequence++,
+        type: "ready" as const,
+        payload: {
+          at: DateTime.formatIso(DateTime.nowUnsafe()),
+          environment,
+          ...(outcome === undefined || outcome === null
+            ? {}
+            : { updateOutcome: decodeUpdateOutcome(outcome) }),
+        },
+      });
+      return shapeStream(socket, { type: "config", node }, (frame) => {
+        if (frame.t === "config") {
+          const current = decodeConfig(frame.config);
+          return [
+            {
+              version: 1 as const,
+              sequence: sequence++,
+              type: "welcome" as const,
+              payload: {
+                environment: current.environment,
+                cwd: current.cwd,
+                projectName:
+                  current.cwd.split(/[\\/]/).findLast((part) => part.length > 0) ?? current.cwd,
+                bootstrapStatus: "complete" as const,
+              },
             },
-          },
-          {
-            version: 1 as const,
-            sequence: 1,
-            type: "ready" as const,
-            payload: {
-              at: DateTime.formatIso(DateTime.nowUnsafe()),
-              environment: config.environment,
-            },
-          },
-        ),
-        Stream.never,
-      );
+            ready(current.environment, frame.updateOutcome),
+          ];
+        }
+        if (frame.t === "config.ready")
+          return [ready(decodeDescriptor(frame.environment), frame.updateOutcome)];
+        return [];
+      });
+    };
 
     // RPCs run on the environment's node; a failure surfaces as the method's contract error.
     const forward =
@@ -539,6 +565,23 @@ export function makeV3Session(input: {
       ORCHESTRATION_V2_WS_METHODS.searchThreads,
       (_request: object, message) => new OrchestrationSearchThreadsError({ message }),
     );
+
+    // A node moves to another version in place, or restarts into it (`T3.Upgrade`).
+    const updateError = (_request: object, message: string, cause: unknown) =>
+      decodeSelfUpdateError(cause instanceof ClusterRpcError ? cause.detail : undefined).pipe(
+        Option.getOrElse(() => new ServerSelfUpdateError({ reason: message })),
+      );
+    const updateServer = forward(WS_METHODS.serverUpdateServer, updateError);
+    const updateServerWithProgress = (request: { readonly targetVersion: string }) =>
+      shapeStream(
+        socket,
+        { type: "serverUpdate", node, input: request },
+        (frame) => (frame.t === "serverUpdate" ? [decodeSelfUpdateProgress(frame.event)] : []),
+        (frame) =>
+          decodeSelfUpdateError(frame.detail).pipe(
+            Option.getOrElse(() => new ServerSelfUpdateError({ reason: String(frame.reason) })),
+          ),
+      );
 
     const workflowScript = forward(
       ORCHESTRATION_V2_WS_METHODS.getWorkflowScript,
@@ -1058,6 +1101,8 @@ export function makeV3Session(input: {
       [ORCHESTRATION_V2_WS_METHODS.searchThreads]: searchThreads,
       [ORCHESTRATION_V2_WS_METHODS.getWorkflowScript]: workflowScript,
       [WS_METHODS.providerUploadFeedback]: uploadFeedback,
+      [WS_METHODS.serverUpdateServer]: updateServer,
+      [WS_METHODS.serverUpdateServerWithProgress]: updateServerWithProgress,
       [WS_METHODS.serverUpsertKeybinding]: keybindingCommand("t3.upsertKeybinding"),
       [WS_METHODS.serverRemoveKeybinding]: keybindingCommand("t3.removeKeybinding"),
       [WS_METHODS.shellOpenInEditor]: openInEditor,

@@ -60,6 +60,12 @@ export type GitActionShape = {
   readonly node: string;
   readonly input: Readonly<Record<string, unknown>>;
 };
+/** Moves the node to another version (`T3.Upgrade`), streaming progress, then ends. */
+export type ServerUpdateShape = {
+  readonly type: "serverUpdate";
+  readonly node: string;
+  readonly input: Readonly<Record<string, unknown>>;
+};
 export type Shape =
   | ShellShape
   | StreamShape
@@ -77,6 +83,7 @@ export type Shape =
   | PreviewAutomationShape
   | PullRequestRefreshesShape
   | GitActionShape
+  | ServerUpdateShape
   | ProviderAuthShape
   | WorktreeSetupShape;
 

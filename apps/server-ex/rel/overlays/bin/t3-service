@@ -1,0 +1,12 @@
+#!/bin/sh
+# Runs the node under launchd, systemd or a terminal, and starts it again when it
+# stops to finish an update (exit status 75). bin/t3 reads releases/start_erl.data
+# each time, so the relaunch runs the version the update installed.
+set -u
+here="$(cd "$(dirname "$0")" && pwd)"
+export T3_SERVICE=1
+while :; do
+  "$here/t3" start "$@"
+  status=$?
+  [ "$status" -eq 75 ] || exit "$status"
+done

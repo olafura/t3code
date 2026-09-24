@@ -16,6 +16,10 @@ defmodule T3.Web.Socket do
 
   @max_buffered 8 * 1024 * 1024
 
+  # Sockets are Bandit's processes, so a code upgrade in place (`T3.Upgrade`) runs no
+  # `code_change/3` for them: each callback first brings an older state up to date.
+  @state_version 1
+
   @impl true
   def init(opts) do
     # A socket opened with a ticket belongs to that client's session.
@@ -23,6 +27,7 @@ defmodule T3.Web.Socket do
     if session, do: T3.Auth.connected(session)
 
     state = %{
+      v: @state_version,
       session: session,
       subs: %{},
       by_stream: %{},
@@ -42,6 +47,10 @@ defmodule T3.Web.Socket do
   end
 
   @impl true
+  def handle_in(frame, state)
+      when not is_map_key(state, :v) or :erlang.map_get(:v, state) != @state_version,
+      do: handle_in(frame, migrate(state))
+
   def handle_in({frame, [opcode: :text]}, state) do
     case Protocol.decode(frame, [node() | Node.list()]) do
       {:ok, :ping} ->
@@ -64,6 +73,10 @@ defmodule T3.Web.Socket do
   def handle_in(_binary, state), do: {:ok, state}
 
   @impl true
+  def handle_info(message, state)
+      when not is_map_key(state, :v) or :erlang.map_get(:v, state) != @state_version,
+      do: handle_info(message, migrate(state))
+
   def handle_info({:t3_stream, stream_id, message}, state) do
     case state.by_stream do
       %{^stream_id => id} -> stream_message(state, id, message)
@@ -88,6 +101,53 @@ defmodule T3.Web.Socket do
     end
   end
 
+  def handle_info({:t3_server_update, node, event}, state) do
+    case state.by_terminal do
+      %{{:server_update, ^node} => id} ->
+        case event do
+          {:error, detail} ->
+            frame =
+              Map.put(error_frame(id, detail["reason"] || "update failed"), "detail", detail)
+
+            {:push, Protocol.encode(frame), unsubscribe(state, id)}
+
+          %{"type" => "complete"} ->
+            frames = [
+              Protocol.encode(%{"t" => "serverUpdate", "id" => id, "event" => event}),
+              Protocol.encode(%{"t" => "end", "id" => id})
+            ]
+
+            {:push, frames, unsubscribe(state, id)}
+
+          _ ->
+            {:push, Protocol.encode(%{"t" => "serverUpdate", "id" => id, "event" => event}),
+             state}
+        end
+
+      _ ->
+        {:ok, state}
+    end
+  end
+
+  # The node moved to another version in place; clients watching it see its new
+  # descriptor as a `ready`.
+  def handle_info({:t3_upgraded, node, outcome}, state) do
+    case remote(node, T3.Environment, :descriptor, []) do
+      {:ok, descriptor} ->
+        config_push(state, node, fn id ->
+          %{
+            "t" => "config.ready",
+            "id" => id,
+            "environment" => descriptor,
+            "updateOutcome" => outcome
+          }
+        end)
+
+      _ ->
+        {:ok, state}
+    end
+  end
+
   def handle_info({:t3_git_action, action_id, event}, state) do
     case state.by_terminal do
       %{{:git_action, ^action_id} => id} ->
@@ -99,55 +159,33 @@ defmodule T3.Web.Socket do
   end
 
   def handle_info({:t3_settings, node, settings}, state) do
-    case state.by_terminal do
-      %{{:settings, ^node} => id} ->
-        # Settings can add, remove, or enable providers.
-        send(self(), {:t3_providers_changed, node})
-        frame = %{"t" => "config.settings", "id" => id, "settings" => settings}
-        {:push, Protocol.encode(frame), state}
-
-      _ ->
-        {:ok, state}
-    end
+    # Settings can add, remove, or enable providers.
+    if config_ids(state, node) != [], do: send(self(), {:t3_providers_changed, node})
+    config_push(state, node, &%{"t" => "config.settings", "id" => &1, "settings" => settings})
   end
 
-  def handle_info({:t3_themes, node, themes}, state) do
-    case state.by_terminal do
-      %{{:settings, ^node} => id} ->
-        {:push, Protocol.encode(%{"t" => "config.themes", "id" => id, "themes" => themes}), state}
+  def handle_info({:t3_themes, node, themes}, state),
+    do: config_push(state, node, &%{"t" => "config.themes", "id" => &1, "themes" => themes})
 
-      _ ->
-        {:ok, state}
-    end
-  end
+  def handle_info({:t3_usage_limit_sources, node, sources}, state),
+    do:
+      config_push(
+        state,
+        node,
+        &%{"t" => "config.usageLimitSources", "id" => &1, "sources" => sources}
+      )
 
-  def handle_info({:t3_usage_limit_sources, node, sources}, state) do
-    case state.by_terminal do
-      %{{:settings, ^node} => id} ->
-        frame = %{"t" => "config.usageLimitSources", "id" => id, "sources" => sources}
-        {:push, Protocol.encode(frame), state}
-
-      _ ->
-        {:ok, state}
-    end
-  end
-
-  def handle_info({:t3_keybindings, node, rules}, state) do
-    case state.by_terminal do
-      %{{:settings, ^node} => id} ->
-        {:push, Protocol.encode(%{"t" => "config.keybindings", "id" => id, "rules" => rules}),
-         state}
-
-      _ ->
-        {:ok, state}
-    end
-  end
+  def handle_info({:t3_keybindings, node, rules}, state),
+    do: config_push(state, node, &%{"t" => "config.keybindings", "id" => &1, "rules" => rules})
 
   def handle_info({:t3_providers_changed, node}, state) do
-    with %{{:settings, ^node} => id} <- state.by_terminal,
+    with [_ | _] <- config_ids(state, node),
          {:ok, providers} <- remote(node, T3.Environment, :providers, []) do
-      frame = %{"t" => "config.providers", "id" => id, "providers" => providers}
-      {:push, Protocol.encode(frame), state}
+      config_push(
+        state,
+        node,
+        &%{"t" => "config.providers", "id" => &1, "providers" => providers}
+      )
     else
       _ -> {:ok, state}
     end
@@ -322,6 +360,7 @@ defmodule T3.Web.Socket do
 
   @impl true
   def terminate(_reason, state) do
+    state = migrate(state)
     for {id, _} <- state.subs, do: unsubscribe(state, id)
     :ok
   end
@@ -406,6 +445,13 @@ defmodule T3.Web.Socket do
          {:ok, config} <- remote(node, T3.Environment, :server_config, []) do
       frame = %{"t" => "config", "id" => id, "node" => Atom.to_string(node), "config" => config}
 
+      # How the node's last update went, so a client reconnecting after one can tell.
+      frame =
+        case remote(node, T3.Upgrade, :outcome, []) do
+          {:ok, %{} = outcome} -> Map.put(frame, "updateOutcome", outcome)
+          _ -> frame
+        end
+
       # Published themes follow the snapshot, as the Node server streams them.
       themes =
         case remote(node, T3.EnvironmentThemes, :current, []) do
@@ -429,7 +475,8 @@ defmodule T3.Web.Socket do
        %{
          state
          | subs: Map.put(state.subs, id, shape),
-           by_terminal: Map.put(state.by_terminal, {:settings, node}, id)
+           # One node's config may be watched by several subscriptions (config, lifecycle).
+           by_terminal: Map.update(state.by_terminal, {:settings, node}, [id], &[id | &1])
        }}
     else
       {_, reason} -> {:push, Protocol.encode(error_frame(id, reason)), state}
@@ -705,6 +752,21 @@ defmodule T3.Web.Socket do
   end
 
   # Runs on the checkout's node; its events come straight here.
+  defp subscribe(state, id, {:server_update, node, input} = shape, _) do
+    case remote(node, T3.Upgrade, :start, [input, self()]) do
+      {:ok, :ok} ->
+        {:ok,
+         %{
+           state
+           | subs: Map.put(state.subs, id, shape),
+             by_terminal: Map.put(state.by_terminal, {:server_update, node}, id)
+         }}
+
+      {:error, reason} ->
+        {:push, Protocol.encode(error_frame(id, reason)), state}
+    end
+  end
+
   defp subscribe(state, id, {:git_action, node, %{"actionId" => action_id} = input} = shape, _) do
     case remote(node, T3.GitActions, :start, [input, self()]) do
       {:ok, :ok} ->
@@ -748,6 +810,29 @@ defmodule T3.Web.Socket do
 
   defp mark(client, state), do: %{client | "current" => client["sessionId"] == state.session}
 
+  # Version 1: a node's config may be watched by several subscriptions.
+  defp migrate(state) when not is_map_key(state, :v) do
+    by_terminal =
+      Map.new(state.by_terminal, fn
+        {{:settings, _node} = key, id} when is_integer(id) -> {key, [id]}
+        entry -> entry
+      end)
+
+    %{state | by_terminal: by_terminal} |> Map.put(:v, 1)
+  end
+
+  defp migrate(state), do: state
+
+  defp config_ids(state, node), do: Map.get(state.by_terminal, {:settings, node}, [])
+
+  # A frame for each subscription watching `node`'s config, built by `frame.(id)`.
+  defp config_push(state, node, frame) do
+    case config_ids(state, node) do
+      [] -> {:ok, state}
+      ids -> {:push, Enum.map(ids, &Protocol.encode(frame.(&1))), state}
+    end
+  end
+
   defp error_frame(id, reason), do: %{"t" => "error", "id" => id, "reason" => to_string(reason)}
 
   defp unsubscribe(state, id) do
@@ -760,6 +845,9 @@ defmodule T3.Web.Socket do
         :erpc.cast(node, T3.Vcs.Watch, :unsubscribe, [cwd, self()])
         %{state | subs: subs, by_terminal: Map.delete(state.by_terminal, {:vcs, cwd})}
 
+      {{:server_update, node, _input}, subs} ->
+        %{state | subs: subs, by_terminal: Map.delete(state.by_terminal, {:server_update, node})}
+
       {{:git_action, _node, %{"actionId" => action_id}}, subs} ->
         %{
           state
@@ -768,8 +856,14 @@ defmodule T3.Web.Socket do
         }
 
       {{:config, node}, subs} ->
-        :erpc.cast(node, T3.Settings, :unwatch, [self()])
-        %{state | subs: subs, by_terminal: Map.delete(state.by_terminal, {:settings, node})}
+        case List.delete(config_ids(state, node), id) do
+          [] ->
+            :erpc.cast(node, T3.Settings, :unwatch, [self()])
+            %{state | subs: subs, by_terminal: Map.delete(state.by_terminal, {:settings, node})}
+
+          ids ->
+            %{state | subs: subs, by_terminal: Map.put(state.by_terminal, {:settings, node}, ids)}
+        end
 
       {:auth_access, subs} ->
         T3.Auth.unsubscribe(self())

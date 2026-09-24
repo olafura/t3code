@@ -88,6 +88,9 @@ defmodule T3.Settings do
   @doc "Tells watchers to read the provider list again, such as after a model probe."
   def notify_providers, do: GenServer.cast(__MODULE__, :providers_changed)
 
+  @doc "Tells watchers this node now runs another version (`T3.Upgrade`)."
+  def notify_upgraded(outcome), do: GenServer.cast(__MODULE__, {:upgraded, outcome})
+
   @doc "Tells watchers the published themes changed (`T3.EnvironmentThemes`)."
   def notify_themes(themes), do: GenServer.cast(__MODULE__, {:themes_changed, themes})
 
@@ -157,6 +160,11 @@ defmodule T3.Settings do
 
   def handle_cast({:usage_limit_sources_changed, sources}, state) do
     for {pid, _} <- state.watchers, do: send(pid, {:t3_usage_limit_sources, node(), sources})
+    {:noreply, state}
+  end
+
+  def handle_cast({:upgraded, outcome}, state) do
+    for {pid, _} <- state.watchers, do: send(pid, {:t3_upgraded, node(), outcome})
     {:noreply, state}
   end
 

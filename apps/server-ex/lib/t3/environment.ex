@@ -12,7 +12,7 @@ defmodule T3.Environment do
   @doc "The descriptor served at `/.well-known/t3/environment`."
   @spec descriptor() :: map
   def descriptor do
-    %{
+    base = %{
       "environmentId" => id(),
       "label" => label(),
       "platform" => platform(),
@@ -55,6 +55,8 @@ defmodule T3.Environment do
         # Quota from CLIProxyAPI hubs in settings (`T3.UsageLimitSources`).
         "usageLimitSources" => true,
         "storageCleanup" => true,
+        # Releases move to a new version in place, or restart into it (`T3.Upgrade`).
+        "serverSelfUpdateProgress" => T3.Upgrade.capability() != nil,
         "projectWorktreeCleanup" => true,
         # Thread commands `T3.Orchestration` understands (`@thread_updates`).
         "threadSettlement" => true,
@@ -67,6 +69,12 @@ defmodule T3.Environment do
         "projectCloneTracking" => true
       }
     }
+
+    # Only a release can install a version; a checkout omits the capability.
+    case T3.Upgrade.capability() do
+      nil -> base
+      method -> put_in(base, ["capabilities", "serverSelfUpdate"], method)
+    end
   end
 
   @doc """
@@ -219,7 +227,7 @@ defmodule T3.Environment do
     end
   end
 
-  defp version, do: Application.spec(:t3, :vsn) |> to_string()
+  defp version, do: T3.Upgrade.version()
 
   @doc "A random (v4) UUID."
   def uuid4 do

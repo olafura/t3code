@@ -34,6 +34,32 @@ Electron binary instead (`T3_NODE_COMMAND`).
 A machine that has joined a cluster boots clustered: joining writes
 `$T3_HOME/cluster/vm.args`, which the release reads at start.
 
+Run it as a service with `bin/t3-service` (under launchd, systemd, or a terminal): it
+is `bin/t3 start`, started again when the node restarts to finish an update.
+
+## Upgrades
+
+A node carries the T3 version (`apps/server/package.json`, or `T3_VERSION` for a
+build of its own), and clients offer to update it like any server. It moves to the
+new version in place when it can: the running code is replaced module by module and
+nothing reconnects. A new Erlang runtime, native library, configuration or
+supervision tree needs a restart instead, which `bin/t3-service` provides
+(`T3.Upgrade` has the rules).
+
+Nodes get a version's bundle from a cluster peer that has it, or else from the
+`node-v<version>` GitHub release (`.github/workflows/release-node.yml`; set
+`T3_UPGRADE_URL` to publish elsewhere). From a checkout:
+
+```sh
+T3_VERSION=0.0.43-mine mix t3.upgrade t3@host     # build a release, send it, update
+mix t3.upgrade --dev t3a@my-mac t3b@my-mac        # nodes run with `mix run`: reload changes
+MIX_ENV=prod mix t3.bundle                        # just pack _build/prod/rel/t3
+```
+
+A process that holds state across an upgrade migrates it: OTP processes in
+`code_change/3`, and `T3.Web.Socket` (whose processes belong to Bandit) at its next
+callback.
+
 ## Cluster your machines
 
 ```sh

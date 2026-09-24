@@ -73,8 +73,15 @@ export type ExecutionEnvironmentPlatform = typeof ExecutionEnvironmentPlatform.T
     New servers only advertise the stable launcher-backed "boot-service" path;
     "respawn" remains decodable for compatibility with older servers.
     "desktop-app" means the supervising desktop app updated and relaunched
-    itself, bringing the server back with it. */
-export const ServerSelfUpdateMethod = Schema.Literals(["boot-service", "respawn", "desktop-app"]);
+    itself, bringing the server back with it. "hot-upgrade" means an Elixir
+    node loaded the new version's code in place (or restarted into it when the
+    change needed that); the connection may stay up throughout. */
+export const ServerSelfUpdateMethod = Schema.Literals([
+  "boot-service",
+  "respawn",
+  "desktop-app",
+  "hot-upgrade",
+]);
 export type ServerSelfUpdateMethod = typeof ServerSelfUpdateMethod.Type;
 
 /** What update path a client should offer for a server: one of the RPC
@@ -85,6 +92,7 @@ export const ServerSelfUpdateCapability = Schema.Literals([
   "boot-service",
   "respawn",
   "desktop-managed",
+  "hot-upgrade",
 ]);
 export type ServerSelfUpdateCapability = typeof ServerSelfUpdateCapability.Type;
 

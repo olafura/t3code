@@ -4,7 +4,8 @@ defmodule T3.MixProject do
   def project do
     [
       app: :t3,
-      version: "0.1.0",
+      # Nodes carry the T3 version, so clients compare them like any server.
+      version: t3_version(),
       elixir: "~> 1.20",
       start_permanent: Mix.env() == :prod,
       elixirc_paths: if(Mix.env() == :test, do: ["lib", "test/support"], else: ["lib"]),
@@ -13,7 +14,7 @@ defmodule T3.MixProject do
         t3: [
           include_executables_for: [:unix],
           strip_beams: true,
-          steps: [:assemble, &stage_cursor_acp/1]
+          steps: [:assemble, &stage_cursor_acp/1, &write_upgrade_manifest/1]
         ]
       ]
     ]
@@ -66,6 +67,82 @@ defmodule T3.MixProject do
     )
 
     release
+  end
+
+  # `T3_VERSION` names a build apart from the package's release (nightlies, local builds).
+  defp t3_version do
+    System.get_env("T3_VERSION") || package_version()
+  end
+
+  defp package_version do
+    Path.expand("../server/package.json", __DIR__)
+    |> File.read!()
+    |> JSON.decode!()
+    |> Map.fetch!("version")
+  end
+
+  # What a running node compares with a new release to decide whether it can load
+  # the new code in place (`T3.Upgrade`): the runtime, applications, native
+  # libraries and configuration, each of which only a restart can change.
+  defp write_upgrade_manifest(release) do
+    lib = Path.join(release.path, "lib")
+    rel = Path.join([release.path, "releases", release.version])
+
+    digest = fn paths ->
+      paths
+      |> Enum.sort()
+      # sys.config names its own release directory, which changes with every version.
+      |> Enum.map(
+        &{Path.relative_to(&1, release.path) |> String.replace(release.version, "{version}"),
+         &1 |> File.read!() |> String.replace(release.version, "{version}")}
+      )
+      |> :erlang.term_to_binary()
+      |> then(&Base.encode16(:crypto.hash(:sha256, &1), case: :lower))
+    end
+
+    # From the release itself: `lib/` can hold other versions' directories.
+    apps =
+      for {name, properties} <- release.applications,
+          into: %{},
+          do: {to_string(name), to_string(properties[:vsn])}
+
+    manifest = %{
+      "version" => release.version,
+      "otpRelease" => to_string(:erlang.system_info(:otp_release)),
+      "erts" => release.erts_version |> to_string(),
+      "platform" => platform(),
+      "applications" => apps,
+      "nifs" =>
+        for {name, vsn} <- apps, into: %{} do
+          libs =
+            Path.wildcard(Path.join([lib, "#{name}-#{vsn}", "priv", "**", "*.{so,dylib,dll}"]))
+
+          {name, digest.(libs)}
+        end,
+      "config" =>
+        digest.(
+          for f <- ~w(sys.config runtime.exs vm.args),
+              File.exists?(Path.join(rel, f)),
+              do: Path.join(rel, f)
+        )
+    }
+
+    File.write!(Path.join(rel, "upgrade.json"), JSON.encode!(manifest))
+    release
+  end
+
+  defp platform do
+    os = :os.type() |> elem(1) |> to_string()
+    arch = :erlang.system_info(:system_architecture) |> to_string()
+
+    arch =
+      cond do
+        arch =~ ~r/aarch64|arm64/ -> "arm64"
+        arch =~ ~r/x86_64|amd64/ -> "x64"
+        true -> arch
+      end
+
+    "#{os}-#{arch}"
   end
 
   defp run!(command, args, cd) do

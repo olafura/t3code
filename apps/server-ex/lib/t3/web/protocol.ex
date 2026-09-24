@@ -24,6 +24,9 @@ defmodule T3.Web.Protocol do
     * `{"type": "previewAutomation", "node": n, "host": PreviewAutomationHost}`: this
       client as that node's browser automation host; agents' browser actions
       (`PreviewAutomationStreamEvent`) until the node drops the host, which ends it
+    * `{"type": "serverUpdate", "node": n, "input": ServerSelfUpdateInput}`: moves
+      that node to another version (`T3.Upgrade`), streaming its progress and
+      ending after `complete`
     * `{"type": "localServers", "node": n}`: web servers listening on that node's
       host (`DiscoveredLocalServerList`), then the list whenever it changes
     * `{"type": "devices", "node": n}`: that node's simulators, emulators and
@@ -64,6 +67,9 @@ defmodule T3.Web.Protocol do
       {"t": "config", "id", "node", "config"}
       {"t": "config.settings", "id", "settings"}   (the node's ServerSettings changed)
       {"t": "config.providers", "id", "providers"} (its ServerConfig.providers changed)
+      {"t": "config.ready", "id", "environment", "updateOutcome"} (the node moved to
+        another version in place: its new descriptor, and how the update went)
+      {"t": "serverUpdate", "id", "event"} (ServerSelfUpdateProgressEvent)
       {"t": "config.themes", "id", "themes"} (the EnvironmentTheme[] it publishes; after
         the snapshot, then on every change)
       {"t": "config.usageLimitSources", "id", "sources"} (its UsageLimitSourceSnapshot[];
@@ -186,6 +192,10 @@ defmodule T3.Web.Protocol do
        )
        when is_binary(id) do
     with {:ok, node} <- known_node(node, nodes), do: {:ok, {:preview_automation, node, host}}
+  end
+
+  defp decode_shape(%{"type" => "serverUpdate", "node" => node, "input" => %{} = input}, nodes) do
+    with {:ok, node} <- known_node(node, nodes), do: {:ok, {:server_update, node, input}}
   end
 
   defp decode_shape(%{"type" => "localServers", "node" => node}, nodes) do

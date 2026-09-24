@@ -1,0 +1,85 @@
+name: Release Elixir node
+
+# Publishes the bundles Elixir nodes update from (apps/server-ex, T3.Upgrade): one
+# per platform, as t3-node-<version>-<platform>.tar.gz with its .sha256, on the
+# node-v<version> release. Nodes fetch them from here unless T3_UPGRADE_URL says
+# otherwise, and share them with their cluster peers.
+
+on:
+  push:
+    tags:
+      - "node-v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to publish (for example 0.0.43). Defaults to apps/server/package.json."
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  bundle:
+    name: Bundle (${{ matrix.platform }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-14
+            platform: darwin-arm64
+          - runner: ubuntu-24.04
+            platform: linux-x64
+          - runner: ubuntu-24.04-arm
+            platform: linux-arm64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Resolve version
+        id: version
+        shell: bash
+        run: |
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            version="${GITHUB_REF_NAME#node-v}"
+          elif [ -n "${{ inputs.version }}" ]; then
+            version="${{ inputs.version }}"
+          else
+            version="$(node -p 'require("./apps/server/package.json").version')"
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: true
+
+      - name: Setup Elixir
+        uses: erlef/setup-beam@v1
+        with:
+          otp-version: "29"
+          elixir-version: "1.20.3"
+
+      - name: Build release and bundle
+        working-directory: apps/server-ex
+        env:
+          MIX_ENV: prod
+          T3_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          mix deps.get --only prod
+          mix release --overwrite
+          mix t3.bundle ../../dist-node
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: node-v${{ steps.version.outputs.version }}
+        shell: bash
+        run: |
+          gh release view "$TAG" >/dev/null 2>&1 ||
+            gh release create "$TAG" --title "Elixir node $TAG" --notes "Upgrade bundles for Elixir nodes." --prerelease || true
+          gh release upload "$TAG" dist-node/* --clobber

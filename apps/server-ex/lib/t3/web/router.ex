@@ -307,6 +307,19 @@ defmodule T3.Web.Router do
     end
   end
 
+  # A version's bundle, for a cluster peer holding a one-time link (`T3.Upgrade.Source`).
+  get "/api/upgrade/:token" do
+    case T3.Upgrade.Source.take(token) do
+      {:ok, path} ->
+        conn
+        |> put_resp_content_type("application/gzip", nil)
+        |> send_file(200, path)
+
+      :error ->
+        send_resp(conn, 403, "The link is invalid or expired.")
+    end
+  end
+
   get "/api/assets/:token" do
     with {:ok, node} <- T3.Attachments.issuer(token),
          {:ok, bytes, mime, name, disposition} <- remote(node, T3.Attachments, :read, [token]) do
