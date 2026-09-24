@@ -718,7 +718,7 @@ describe("server state projection", () => {
     }),
   );
 
-  it("prefers an active session config over cache until a live event arrives", () => {
+  it("prefers an active session config over cache and stale sessions until a live event arrives", () => {
     const config = (source: string, serverVersion: string) =>
       ({
         ...CONFIG,
@@ -729,6 +729,7 @@ describe("server state projection", () => {
     const staleLive = config("stale-live", "0.0.29");
     const initial = config("session", "0.0.30");
     const live = config("live", "0.0.30");
+    const upgradedInPlace = config("upgraded", "0.0.31");
 
     expect(
       resolveServerConfigValue(
@@ -746,6 +747,7 @@ describe("server state projection", () => {
           config: staleLive,
           latestEvent: snapshotEvent(staleLive),
           source: "live",
+          sessionVersion: "0.0.29",
         },
         initial,
       ),
@@ -760,6 +762,17 @@ describe("server state projection", () => {
         initial,
       ),
     ).toBe(live);
+    expect(
+      resolveServerConfigValue(
+        {
+          config: upgradedInPlace,
+          latestEvent: snapshotEvent(upgradedInPlace),
+          source: "live",
+          sessionVersion: "0.0.30",
+        },
+        initial,
+      ),
+    ).toBe(upgradedInPlace);
   });
 
   it.effect("throttles server configuration writes and flushes the latest on teardown", () =>

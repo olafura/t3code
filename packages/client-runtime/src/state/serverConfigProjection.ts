@@ -5,6 +5,9 @@ export interface ServerConfigProjection {
   readonly config: ServerConfig;
   readonly latestEvent: ServerConfigStreamEvent;
   readonly source: "cache" | "live";
+  /** The server version the delivering session connected to. A server upgraded in
+   * place keeps its session, so its config can move past this version. */
+  readonly sessionVersion?: string;
 }
 
 /**

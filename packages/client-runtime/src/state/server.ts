@@ -432,14 +432,27 @@ export const makeEnvironmentServerConfigState = Effect.fn("EnvironmentServerConf
 
     yield* runCachePersistence(persistence, persistPending).pipe(Effect.forkScoped);
 
-    yield* subscribe(WS_METHODS.subscribeServerConfig, {
-      ...(subscription.environmentThemes === true ? { environmentThemes: true } : {}),
-      ...(subscription.usageLimitSources === true ? { usageLimitSources: true } : {}),
-      ...(subscription.usageLimitsCommand === true ? { usageLimitsCommand: true } : {}),
-    }).pipe(
-      Stream.runForEach((event) =>
+    yield* subscribeDynamicWithSession(WS_METHODS.subscribeServerConfig, () =>
+      Effect.succeed({
+        ...(subscription.environmentThemes === true ? { environmentThemes: true } : {}),
+        ...(subscription.usageLimitSources === true ? { usageLimitSources: true } : {}),
+        ...(subscription.usageLimitsCommand === true ? { usageLimitsCommand: true } : {}),
+      }),
+    ).pipe(
+      Stream.runForEach(([session, event]) =>
         Effect.gen(function* () {
-          const next = applyServerConfigProjection(yield* SubscriptionRef.get(state), event);
+          const sessionVersion = yield* session.initialConfig.pipe(
+            Effect.map((config) => config.environment.serverVersion),
+            Effect.option,
+          );
+          const next = applyServerConfigProjection(yield* SubscriptionRef.get(state), event).pipe(
+            Option.map((projection) =>
+              Option.match(sessionVersion, {
+                onNone: () => projection,
+                onSome: (version) => ({ ...projection, sessionVersion: version }),
+              }),
+            ),
+          );
           if (Option.isNone(next)) {
             return;
           }
@@ -597,10 +610,13 @@ export function resolveServerConfigValue(
   projection: ServerConfigProjection | null,
   initialConfig: ServerConfig | null,
 ): ServerConfig | null {
+  // A live projection from a session that has since been replaced (a restart into
+  // another version) is stale until the new session's first event lands.
   if (
     projection?.source === "live" &&
     (initialConfig === null ||
-      projection.config.environment.serverVersion === initialConfig.environment.serverVersion)
+      (projection.sessionVersion ?? projection.config.environment.serverVersion) ===
+        initialConfig.environment.serverVersion)
   ) {
     return projection.config;
   }

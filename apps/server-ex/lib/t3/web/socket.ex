@@ -132,15 +132,10 @@ defmodule T3.Web.Socket do
   # The node moved to another version in place; clients watching it see its new
   # descriptor as a `ready`.
   def handle_info({:t3_upgraded, node, outcome}, state) do
-    case remote(node, T3.Environment, :descriptor, []) do
-      {:ok, descriptor} ->
+    case remote(node, T3.Environment, :server_config, []) do
+      {:ok, config} ->
         config_push(state, node, fn id ->
-          %{
-            "t" => "config.ready",
-            "id" => id,
-            "environment" => descriptor,
-            "updateOutcome" => outcome
-          }
+          %{"t" => "config.ready", "id" => id, "config" => config, "updateOutcome" => outcome}
         end)
 
       _ ->

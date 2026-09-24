@@ -67,8 +67,8 @@ defmodule T3.Web.Protocol do
       {"t": "config", "id", "node", "config"}
       {"t": "config.settings", "id", "settings"}   (the node's ServerSettings changed)
       {"t": "config.providers", "id", "providers"} (its ServerConfig.providers changed)
-      {"t": "config.ready", "id", "environment", "updateOutcome"} (the node moved to
-        another version in place: its new descriptor, and how the update went)
+      {"t": "config.ready", "id", "config", "updateOutcome"} (the node moved to
+        another version in place: its new ServerConfig, and how the update went)
       {"t": "serverUpdate", "id", "event"} (ServerSelfUpdateProgressEvent)
       {"t": "config.themes", "id", "themes"} (the EnvironmentTheme[] it publishes; after
         the snapshot, then on every change)

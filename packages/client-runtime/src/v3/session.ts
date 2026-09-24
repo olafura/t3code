@@ -78,7 +78,6 @@ import {
   PreviewAutomationStreamEvent,
   EnvironmentTheme,
   OrchestrationGetWorkflowScriptError,
-  ExecutionEnvironmentDescriptor,
   ServerSelfUpdateError,
   ServerSelfUpdateOutcome,
   ServerSelfUpdateProgressEvent,
@@ -127,9 +126,6 @@ function resolveKeybindings(rules: unknown): ResolvedKeybindingsConfig {
 }
 
 /** A node sends its raw keybinding rules; clients compile them. */
-const decodeDescriptor = Schema.decodeUnknownSync(
-  Schema.toCodecJson(ExecutionEnvironmentDescriptor),
-);
 const decodeUpdateOutcome = Schema.decodeUnknownSync(Schema.toCodecJson(ServerSelfUpdateOutcome));
 const decodeSelfUpdateProgress = Schema.decodeUnknownSync(
   Schema.toCodecJson(ServerSelfUpdateProgressEvent),
@@ -257,10 +253,10 @@ const decodeAgentSessionError = Schema.decodeUnknownOption(
 );
 
 /**
- * Streams one shape's frames, folded into items, for as long as it is consumed. An
- * `error` frame fails the stream when `toError` is given.
+ * Streams one shape's frames, folded into items, until the node ends the shape or it
+ * stops being consumed. An `error` frame fails the stream when `toError` is given.
  */
-function shapeStream<A, E = never>(
+export function shapeStream<A, E = never>(
   socket: ClusterSocket,
   shape: Shape,
   fold: (frame: ShapeFrame) => ReadonlyArray<A>,
@@ -275,6 +271,7 @@ function shapeStream<A, E = never>(
             return;
           }
           Queue.offerAllUnsafe(queue, fold(frame));
+          if (frame.t === "end") Queue.endUnsafe(queue);
         }),
       ),
       (unsubscribe) => Effect.sync(unsubscribe),
@@ -402,6 +399,15 @@ export function makeV3Session(input: {
                 config: decodeConfig(frame.config),
               },
             ];
+          // The node moved to another version in place; nothing reconnects.
+          if (frame.t === "config.ready")
+            return [
+              {
+                version: 1 as const,
+                type: "snapshot" as const,
+                config: decodeConfig(frame.config),
+              },
+            ];
           if (frame.t === "config.settings")
             return [
               {
@@ -485,7 +491,7 @@ export function makeV3Session(input: {
           ];
         }
         if (frame.t === "config.ready")
-          return [ready(decodeDescriptor(frame.environment), frame.updateOutcome)];
+          return [ready(decodeConfig(frame.config).environment, frame.updateOutcome)];
         return [];
       });
     };
