@@ -240,6 +240,19 @@ defmodule T3.AuthTest do
       )
   end
 
+  test "how browsers sign in follows where the node listens" do
+    assert %{"policy" => "loopback-browser", "bootstrapMethods" => ["one-time-token"]} =
+             T3.Environment.auth()
+
+    # Cookies ignore ports, so each local node names its own.
+    assert T3.Environment.session_cookie() =~ ~r/^t3_session_\d+_[0-9a-f]{12}$/
+
+    Application.put_env(:t3, :host, "0.0.0.0")
+    on_exit(fn -> Application.delete_env(:t3, :host) end)
+    assert %{"policy" => "remote-reachable"} = T3.Environment.auth()
+    assert T3.Environment.session_cookie() =~ ~r/^t3_session_[0-9a-f]{12}$/
+  end
+
   defp post_form(url, form) do
     body = URI.encode_query(form)
 

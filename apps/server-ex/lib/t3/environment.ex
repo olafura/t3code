@@ -123,6 +123,62 @@ defmodule T3.Environment do
   end
 
   @doc """
+  How clients sign in (`ServerAuthDescriptor`), as the Node server decides it: a node
+  listening beyond loopback is `remote-reachable`, one the desktop app runs is
+  `desktop-managed-local`, and any other `loopback-browser`.
+  """
+  def auth do
+    desktop? = Application.get_env(:t3, :desktop_token) != nil
+    remote? = remote_reachable?()
+
+    policy =
+      cond do
+        remote? -> "remote-reachable"
+        desktop? -> "desktop-managed-local"
+        true -> "loopback-browser"
+      end
+
+    %{
+      "policy" => policy,
+      "bootstrapMethods" =>
+        cond do
+          desktop? and remote? -> ["desktop-bootstrap", "one-time-token"]
+          desktop? -> ["desktop-bootstrap"]
+          true -> ["one-time-token"]
+        end,
+      "sessionMethods" => ["browser-session-cookie", "bearer-access-token", "dpop-access-token"],
+      "sessionCookieName" => session_cookie()
+    }
+  end
+
+  @doc """
+  The browser session cookie's name. Cookies are scoped by host, not port, so it
+  names this node: two nodes on one machine must not overwrite each other's session.
+  """
+  def session_cookie do
+    port = Application.get_env(:t3, :port, 3780)
+
+    cond do
+      Application.get_env(:t3, :desktop_token) != nil ->
+        "t3_session_#{port}"
+
+      remote_reachable?() ->
+        "t3_session_#{instance_hash(id())}"
+
+      true ->
+        "t3_session_#{port}_#{instance_hash(Application.fetch_env!(:t3, :home))}"
+    end
+  end
+
+  defp instance_hash(value),
+    do: :crypto.hash(:sha256, value) |> Base.encode16(case: :lower) |> binary_part(0, 12)
+
+  defp remote_reachable? do
+    host = Application.get_env(:t3, :host, "127.0.0.1")
+    host not in ["localhost", "::1", "[::1]"] and not String.starts_with?(host, "127.")
+  end
+
+  @doc """
   The client's `ServerConfig` for this node. Only what a node serves today is
   filled in: Codex and Claude when installed, the user's keybinding rules, the installed editors, and
   the stored settings (`T3.Settings`), which decode to their defaults.
@@ -133,12 +189,7 @@ defmodule T3.Environment do
 
     %{
       "environment" => descriptor(),
-      "auth" => %{
-        "policy" => "loopback-browser",
-        "bootstrapMethods" => ["one-time-token"],
-        "sessionMethods" => ["browser-session-cookie", "bearer-access-token"],
-        "sessionCookieName" => "t3_session"
-      },
+      "auth" => auth(),
       "cwd" => File.cwd!(),
       "keybindingsConfigPath" => Path.join(home, "keybindings.json"),
       # Clients compile the rules with the defaults into `keybindings`.

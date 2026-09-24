@@ -7,8 +7,6 @@ defmodule T3.Web.Router do
 
   use Plug.Router
 
-  @session_cookie "t3_session"
-
   @cors_headers [
     {"access-control-allow-origin", "*"},
     {"access-control-allow-methods", "GET, POST, OPTIONS"},
@@ -140,7 +138,7 @@ defmodule T3.Web.Router do
              user_agent: conn |> get_req_header("user-agent") |> List.first()
            }) do
       conn
-      |> put_resp_cookie(@session_cookie, access,
+      |> put_resp_cookie(T3.Environment.session_cookie(), access,
         http_only: true,
         same_site: "Lax",
         path: "/",
@@ -385,9 +383,9 @@ defmodule T3.Web.Router do
         {:ok, token, :dpop}
 
       [] ->
-        case fetch_cookies(conn).cookies do
-          %{@session_cookie => token} -> {:ok, token, :cookie}
-          _ -> :error
+        case fetch_cookies(conn).cookies[T3.Environment.session_cookie()] do
+          nil -> :error
+          token -> {:ok, token, :cookie}
         end
 
       _ ->
