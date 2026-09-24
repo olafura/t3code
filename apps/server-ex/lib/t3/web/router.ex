@@ -627,15 +627,17 @@ defmodule T3.Web.Router do
   defp no_store(conn),
     do: merge_resp_headers(conn, [{"cache-control", "no-store"}, {"pragma", "no-cache"}])
 
-  # The browser's traces, forwarded to the collector `T3CODE_OTLP_TRACES_URL` names
-  # (OTLP over HTTP, JSON), as the Node server does; without one they are dropped.
+  # The browser's traces, forwarded to the collector `T3CODE_OTLP_TRACES_URL` (or the
+  # desktop bootstrap's `otlpTracesUrl`) names, OTLP over HTTP as JSON, as the Node
+  # server does; without one they are dropped.
   post "/api/observability/v1/traces" do
     case bearer_session(conn) do
       {:ok, %{scopes: scopes}} ->
         if "orchestration:operate" in scopes do
           {:ok, body, conn} = read_body(conn, length: 10_000_000)
 
-          case System.get_env("T3CODE_OTLP_TRACES_URL") do
+          case System.get_env("T3CODE_OTLP_TRACES_URL") ||
+                 Application.get_env(:t3, :otlp_traces_url) do
             url when url in [nil, ""] -> send_resp(conn, 204, "")
             url -> send_resp(conn, export_traces(url, body), "")
           end

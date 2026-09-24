@@ -30,6 +30,8 @@ defmodule T3.Desktop do
     if token = bootstrap["desktopBootstrapToken"],
       do: Application.put_env(:t3, :desktop_token, token)
 
+    if url = bootstrap["otlpTracesUrl"], do: Application.put_env(:t3, :otlp_traces_url, url)
+
     if bootstrap["tailscaleServeEnabled"] == true,
       do: Application.put_env(:t3, :tailscale_serve, bootstrap["tailscaleServePort"] || 443)
 
