@@ -174,7 +174,9 @@ for line in sys.stdin:
     elif method == "session/prompt":
         sid = params["sessionId"]
         text = " ".join(b.get("text", "") for b in params["prompt"] if b.get("type") == "text")
-        if "question" in text:
+        if "Return only the requested JSON object" in text and "sneaky" not in text:
+            reply(mid, sid, '```json\n{"title": "Fix the login", "branch": "fix-login"}\n```')
+        elif "question" in text:
             ask("session/request_permission", {"sessionId": sid,
                 "toolCall": {"toolCallId": "interaction_1", "title": "Pick a colour"},
                 "options": [{"optionId": "red", "name": "Red", "kind": "allow_once"},

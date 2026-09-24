@@ -94,7 +94,13 @@ defmodule T3.Environment do
   """
   def refresh_providers(input) do
     case input do
+      # A workspace's skills, where the provider reads them from the disk.
       %{"cwd" => cwd} when is_binary(cwd) ->
+        id = input["instanceId"]
+
+        if is_binary(id) and T3.Acp.driver(id) == "antigravity" and T3.Acp.enabled?(id),
+          do: T3.Antigravity.refresh_workspace(id, cwd)
+
         :ok
 
       %{"instanceId" => id} when is_binary(id) ->

@@ -13,7 +13,9 @@ defmodule T3.TextGeneration do
 
   Claude runs `claude -p` with a JSON schema and no tools; Codex runs `codex exec`
   in a read-only sandbox; Grok, OpenCode, and Cursor answer one ACP prompt in an
-  empty directory, with every tool and permission request refused.
+  empty directory, with every tool and permission request refused; Antigravity
+  does the same with its own rules (`T3.Antigravity.TextGeneration`), once a
+  session has shown it signed in.
   """
 
   alias T3.JsonRpc.Connection
@@ -32,7 +34,8 @@ defmodule T3.TextGeneration do
     "claudeAgent" => "claude-haiku-4-5",
     "cursor" => "composer-2",
     "grok" => "grok-build",
-    "opencode" => "openai/gpt-5"
+    "opencode" => "openai/gpt-5",
+    "antigravity" => "antigravity-default"
   }
   # The order Node falls back through when the selected provider cannot be used.
   @fallback_order ~w(codex claudeAgent cursor grok pi opencode antigravity)
@@ -160,10 +163,20 @@ defmodule T3.TextGeneration do
 
   defp usable?(settings, %{"instanceId" => id}) when is_binary(id) do
     case driver(id) do
-      "codex" -> enabled?(settings, id) and executable?(codex_command())
-      "claudeAgent" -> enabled?(settings, id) and executable?(claude_command())
-      driver when driver in @acp_drivers -> T3.Acp.enabled?(id) and acp_installed?(id)
-      _ -> false
+      "codex" ->
+        enabled?(settings, id) and executable?(codex_command())
+
+      "claudeAgent" ->
+        enabled?(settings, id) and executable?(claude_command())
+
+      driver when driver in @acp_drivers ->
+        T3.Acp.enabled?(id) and acp_installed?(id)
+
+      "antigravity" ->
+        match?(%{"enabled" => true, "supportsTextGeneration" => true}, T3.Acp.entry(id))
+
+      _ ->
+        false
     end
   end
 
@@ -351,15 +364,20 @@ defmodule T3.TextGeneration do
 
         try do
           in_dir(nil, fn dir ->
-            if driver(id) == "cursor" and
-                 File.exists?(Path.join(System.user_home!(), ".cursor/sandbox.json")) do
-              # Cursor's own sandbox settings could widen what the agent may write.
-              {:error,
-               "Cursor text generation cannot enforce workspace isolation with a custom ~/.cursor/sandbox.json. Use another text-generation provider."}
-            else
-              T3.Acp.with_agent(id, dir, fn conn, _init ->
-                acp_prompt(conn, dir, selection["model"], prompt)
-              end)
+            cond do
+              driver(id) == "antigravity" ->
+                T3.Antigravity.TextGeneration.run(id, selection["model"], prompt)
+
+              driver(id) == "cursor" and
+                  File.exists?(Path.join(System.user_home!(), ".cursor/sandbox.json")) ->
+                # Cursor's own sandbox settings could widen what the agent may write.
+                {:error,
+                 "Cursor text generation cannot enforce workspace isolation with a custom ~/.cursor/sandbox.json. Use another text-generation provider."}
+
+              true ->
+                T3.Acp.with_agent(id, dir, fn conn, _init ->
+                  acp_prompt(conn, dir, selection["model"], prompt)
+                end)
             end
           end)
         catch

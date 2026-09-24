@@ -10,6 +10,10 @@ defmodule T3.Acp do
   users who never opted in; a registry instance is on once added. An enabled agent's model list comes from the `model`
   config option of a throwaway session, which lists the models of the providers it
   is connected to; it is read once, at boot or when the agent is first enabled.
+
+  Antigravity is one of these agents, but its entry, start, sign-in and model
+  refresh are `T3.Antigravity`'s: it is never probed, since each launch unpacks
+  about 1 GB.
   """
 
   alias T3.JsonRpc.Connection

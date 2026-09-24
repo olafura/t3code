@@ -323,6 +323,61 @@ defmodule T3.AntigravityTest do
     refute File.exists?(cwd)
   end
 
+  test "workspace skills are served for the composer's cwd", %{work: work} do
+    File.mkdir_p!(Path.join(work, ".agents/skills/deploy"))
+
+    File.write!(
+      Path.join(work, ".agents/skills/deploy/SKILL.md"),
+      "---\nname: deploy\ndescription: Ship it\n---\n"
+    )
+
+    sign_in()
+    :ok = T3.Antigravity.refresh("antigravity")
+
+    {:ok, %{"providers" => providers}} =
+      T3.Environment.refresh_providers(%{"instanceId" => "antigravity", "cwd" => work})
+
+    assert %{
+             "workspaceSnapshots" => [
+               %{"cwd" => ^work, "skills" => [%{"name" => "deploy", "description" => "Ship it"}]}
+             ]
+           } =
+             Enum.find(providers, &(&1["instanceId"] == "antigravity"))
+  end
+
+  test "text generation runs in an empty directory and refuses tool work", %{log: log} do
+    sign_in()
+    :ok = T3.Antigravity.refresh("antigravity")
+
+    {settings, version} = T3.Settings.get()
+
+    {:ok, _} =
+      T3.Settings.put(
+        Map.put(settings, "textGenerationModelSelection", %{
+          "instanceId" => "antigravity",
+          "model" => "antigravity-default"
+        }),
+        version
+      )
+
+    assert {:ok, %{"title" => "Fix the login"}} =
+             T3.TextGeneration.thread_title(File.cwd!(), "fix the login")
+
+    [{"session/prompt", %{"prompt" => [%{"text" => text}]}} | _] =
+      Enum.reverse(for {"session/prompt", _} = call <- requests(log), do: call)
+
+    assert text =~ "Do not use tools"
+
+    options =
+      for {"session/set_config_option", p} <- requests(log), do: {p["configId"], p["value"]}
+
+    assert {"mode", "default"} in options
+
+    # The fake answers a prompt it does not know with a tool call or a question.
+    assert {:error, message} = T3.TextGeneration.thread_title(File.cwd!(), "be sneaky")
+    assert message =~ ~r/attempted tool work|requested a tool/
+  end
+
   describe "sign-in" do
     setup do
       start_supervised!({Registry, keys: :unique, name: T3.ProviderAuth.Registry})

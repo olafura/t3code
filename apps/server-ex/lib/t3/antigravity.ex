@@ -431,7 +431,7 @@ defmodule T3.Antigravity do
         "version" => get_in(init, ["agentInfo", "version"]) || account["version"],
         "models" => Protocol.models(result || %{})
       })
-      |> put_workspace(cwd, %{})
+      |> put_workspace(id, cwd, %{})
     end)
   end
 
@@ -457,7 +457,7 @@ defmodule T3.Antigravity do
       account ->
         account
         |> Map.put("slashCommands", commands)
-        |> put_workspace(cwd, %{"slashCommands" => commands})
+        |> put_workspace(id, cwd, %{"slashCommands" => commands})
     end)
   end
 
@@ -475,32 +475,49 @@ defmodule T3.Antigravity do
   def refresh_workspace(id, cwd) do
     case Skills.discover(cwd, user_home(id)) do
       {:ok, skills} ->
-        update_account(id, &put_workspace(&1, cwd, %{"skills" => skills}))
+        update_account(id, &put_workspace(&1, id, cwd, %{"skills" => skills}))
 
       {:error, message} ->
         Logger.warning(message)
     end
   end
 
-  defp put_workspace(account, nil, _fields), do: account
+  # A workspace's snapshot: its commands and skills. A new one reads its skills
+  # (clients ask for a workspace only while it has no snapshot).
+  defp put_workspace(account, _id, nil, _fields), do: account
 
-  defp put_workspace(account, cwd, fields) do
-    existing = Enum.find(account["workspaces"], &(&1["cwd"] == cwd)) || %{}
+  defp put_workspace(account, id, cwd, fields) do
+    existing = Enum.find(account["workspaces"], &(&1["cwd"] == cwd))
 
-    snapshot =
-      %{
-        "cwd" => cwd,
-        "checkedAt" => T3.Orchestration.Entities.now(),
-        "slashCommands" => existing["slashCommands"] || account["slashCommands"],
-        "skills" => existing["skills"] || []
-      }
-      |> Map.merge(fields)
+    base =
+      existing ||
+        %{
+          "cwd" => cwd,
+          "slashCommands" => account["slashCommands"],
+          "skills" =>
+            if(Map.has_key?(fields, "skills"),
+              do: [],
+              else:
+                case Skills.discover(cwd, user_home(id)) do
+                  {:ok, skills} -> skills
+                  {:error, _} -> []
+                end
+            )
+        }
 
-    workspaces =
-      (Enum.reject(account["workspaces"], &(&1["cwd"] == cwd)) ++ [snapshot])
-      |> Enum.take(-@max_workspaces)
+    snapshot = Map.merge(base, fields)
 
-    Map.put(account, "workspaces", workspaces)
+    if existing != nil and snapshot == existing do
+      account
+    else
+      snapshot = Map.put(snapshot, "checkedAt", T3.Orchestration.Entities.now())
+
+      workspaces =
+        (Enum.reject(account["workspaces"], &(&1["cwd"] == cwd)) ++ [snapshot])
+        |> Enum.take(-@max_workspaces)
+
+      Map.put(account, "workspaces", workspaces)
+    end
   end
 
   # --- the provider entry ----------------------------------------------------------
