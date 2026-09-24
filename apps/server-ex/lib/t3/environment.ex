@@ -58,6 +58,9 @@ defmodule T3.Environment do
         "storageCleanup" => true,
         # Releases move to a new version in place, or restart into it (`T3.Upgrade`).
         "serverSelfUpdateProgress" => T3.Upgrade.capability() != nil,
+        # A hot upgrade leaves turns running; a restart into the new version continues
+        # them where the project asks (`T3.Orchestration.Recovery.continue/0`).
+        "serverUpdateThreadContinuation" => T3.Upgrade.capability() != nil,
         "projectWorktreeCleanup" => true,
         # Thread commands `T3.Orchestration` understands (`@thread_updates`).
         "threadSettlement" => true,
