@@ -22,6 +22,10 @@ defmodule T3.Subprocess do
 
   @read_size 65_535
 
+  @doc """
+  Starts `cmd`. With `stderr: :consume`, a second linked reader sends the owner
+  stderr as it comes, `{:subprocess_stderr, data}`, without waiting for acks.
+  """
   @spec start([String.t()], keyword) :: {:ok, t} | {:error, term}
   def start(cmd, opts \\ []) do
     with {:ok, proc} <- Proc.start_link(cmd, Keyword.put_new(opts, :stderr, :disable)) do
@@ -29,7 +33,32 @@ defmodule T3.Subprocess do
       reader = spawn_link(fn -> reader_init(proc, owner) end)
       :ok = Proc.change_pipe_owner(proc, :stdout, reader)
       send(reader, :owned)
+
+      if opts[:stderr] == :consume do
+        errors = spawn_link(fn -> stderr_init(proc, owner) end)
+        :ok = Proc.change_pipe_owner(proc, :stderr, errors)
+        send(errors, :owned)
+      end
+
       {:ok, %__MODULE__{proc: proc, reader: reader}}
+    end
+  end
+
+  @doc false
+  def stderr_init(proc, owner) do
+    receive do: (:owned -> :ok)
+    __MODULE__.stderr_loop(proc, owner)
+  end
+
+  @doc false
+  def stderr_loop(proc, owner) do
+    case Proc.read_stderr(proc, @read_size) do
+      {:ok, data} ->
+        send(owner, {:subprocess_stderr, IO.iodata_to_binary(data)})
+        __MODULE__.stderr_loop(proc, owner)
+
+      _eof_or_error ->
+        :ok
     end
   end
 

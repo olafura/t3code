@@ -4,8 +4,10 @@ defmodule T3.JsonRpc.Connection do
 
   Callers use `call/4` and `notify/3`. Incoming notifications and server-to-client
   requests go to the `:handler` pid as `{:json_rpc, conn, message}`; the handler
-  answers requests with `respond/3`. If the subprocess exits, pending calls fail with
-  `{:error, :closed}` and the connection stops.
+  answers requests with `respond/3`. A stdout line that is not JSON arrives as
+  `{:invalid, line}`, and with `stderr: true` the program's stderr as
+  `{:stderr, data}` chunks (otherwise it is discarded). If the subprocess exits,
+  pending calls fail with `{:error, :closed}` and the connection stops.
 
   The state is versioned so a hot upgrade can migrate it in `code_change/3`.
   """
@@ -22,6 +24,7 @@ defmodule T3.JsonRpc.Connection do
           | {:dialect, JsonRpc.dialect()}
           | {:cd, String.t()}
           | {:env, [{String.t(), String.t()}]}
+          | {:stderr, boolean}
 
   @spec start_link([option]) :: GenServer.on_start()
   def start_link(opts), do: GenServer.start_link(__MODULE__, opts, hibernate_after: 15_000)
@@ -47,6 +50,9 @@ defmodule T3.JsonRpc.Connection do
     Process.flag(:trap_exit, true)
     cmd = Keyword.fetch!(opts, :cmd)
     spawn_opts = Keyword.take(opts, [:cd, :env])
+
+    spawn_opts =
+      if opts[:stderr] == true, do: [{:stderr, :consume} | spawn_opts], else: spawn_opts
 
     case Subprocess.start(cmd, spawn_opts) do
       {:ok, sub} ->
@@ -95,6 +101,11 @@ defmodule T3.JsonRpc.Connection do
   def handle_info({:subprocess_lines, _reader, lines}, state) do
     state = Enum.reduce(lines, state, &handle_line/2)
     Subprocess.ack(state.sub)
+    {:noreply, state}
+  end
+
+  def handle_info({:subprocess_stderr, data}, state) do
+    send(state.handler, {:json_rpc, self(), {:stderr, data}})
     {:noreply, state}
   end
 

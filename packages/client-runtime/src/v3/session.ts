@@ -33,6 +33,7 @@ import {
   ProjectWriteFileError,
   type ProjectWriteFileInput,
   ProviderAuthState,
+  ProviderInstallState,
   ProviderSetupError,
   PullRequestOperationError,
   PullRequestUnavailableError,
@@ -152,6 +153,7 @@ const decodeUsageLimitSources = Schema.decodeUnknownSync(
 );
 const decodeUsageLimitSourceError = Schema.decodeUnknownOption(UsageLimitSourceError);
 const decodeAuthState = Schema.decodeUnknownSync(Schema.toCodecJson(ProviderAuthState));
+const decodeInstallState = Schema.decodeUnknownSync(Schema.toCodecJson(ProviderInstallState));
 const decodeWorktreeSetup = Schema.decodeUnknownSync(Schema.toCodecJson(WorktreeSetupStreamEvent));
 const decodeScheduledTasks = Schema.decodeUnknownSync(Schema.toCodecJson(ScheduledTaskListResult));
 const decodeScheduledTaskError = Schema.decodeUnknownOption(ScheduledTaskError);
@@ -926,7 +928,7 @@ export function makeV3Session(input: {
       },
     );
 
-    const providerAuthCommand = (tag: string, operation: string) =>
+    const providerSetupCommand = (tag: string, operation: string) =>
       forward(tag, (request: { readonly instanceId: string }, message, cause) =>
         setupError(
           request.instanceId,
@@ -942,6 +944,16 @@ export function makeV3Session(input: {
         { type: "providerAuth", node, instanceId: request.instanceId },
         (frame) => (frame.t === "providerAuth" ? [decodeAuthState(frame.state)] : []),
         (frame) => setupError(request.instanceId, "subscribe", String(frame.reason), frame.detail),
+      );
+
+    // A provider's managed install (Antigravity's runtime) runs on the node that runs it.
+    const providerInstallSubscribe = (request: { readonly instanceId: string }) =>
+      shapeStream(
+        socket,
+        { type: "providerInstall", node, instanceId: request.instanceId },
+        (frame) => (frame.t === "providerInstall" ? [decodeInstallState(frame.state)] : []),
+        (frame) =>
+          setupError(request.instanceId, "observe-install", String(frame.reason), frame.detail),
       );
 
     // ACP Registry search and installs run on the node that will run the agent.
@@ -1356,16 +1368,35 @@ export function makeV3Session(input: {
       [WS_METHODS.subscribeWorktreeSetup]: worktreeSetup,
       [WS_METHODS.worktreeSetupCancel]: cancelWorktreeSetup,
       [WS_METHODS.providerAuthSubscribe]: providerAuthSubscribe,
-      [WS_METHODS.providerAuthStart]: providerAuthCommand(WS_METHODS.providerAuthStart, "start"),
-      [WS_METHODS.providerAuthRespond]: providerAuthCommand(
+      [WS_METHODS.providerAuthStart]: providerSetupCommand(WS_METHODS.providerAuthStart, "start"),
+      [WS_METHODS.providerAuthRespond]: providerSetupCommand(
         WS_METHODS.providerAuthRespond,
         "respond",
       ),
-      [WS_METHODS.providerAuthCancel]: providerAuthCommand(WS_METHODS.providerAuthCancel, "cancel"),
-      [WS_METHODS.providerAuthLogout]: providerAuthCommand(WS_METHODS.providerAuthLogout, "logout"),
-      [WS_METHODS.providerAuthComplete]: providerAuthCommand(
+      [WS_METHODS.providerAuthCancel]: providerSetupCommand(
+        WS_METHODS.providerAuthCancel,
+        "cancel",
+      ),
+      [WS_METHODS.providerAuthLogout]: providerSetupCommand(
+        WS_METHODS.providerAuthLogout,
+        "logout",
+      ),
+      [WS_METHODS.providerAuthComplete]: providerSetupCommand(
         WS_METHODS.providerAuthComplete,
         "complete",
+      ),
+      [WS_METHODS.providerInstallSubscribe]: providerInstallSubscribe,
+      [WS_METHODS.providerInstallStart]: providerSetupCommand(
+        WS_METHODS.providerInstallStart,
+        "install",
+      ),
+      [WS_METHODS.providerInstallCancel]: providerSetupCommand(
+        WS_METHODS.providerInstallCancel,
+        "cancel-install",
+      ),
+      [WS_METHODS.providerInstallRemove]: providerSetupCommand(
+        WS_METHODS.providerInstallRemove,
+        "remove-install",
       ),
       [WS_METHODS.agentSessionsScan]: agentSessionCommand(WS_METHODS.agentSessionsScan),
       [WS_METHODS.agentSessionsImport]: agentSessionCommand(WS_METHODS.agentSessionsImport),

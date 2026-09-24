@@ -56,6 +56,7 @@ defmodule T3.Application do
           Supervisor.child_spec({Task, &T3.Codex.Provider.load/0}, id: :codex_models),
           {Registry, keys: :unique, name: T3.Acp.Registry},
           T3.Acp.UrlAuth,
+          T3.Antigravity.Installation,
           Supervisor.child_spec({Task, &T3.Acp.load/0}, id: :acp_models),
           T3.Web,
           Supervisor.child_spec({Task, &T3.Web.announce/0}, id: :announce),

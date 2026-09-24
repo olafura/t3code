@@ -31,6 +31,12 @@ export type ProviderAuthShape = {
   readonly node: string;
   readonly instanceId: string;
 };
+/** A provider's managed install (`ProviderInstallState`), then every change. */
+export type ProviderInstallShape = {
+  readonly type: "providerInstall";
+  readonly node: string;
+  readonly instanceId: string;
+};
 export type WorktreeSetupShape = {
   readonly type: "worktreeSetup";
   readonly node: string;
@@ -90,6 +96,7 @@ export type Shape =
   | ServerUpdateShape
   | RelayClientInstallShape
   | ProviderAuthShape
+  | ProviderInstallShape
   | WorktreeSetupShape;
 
 /** A failed RPC or subscription; `detail` is the contract error as `{_tag, ...fields}`. */

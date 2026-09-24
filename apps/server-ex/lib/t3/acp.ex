@@ -20,7 +20,9 @@ defmodule T3.Acp do
     # The Cursor SDK behind ACP (`packages/cursor-acp`), run by Node.
     "cursor" => %{binary: "node", label: "Cursor"},
     # Pi through the registry's pi-acp adapter, which runs `pi --mode rpc`.
-    "pi" => %{binary: "pi", label: "Pi"}
+    "pi" => %{binary: "pi", label: "Pi"},
+    # Google's agent, started with its own profile and install (`T3.Antigravity`).
+    "antigravity" => %{binary: "agy_acp_server.par", label: "Antigravity"}
   }
 
   # The Cursor sidecar: bundled under priv/ in a release, from packages/ in a checkout.
@@ -57,6 +59,25 @@ defmodule T3.Acp do
   end
 
   defp builtin(id), do: if(Map.has_key?(@agents, id), do: {id, %{}})
+
+  @doc "The driver an instance runs (`\"grok\"`, `\"antigravity\"`, `\"acpRegistry\"`, …), or `nil`."
+  def driver(id) do
+    case instance(id) do
+      {driver, _} -> driver
+      nil -> nil
+    end
+  end
+
+  @doc "An instance's `providerInstances` entry (empty for a built-in agent's own)."
+  def settings_entry(id) do
+    case instance(id) do
+      {_, entry} -> entry
+      nil -> %{}
+    end
+  end
+
+  @doc "The variables set on an instance in its settings, such as an API key."
+  def env(id), do: instance_env(settings_entry(id))
 
   def label(instance) do
     case instance(instance) do
@@ -98,6 +119,10 @@ defmodule T3.Acp do
 
         {:ok, [node, cursor_script(), "--mode", runtime_mode || "approval-required"],
          [{"T3_CURSOR_CREDENTIALS", credentials} | node_env ++ instance_env(entry)]}
+
+      # A profile, credentials and authentication come with it: `T3.Antigravity.start_agent/3`.
+      {"antigravity", _entry} ->
+        {:error, "Antigravity starts through T3.Antigravity"}
 
       {"pi", entry} ->
         with {:ok, command, env} <- T3.Acp.Catalog.command(%{"agentId" => "pi-acp"}),
@@ -165,6 +190,13 @@ defmodule T3.Acp do
   def entries, do: for(id <- instances(), entry = entry(id), do: entry)
 
   def entry(id) do
+    case instance(id) do
+      {"antigravity", instance} -> T3.Antigravity.entry(id, instance)
+      _ -> acp_entry(id)
+    end
+  end
+
+  defp acp_entry(id) do
     with {driver, instance} <- instance(id),
          {:ok, base} <- base_entry(id, driver, instance) do
       enabled = enabled?(id)
@@ -286,9 +318,12 @@ defmodule T3.Acp do
 
   @doc "Reads each enabled agent's version and models from a throwaway session."
   def load do
+    # Antigravity unpacks 1 GB a launch: it is read from the disk and its sessions.
+    T3.Antigravity.boot()
+
     # Apart, so one agent waiting on a sign-in does not hold up the others.
     instances()
-    |> Enum.filter(&enabled?/1)
+    |> Enum.filter(&(enabled?(&1) and driver(&1) != "antigravity"))
     |> Task.async_stream(&load/1, timeout: :infinity, max_concurrency: 4)
     |> Stream.run()
   end
@@ -406,9 +441,25 @@ defmodule T3.Acp do
 
   @doc """
   Starts an instance's agent in `cwd`, initializes it, and calls `fun.(conn,
-  initialize_result)`; the agent stops when `fun` returns.
+  initialize_result)`; the agent stops when `fun` returns. Antigravity is also
+  authenticated first, unless `opts` say `authenticate: false`
+  (`T3.Antigravity.start_agent/3`).
   """
-  def with_agent(id, cwd, fun) do
+  def with_agent(id, cwd, fun, opts \\ []) do
+    if driver(id) == "antigravity" do
+      with {:ok, conn, init} <- T3.Antigravity.start_agent(id, cwd, opts) do
+        try do
+          fun.(conn, init)
+        after
+          Connection.stop(conn)
+        end
+      end
+    else
+      acp_with_agent(id, cwd, fun)
+    end
+  end
+
+  defp acp_with_agent(id, cwd, fun) do
     with {:ok, command, env} <- command(id),
          {:ok, conn} <-
            Connection.start_link(cmd: command, handler: self(), cd: cwd, env: env, dialect: :v2) do
@@ -444,7 +495,13 @@ defmodule T3.Acp do
   @doc "Reads one instance's agent again, now."
   def reload(id) do
     forget(id)
-    if enabled?(id), do: load(id)
+
+    cond do
+      not enabled?(id) -> :ok
+      driver(id) == "antigravity" -> T3.Antigravity.refresh(id)
+      true -> load(id)
+    end
+
     :ok
   end
 
