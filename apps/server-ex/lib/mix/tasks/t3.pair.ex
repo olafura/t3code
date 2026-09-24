@@ -18,6 +18,6 @@ defmodule Mix.Tasks.T3.Pair do
     home = Application.fetch_env!(:t3, :home)
     base = List.first(args) || "http://127.0.0.1:#{Application.get_env(:t3, :port, 3780)}"
     token = T3.Auth.create_pairing_token(Path.join(home, "t3.sqlite"))
-    Mix.shell().info("#{String.trim_trailing(base, "/")}/?token=#{token}")
+    Mix.shell().info("#{String.trim_trailing(base, "/")}/pair#token=#{token}")
   end
 end

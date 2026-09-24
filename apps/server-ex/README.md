@@ -14,8 +14,13 @@ the existing client state, so a node pairs and appears like any other environmen
 mix deps.get
 mix t3.import ~/path/to/snapshot/state.sqlite   # optional: a VACUUM INTO copy of a Node server's state
 mix t3.server                                    # prints ws://127.0.0.1:3780/ws?token=...
-mix t3.pair                                      # one-time pairing URL for Settings → Connections
+mix t3.pair                                      # one-time pairing URL
 ```
+
+A node serves the web app as `npx t3` does, from `apps/web/dist` in development
+(`vp run build` in `apps/web`), `T3_STATIC_DIR`, or the copy a release carries. Open
+the pairing URL in a browser to sign in there, or paste it into Settings →
+Connections in another client.
 
 State lives in the repo's `.t3/elixir` during development; set `T3_HOME` elsewhere.
 
@@ -26,7 +31,7 @@ MIX_ENV=prod mix release        # _build/prod/rel/t3, about 80 MB with ERTS
 _build/prod/rel/t3/bin/t3 start # foreground; state in $T3_HOME (default ~/.t3/elixir)
 ```
 
-The release carries the Cursor sidecar (`packages/cursor-acp`, bundled with its
+The release carries the web app when `apps/web/dist` holds a build, and the Cursor sidecar (`packages/cursor-acp`, bundled with its
 dependencies for the build machine's platform), so building one needs `pnpm`, and
 running Cursor needs Node 22+ on the machine. The desktop app runs it on its own
 Electron binary instead (`T3_NODE_COMMAND`).

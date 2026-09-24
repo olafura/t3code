@@ -131,7 +131,7 @@ defmodule T3.Environment do
       "auth" => %{
         "policy" => "loopback-browser",
         "bootstrapMethods" => ["one-time-token"],
-        "sessionMethods" => ["bearer-access-token"],
+        "sessionMethods" => ["browser-session-cookie", "bearer-access-token"],
         "sessionCookieName" => "t3_session"
       },
       "cwd" => File.cwd!(),

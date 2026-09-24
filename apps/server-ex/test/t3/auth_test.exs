@@ -156,6 +156,90 @@ defmodule T3.AuthTest do
     assert :binary.list_to_bin(body) =~ "Settings → Connections"
   end
 
+  test "the app a node serves signs its browser in with a session cookie", %{
+    port: port,
+    path: path,
+    tmp_dir: dir
+  } do
+    web = Path.join(dir, "web")
+    File.mkdir_p!(Path.join(web, "assets"))
+    File.write!(Path.join(web, "index.html"), "<!doctype html><title>app</title>")
+    File.write!(Path.join(web, "assets/index-AbCd1234.js"), "export {}")
+    System.put_env("T3_STATIC_DIR", web)
+    on_exit(fn -> System.delete_env("T3_STATIC_DIR") end)
+    base = ~c"http://127.0.0.1:#{port}"
+
+    # Any page is the app's to route; hashed build assets are cached for good.
+    {:ok, {{_, 200, _}, headers, body}} = :httpc.request(base ++ ~c"/pair")
+    assert to_string(body) =~ "<title>app</title>"
+    assert {_, ~c"no-cache"} = List.keyfind(headers, ~c"cache-control", 0)
+
+    {:ok, {{_, 200, _}, headers, _}} = :httpc.request(base ++ ~c"/assets/index-AbCd1234.js")
+    assert {_, cache} = List.keyfind(headers, ~c"cache-control", 0)
+    assert to_string(cache) =~ "immutable"
+
+    {:ok, {{_, 404, _}, _, _}} = :httpc.request(base ++ ~c"/api/nothing")
+
+    traversal = %{Plug.Test.conn(:get, "/") | path_info: ["assets", "..", "t3.sqlite"]}
+    assert T3.Web.Static.serve(traversal, web).status == 400
+
+    pairing = T3.Auth.create_pairing_token(path)
+    url = to_string(base) <> "/api/auth/browser-session"
+
+    {:ok, {{_, 401, _}, _, _}} =
+      :httpc.request(:post, {url, [], ~c"application/json", ~s({"credential":"nope"})}, [], [])
+
+    {:ok, {{_, 200, _}, headers, body}} =
+      :httpc.request(
+        :post,
+        {url, [], ~c"application/json", JSON.encode!(%{"credential" => pairing})},
+        [],
+        []
+      )
+
+    assert %{"authenticated" => true, "sessionMethod" => "browser-session-cookie"} =
+             JSON.decode!(to_string(body))
+
+    {_, set_cookie} = List.keyfind(headers, ~c"set-cookie", 0)
+    assert to_string(set_cookie) =~ "HttpOnly"
+    [cookie | _] = set_cookie |> to_string() |> String.split(";")
+    cookie_header = [{~c"cookie", to_charlist(cookie)}]
+
+    {:ok, {{_, 200, _}, _, body}} =
+      :httpc.request(:get, {to_string(base) <> "/api/auth/session", cookie_header}, [], [])
+
+    assert %{"authenticated" => true, "sessionMethod" => "browser-session-cookie"} =
+             JSON.decode!(to_string(body))
+
+    {:ok, {{_, 200, _}, _, body}} =
+      :httpc.request(
+        :post,
+        {to_string(base) <> "/api/auth/websocket-ticket", cookie_header, ~c"application/json",
+         ""},
+        [],
+        []
+      )
+
+    assert %{"ticket" => ticket} = JSON.decode!(to_string(body))
+    assert {:ok, _client} = WsClient.connect(port, "/ws?wsTicket=#{ticket}")
+
+    # Its socket may present the cookie itself.
+    assert {:ok, _client} =
+             WsClient.connect(port, "/ws", [{"cookie", to_string(cookie)}])
+
+    assert {:error, 401} = WsClient.connect(port, "/ws")
+
+    # Browser traces are accepted, and dropped without a collector.
+    {:ok, {{_, 204, _}, _, _}} =
+      :httpc.request(
+        :post,
+        {to_string(base) <> "/api/observability/v1/traces", cookie_header, ~c"application/json",
+         ~s({"resourceSpans":[]})},
+        [],
+        []
+      )
+  end
+
   defp post_form(url, form) do
     body = URI.encode_query(form)
 

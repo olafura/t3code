@@ -1,9 +1,9 @@
 defmodule T3.Test.WsClient do
   @moduledoc "Minimal blocking WebSocket client for tests, speaking JSON text frames."
 
-  def connect(port, path) do
+  def connect(port, path, headers \\ []) do
     {:ok, conn} = Mint.HTTP.connect(:http, "127.0.0.1", port)
-    {:ok, conn, ref} = Mint.WebSocket.upgrade(:ws, conn, path, [])
+    {:ok, conn, ref} = Mint.WebSocket.upgrade(:ws, conn, path, headers)
     {conn, [{:status, ^ref, status}, {:headers, ^ref, headers} | rest]} = recv_http(conn, [])
 
     if status == 101 do
@@ -65,9 +65,18 @@ defmodule T3.Test.WsClient do
   defp recv_http(conn, acc) do
     receive do
       message ->
-        {:ok, conn, responses} = Mint.WebSocket.stream(conn, message)
-        acc = acc ++ responses
-        if Enum.any?(acc, &match?({:done, _}, &1)), do: {conn, acc}, else: recv_http(conn, acc)
+        case Mint.WebSocket.stream(conn, message) do
+          {:ok, conn, responses} ->
+            acc = acc ++ responses
+
+            if Enum.any?(acc, &match?({:done, _}, &1)),
+              do: {conn, acc},
+              else: recv_http(conn, acc)
+
+          # Another process's message, not this connection's.
+          :unknown ->
+            recv_http(conn, acc)
+        end
     end
   end
 end

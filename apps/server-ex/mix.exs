@@ -14,7 +14,7 @@ defmodule T3.MixProject do
         t3: [
           include_executables_for: [:unix],
           strip_beams: true,
-          steps: [:assemble, &stage_cursor_acp/1, &write_upgrade_manifest/1]
+          steps: [:assemble, &stage_cursor_acp/1, &stage_web/1, &write_upgrade_manifest/1]
         ]
       ]
     ]
@@ -65,6 +65,20 @@ defmodule T3.MixProject do
         ["--outfile=#{target}/main.mjs"],
       package
     )
+
+    release
+  end
+
+  # The web app the node serves (`T3.Web.Static`), from the checkout's build. A
+  # release without one serves no app, only a page explaining pairing links.
+  defp stage_web(release) do
+    source = Path.expand("../web/dist", __DIR__)
+    target = Path.join([release.path, "lib", "t3-#{release.version}", "priv", "web"])
+    File.rm_rf!(target)
+
+    if File.regular?(Path.join(source, "index.html")),
+      do: File.cp_r!(source, target),
+      else: Mix.shell().info("No web build in apps/web/dist; the release serves no app.")
 
     release
   end

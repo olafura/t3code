@@ -186,6 +186,13 @@ defmodule T3.Devices.Proxy do
         {_, ["Bearer " <> bearer]} ->
           with {:ok, session} <- T3.Auth.session(bearer), do: {:ok, session.scopes}
 
+        # A browser running the app this node serves (`T3.Web.Router`).
+        {_, []} ->
+          with %{"t3_session" => token} <- Plug.Conn.fetch_cookies(conn).cookies,
+               {:ok, session} <- T3.Auth.session(token),
+               do: {:ok, session.scopes},
+               else: (_ -> :error)
+
         _ ->
           :error
       end

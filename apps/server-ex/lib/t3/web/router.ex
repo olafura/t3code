@@ -7,6 +7,8 @@ defmodule T3.Web.Router do
 
   use Plug.Router
 
+  @session_cookie "t3_session"
+
   @cors_headers [
     {"access-control-allow-origin", "*"},
     {"access-control-allow-methods", "GET, POST, OPTIONS"},
@@ -37,9 +39,17 @@ defmodule T3.Web.Router do
     conn |> put_resp_content_type("application/json") |> send_resp(200, body)
   end
 
-  # A pairing link opened in a browser lands here. The node serves no app, so the
-  # page says where the link goes instead of answering "not found".
+  # The app, when the node has a build of it (`T3.Web.Static`). Without one, a
+  # pairing link opened in a browser lands here, so the page says where the link
+  # goes instead of answering "not found".
   get "/" do
+    case T3.Web.Static.dir() do
+      nil -> pairing_page(conn)
+      dir -> T3.Web.Static.serve(conn, dir)
+    end
+  end
+
+  defp pairing_page(conn) do
     label = T3.Environment.descriptor()["label"]
 
     conn
@@ -83,13 +93,13 @@ defmodule T3.Web.Router do
   get "/api/auth/session" do
     auth = T3.Environment.server_config()["auth"]
 
-    case bearer_session(conn) do
-      {:ok, session} ->
+    case request_session(conn) do
+      {:ok, session, method} ->
         json(conn, 200, %{
           "authenticated" => true,
           "auth" => auth,
           "scopes" => session.scopes,
-          "sessionMethod" => "bearer-access-token",
+          "sessionMethod" => method,
           "expiresAt" => iso(session.expires_at)
         })
 
@@ -98,8 +108,45 @@ defmodule T3.Web.Router do
     end
   end
 
+  # The app this node serves signs its browser in with a session cookie: the
+  # pairing credential from its `/pair#token=` link becomes one.
+  post "/api/auth/browser-session" do
+    {:ok, body, conn} = read_body(conn, length: 64_000)
+
+    with {:ok, %{"credential" => credential}} when is_binary(credential) <- JSON.decode(body),
+         {:ok, access, expires_in, scopes} <-
+           T3.Auth.exchange(String.trim(credential), %{
+             label: nil,
+             device_type: nil,
+             os: nil,
+             user_agent: conn |> get_req_header("user-agent") |> List.first()
+           }) do
+      conn
+      |> put_resp_cookie(@session_cookie, access,
+        http_only: true,
+        same_site: "Lax",
+        path: "/",
+        max_age: expires_in
+      )
+      |> json(200, %{
+        "authenticated" => true,
+        "scopes" => scopes,
+        "sessionMethod" => "browser-session-cookie",
+        "expiresAt" => iso(System.system_time(:millisecond) + expires_in * 1000)
+      })
+    else
+      _ ->
+        json(conn, 401, %{
+          "_tag" => "EnvironmentAuthInvalidError",
+          "code" => "auth_invalid",
+          "reason" => "invalid_credential",
+          "traceId" => trace_id()
+        })
+    end
+  end
+
   post "/api/auth/websocket-ticket" do
-    with ["Bearer " <> token] <- get_req_header(conn, "authorization"),
+    with {:ok, token} <- request_token(conn),
          {:ok, ticket, expires_at} <- T3.Auth.issue_ticket(token) do
       json(conn, 200, %{"ticket" => ticket, "expiresAt" => iso(expires_at)})
     else
@@ -199,7 +246,7 @@ defmodule T3.Web.Router do
   get "/ws" do
     conn = fetch_query_params(conn)
 
-    case socket_session(conn.query_params) do
+    case socket_session(conn) do
       {:ok, session} ->
         conn
         |> WebSockAdapter.upgrade(T3.Web.Socket, %{session: session}, timeout: 60_000)
@@ -217,13 +264,20 @@ defmodule T3.Web.Router do
   end
 
   # The session a socket opens for, or nil for one opened with the node's own token.
-  defp socket_session(%{"wsTicket" => ticket}), do: T3.Auth.take_ticket(ticket)
+  defp socket_session(%{query_params: %{"wsTicket" => ticket}}), do: T3.Auth.take_ticket(ticket)
 
   # The node's own access token, for local tools and development.
-  defp socket_session(%{"token" => token}),
+  defp socket_session(%{query_params: %{"token" => token}}),
     do: if(Plug.Crypto.secure_compare(token, T3.Web.token()), do: {:ok, nil}, else: :error)
 
-  defp socket_session(_), do: :error
+  # The app this node serves opens its socket with the browser's session cookie,
+  # which SameSite keeps to this origin.
+  defp socket_session(conn) do
+    case request_session(conn) do
+      {:ok, session, _method} -> {:ok, session.id}
+      :error -> :error
+    end
+  end
 
   # Runs `fun.(session)` for a bearer whose session has `scope`; `fun` returns
   # `{status, body}` or `{:error, reason}`.
@@ -277,9 +331,41 @@ defmodule T3.Web.Router do
   defp trace_id, do: Base.encode16(:crypto.strong_rand_bytes(8), case: :lower)
 
   defp bearer_session(conn) do
-    case get_req_header(conn, "authorization") do
-      ["Bearer " <> token] -> T3.Auth.session(token)
+    case request_session(conn) do
+      {:ok, session, _method} -> {:ok, session}
+      :error -> :error
+    end
+  end
+
+  # A request's session and how it was presented: a bearer token, or the session
+  # cookie of a browser running the app this node serves.
+  defp request_session(conn) do
+    with {:ok, token} <- request_token(conn),
+         {:ok, session} <- T3.Auth.session(token) do
+      method =
+        if get_req_header(conn, "authorization") == [],
+          do: "browser-session-cookie",
+          else: "bearer-access-token"
+
+      {:ok, session, method}
+    else
       _ -> :error
+    end
+  end
+
+  defp request_token(conn) do
+    case get_req_header(conn, "authorization") do
+      ["Bearer " <> token] ->
+        {:ok, token}
+
+      [] ->
+        case fetch_cookies(conn).cookies do
+          %{@session_cookie => token} -> {:ok, token}
+          _ -> :error
+        end
+
+      _ ->
+        :error
     end
   end
 
@@ -360,8 +446,47 @@ defmodule T3.Web.Router do
     _, _ -> {:error, 502, "The node holding this file is unavailable."}
   end
 
+  # The browser's traces, forwarded to the collector `T3CODE_OTLP_TRACES_URL` names
+  # (OTLP over HTTP, JSON), as the Node server does; without one they are dropped.
+  post "/api/observability/v1/traces" do
+    case bearer_session(conn) do
+      {:ok, %{scopes: scopes}} ->
+        if "orchestration:operate" in scopes do
+          {:ok, body, conn} = read_body(conn, length: 10_000_000)
+
+          case System.get_env("T3CODE_OTLP_TRACES_URL") do
+            url when url in [nil, ""] -> send_resp(conn, 204, "")
+            url -> send_resp(conn, export_traces(url, body), "")
+          end
+        else
+          send_resp(conn, 403, "")
+        end
+
+      :error ->
+        send_resp(conn, 401, "")
+    end
+  end
+
+  defp export_traces(url, body) do
+    request = {String.to_charlist(url), [], ~c"application/json", body}
+
+    case :httpc.request(:post, request, [timeout: 10_000], []) do
+      {:ok, {{_, status, _}, _, _}} when status in 200..299 -> 204
+      _ -> 502
+    end
+  end
+
   # Every node's device hub, relayed to the node that owns it (`T3.Devices.Proxy`).
   match "/api/device-hub/*rest", do: T3.Devices.Proxy.serve(conn, rest)
+
+  # Any other page is the app's to route.
+  get _ do
+    dir = T3.Web.Static.dir()
+
+    if dir && hd(conn.path_info ++ [""]) not in ~w(api ws mcp oauth .well-known),
+      do: T3.Web.Static.serve(conn, dir),
+      else: send_resp(conn, 404, "not found")
+  end
 
   match _ do
     send_resp(conn, 404, "not found")
