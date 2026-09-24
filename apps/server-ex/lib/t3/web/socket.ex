@@ -101,33 +101,11 @@ defmodule T3.Web.Socket do
     end
   end
 
-  def handle_info({:t3_server_update, node, event}, state) do
-    case state.by_terminal do
-      %{{:server_update, ^node} => id} ->
-        case event do
-          {:error, detail} ->
-            frame =
-              Map.put(error_frame(id, detail["reason"] || "update failed"), "detail", detail)
+  def handle_info({:t3_server_update, node, event}, state),
+    do: progress(state, {:server_update, node}, "serverUpdate", event)
 
-            {:push, Protocol.encode(frame), unsubscribe(state, id)}
-
-          %{"type" => "complete"} ->
-            frames = [
-              Protocol.encode(%{"t" => "serverUpdate", "id" => id, "event" => event}),
-              Protocol.encode(%{"t" => "end", "id" => id})
-            ]
-
-            {:push, frames, unsubscribe(state, id)}
-
-          _ ->
-            {:push, Protocol.encode(%{"t" => "serverUpdate", "id" => id, "event" => event}),
-             state}
-        end
-
-      _ ->
-        {:ok, state}
-    end
-  end
+  def handle_info({:t3_relay_client_install, node, event}, state),
+    do: progress(state, {:relay_client_install, node}, "relayClientInstall", event)
 
   # The node moved to another version in place; clients watching it see its new
   # descriptor as a `ready`.
@@ -746,6 +724,21 @@ defmodule T3.Web.Socket do
     end
   end
 
+  defp subscribe(state, id, {:relay_client_install, node} = shape, _) do
+    case remote(node, T3.Cloud.RelayClient, :start, [self()]) do
+      {:ok, :ok} ->
+        {:ok,
+         %{
+           state
+           | subs: Map.put(state.subs, id, shape),
+             by_terminal: Map.put(state.by_terminal, shape, id)
+         }}
+
+      {:error, reason} ->
+        {:push, Protocol.encode(error_frame(id, reason)), state}
+    end
+  end
+
   # Runs on the checkout's node; its events come straight here.
   defp subscribe(state, id, {:server_update, node, input} = shape, _) do
     case remote(node, T3.Upgrade, :start, [input, self()]) do
@@ -830,6 +823,34 @@ defmodule T3.Web.Socket do
 
   defp error_frame(id, reason), do: %{"t" => "error", "id" => id, "reason" => to_string(reason)}
 
+  # A job streaming `frame_type` events to the subscription at `key`: progress,
+  # then `complete` and the end, or a failure carrying the contract error.
+  defp progress(state, key, frame_type, event) do
+    case state.by_terminal do
+      %{^key => id} ->
+        case event do
+          {:error, detail} ->
+            reason = detail["message"] || detail["reason"] || "failed"
+            frame = Map.put(error_frame(id, reason), "detail", detail)
+            {:push, Protocol.encode(frame), unsubscribe(state, id)}
+
+          %{"type" => "complete"} ->
+            frames = [
+              Protocol.encode(%{"t" => frame_type, "id" => id, "event" => event}),
+              Protocol.encode(%{"t" => "end", "id" => id})
+            ]
+
+            {:push, frames, unsubscribe(state, id)}
+
+          _ ->
+            {:push, Protocol.encode(%{"t" => frame_type, "id" => id, "event" => event}), state}
+        end
+
+      _ ->
+        {:ok, state}
+    end
+  end
+
   defp unsubscribe(state, id) do
     case Map.pop(state.subs, id) do
       {{:terminal, node, {thread_id, terminal_id} = key}, subs} ->
@@ -842,6 +863,9 @@ defmodule T3.Web.Socket do
 
       {{:server_update, node, _input}, subs} ->
         %{state | subs: subs, by_terminal: Map.delete(state.by_terminal, {:server_update, node})}
+
+      {{:relay_client_install, _node} = key, subs} ->
+        %{state | subs: subs, by_terminal: Map.delete(state.by_terminal, key)}
 
       {{:git_action, _node, %{"actionId" => action_id}}, subs} ->
         %{

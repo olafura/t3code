@@ -47,6 +47,7 @@ defmodule T3.Rpc do
   end
 
   def handle("server.updateServer", input), do: T3.Upgrade.update(input)
+  def handle("cloud.getRelayClientStatus", _input), do: {:ok, T3.Cloud.RelayClient.status()}
 
   def handle("server.acceptAcpRegistryUrlAuth", input), do: T3.Acp.UrlAuth.accept(input)
 

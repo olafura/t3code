@@ -66,6 +66,10 @@ export type ServerUpdateShape = {
   readonly node: string;
   readonly input: Readonly<Record<string, unknown>>;
 };
+export type RelayClientInstallShape = {
+  readonly type: "relayClientInstall";
+  readonly node: string;
+};
 export type Shape =
   | ShellShape
   | StreamShape
@@ -84,6 +88,7 @@ export type Shape =
   | PullRequestRefreshesShape
   | GitActionShape
   | ServerUpdateShape
+  | RelayClientInstallShape
   | ProviderAuthShape
   | WorktreeSetupShape;
 

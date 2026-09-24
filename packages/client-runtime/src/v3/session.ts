@@ -79,6 +79,8 @@ import {
   EnvironmentTheme,
   OrchestrationGetWorkflowScriptError,
   ServerSelfUpdateError,
+  RelayClientInstallFailedError,
+  RelayClientInstallProgressEventSchema,
   ServerSelfUpdateOutcome,
   ServerSelfUpdateProgressEvent,
   ProviderUploadFeedbackError,
@@ -131,6 +133,10 @@ const decodeSelfUpdateProgress = Schema.decodeUnknownSync(
   Schema.toCodecJson(ServerSelfUpdateProgressEvent),
 );
 const decodeSelfUpdateError = Schema.decodeUnknownOption(ServerSelfUpdateError);
+const decodeRelayClientProgress = Schema.decodeUnknownSync(
+  Schema.toCodecJson(RelayClientInstallProgressEventSchema),
+);
+const decodeRelayClientError = Schema.decodeUnknownOption(RelayClientInstallFailedError);
 
 function decodeConfig(raw: unknown): ServerConfig {
   const config = decodeServerConfig(raw);
@@ -586,6 +592,29 @@ export function makeV3Session(input: {
         (frame) =>
           decodeSelfUpdateError(frame.detail).pipe(
             Option.getOrElse(() => new ServerSelfUpdateError({ reason: String(frame.reason) })),
+          ),
+      );
+
+    // T3 Connect's relay client on the node (`T3.Cloud.RelayClient`).
+    const relayClientStatus = forward(
+      WS_METHODS.cloudGetRelayClientStatus,
+      (_request: object, _message, cause) => cause,
+    );
+    const installRelayClient = (_request: object) =>
+      shapeStream(
+        socket,
+        { type: "relayClientInstall", node },
+        (frame) =>
+          frame.t === "relayClientInstall" ? [decodeRelayClientProgress(frame.event)] : [],
+        (frame) =>
+          decodeRelayClientError(frame.detail).pipe(
+            Option.getOrElse(
+              () =>
+                new RelayClientInstallFailedError({
+                  reason: "download_failed",
+                  message: String(frame.reason),
+                }),
+            ),
           ),
       );
 
@@ -1109,6 +1138,8 @@ export function makeV3Session(input: {
       [WS_METHODS.providerUploadFeedback]: uploadFeedback,
       [WS_METHODS.serverUpdateServer]: updateServer,
       [WS_METHODS.serverUpdateServerWithProgress]: updateServerWithProgress,
+      [WS_METHODS.cloudGetRelayClientStatus]: relayClientStatus,
+      [WS_METHODS.cloudInstallRelayClient]: installRelayClient,
       [WS_METHODS.serverUpsertKeybinding]: keybindingCommand("t3.upsertKeybinding"),
       [WS_METHODS.serverRemoveKeybinding]: keybindingCommand("t3.removeKeybinding"),
       [WS_METHODS.shellOpenInEditor]: openInEditor,

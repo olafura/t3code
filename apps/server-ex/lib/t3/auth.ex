@@ -11,6 +11,11 @@ defmodule T3.Auth do
       scopes.
     * A bearer token buys a WebSocket ticket (5 minutes, single use), which the
       client puts in the socket URL so the long-lived token never appears there.
+    * T3 Connect (`T3.Cloud`) mints pairing credentials bound to a client's DPoP
+      key (`create_connect_credential/1`); exchanged with a proof from that key,
+      they give a DPoP-bound session (1 hour) whose every request carries a new
+      proof (`T3.Dpop`). Proof ids, and the relay's request ids, are remembered
+      until they expire so none is accepted twice (`consume_once/2`).
 
   Pairing tokens and sessions are stored hashed in the node's SQLite file, so a
   `mix t3.pair` run next to a running node can mint a pairing token too. Tickets
@@ -25,7 +30,9 @@ defmodule T3.Auth do
   alias Exqlite.Sqlite3
 
   @pairing_ttl :timer.minutes(5)
+  @connect_pairing_ttl :timer.minutes(2)
   @session_ttl :timer.hours(24 * 30)
+  @bound_session_ttl :timer.hours(1)
   @ticket_ttl :timer.minutes(5)
   @standard_scopes ~w(orchestration:read orchestration:operate terminal:operate review:write relay:read)
   @admin_scopes @standard_scopes ++ ~w(access:read access:write relay:write)
@@ -42,7 +49,8 @@ defmodule T3.Auth do
       created_at INTEGER NOT NULL,
       expires_at INTEGER NOT NULL
     )
-    """
+    """,
+    "CREATE TABLE IF NOT EXISTS auth_replay (key TEXT PRIMARY KEY, expires_at INTEGER NOT NULL)"
   ]
 
   # Added after the first release; `ensure_schema/1` adds them to older files.
@@ -55,17 +63,22 @@ defmodule T3.Auth do
     {"auth_sessions", "last_connected_at", "INTEGER"},
     {"auth_sessions", "device_type", "TEXT"},
     {"auth_sessions", "os", "TEXT"},
-    {"auth_sessions", "user_agent", "TEXT"}
+    {"auth_sessions", "user_agent", "TEXT"},
+    {"auth_pairing", "proof_key", "TEXT"},
+    {"auth_sessions", "proof_key", "TEXT"}
   ]
 
   def start_link(opts), do: GenServer.start_link(__MODULE__, opts, name: __MODULE__)
 
-  @doc "Creates a pairing token in the store at `path`; usable from outside the node."
-  @spec create_pairing_token(String.t()) :: String.t()
-  def create_pairing_token(path) do
+  @doc """
+  Creates a pairing token in the store at `path`; usable from outside the node.
+  An `admin` one carries the administrative scopes (Connections, T3 Connect).
+  """
+  @spec create_pairing_token(String.t(), boolean) :: String.t()
+  def create_pairing_token(path, admin \\ false) do
     with_db(path, fn db ->
       ensure_schema(db)
-      insert_pairing(db, nil, @standard_scopes)
+      insert_pairing(db, nil, if(admin, do: @admin_scopes, else: @standard_scopes))
     end)
     |> Map.fetch!("credential")
   end
@@ -73,15 +86,39 @@ defmodule T3.Auth do
   @doc """
   Exchanges a pairing token for `{:ok, access_token, expires_in_s, scopes}`.
   `client` describes who asked: `label`, `device_type`, `os`, `user_agent`.
+  With `proof_key`, the thumbprint of the DPoP key the request proved, the session
+  is bound to that key; a credential minted for a key is exchanged only with it.
   """
-  @spec exchange(String.t(), map) :: {:ok, String.t(), pos_integer, [String.t()]} | :error
-  def exchange(pairing_token, client \\ %{}),
-    do: GenServer.call(__MODULE__, {:exchange, pairing_token, client})
+  @spec exchange(String.t(), map, String.t() | nil) ::
+          {:ok, String.t(), pos_integer, [String.t()]} | :error
+  def exchange(pairing_token, client \\ %{}, proof_key \\ nil),
+    do: GenServer.call(__MODULE__, {:exchange, pairing_token, client, proof_key})
 
-  @doc "The session behind a bearer token, if valid."
+  @doc "The session behind an access token, if valid; `proof_key` is set for a DPoP-bound one."
   @spec session(String.t()) ::
-          {:ok, %{id: String.t(), scopes: [String.t()], expires_at: integer}} | :error
+          {:ok,
+           %{
+             id: String.t(),
+             scopes: [String.t()],
+             expires_at: integer,
+             proof_key: String.t() | nil
+           }}
+          | :error
   def session(access_token), do: GenServer.call(__MODULE__, {:session, access_token})
+
+  @doc """
+  A one-time pairing credential for T3 Connect, usable for two minutes and only
+  with a proof from the DPoP key `thumbprint`: `%{"credential", "expiresAt"}`.
+  """
+  def create_connect_credential(thumbprint),
+    do: GenServer.call(__MODULE__, {:connect_credential, thumbprint})
+
+  @doc """
+  Records `keys` as used for `ttl_ms`: true when none was used before, false when
+  any was (a replay).
+  """
+  @spec consume_once([String.t()], pos_integer) :: boolean
+  def consume_once(keys, ttl_ms), do: GenServer.call(__MODULE__, {:consume_once, keys, ttl_ms})
 
   @spec issue_ticket(String.t()) :: {:ok, String.t(), integer} | :error
   def issue_ticket(access_token) do
@@ -164,7 +201,7 @@ defmodule T3.Auth do
   end
 
   @impl true
-  def handle_call({:exchange, token, client}, _from, %{desktop: desktop} = state) do
+  def handle_call({:exchange, token, client, proof_key}, _from, %{desktop: desktop} = state) do
     {reply, events} =
       with_db(state.path, fn db ->
         cond do
@@ -176,14 +213,14 @@ defmodule T3.Auth do
           true ->
             case query(
                    db,
-                   "DELETE FROM auth_pairing WHERE token_hash = ?1 RETURNING expires_at, id, scopes",
-                   [hash(token)]
+                   "DELETE FROM auth_pairing WHERE token_hash = ?1 AND (proof_key IS NULL OR proof_key = ?2) RETURNING expires_at, id, scopes",
+                   [hash(token), proof_key]
                  ) do
               [[expires_at, id, scopes]] when expires_at > 0 ->
                 removed = [event("pairingLinkRemoved", %{"id" => id})]
 
                 if expires_at > now(),
-                  do: create_session(db, scopes(scopes), client, removed, state),
+                  do: create_session(db, scopes(scopes), client, removed, state, proof_key),
                   else: {:error, removed}
 
               _ ->
@@ -200,12 +237,19 @@ defmodule T3.Auth do
       with_db(state.path, fn db ->
         case query(
                db,
-               "SELECT id, scopes, expires_at FROM auth_sessions WHERE token_hash = ?1",
+               "SELECT id, scopes, expires_at, proof_key FROM auth_sessions WHERE token_hash = ?1",
                [hash(token)]
              ) do
-          [[id, scopes, expires_at]] ->
+          [[id, scopes, expires_at, proof_key]] ->
             if expires_at > now(),
-              do: {:ok, %{id: id, scopes: String.split(scopes), expires_at: expires_at}},
+              do:
+                {:ok,
+                 %{
+                   id: id,
+                   scopes: String.split(scopes),
+                   expires_at: expires_at,
+                   proof_key: proof_key
+                 }},
               else: :error
 
           [] ->
@@ -229,6 +273,44 @@ defmodule T3.Auth do
       end)
 
     {:reply, reply, state}
+  end
+
+  def handle_call({:connect_credential, thumbprint}, _from, state) do
+    link =
+      with_db(
+        state.path,
+        &insert_pairing(&1, "T3 Connect connect", @standard_scopes,
+          ttl: @connect_pairing_ttl,
+          proof_key: thumbprint
+        )
+      )
+
+    listed =
+      link
+      |> Map.drop(["credential"])
+      |> Map.merge(%{"scopes" => @standard_scopes, "subject" => "cloud-connect"})
+
+    {:reply, Map.take(link, ["credential", "expiresAt"]),
+     broadcast(state, [event("pairingLinkUpserted", listed)])}
+  end
+
+  def handle_call({:consume_once, keys, ttl_ms}, _from, state) do
+    fresh =
+      with_db(state.path, fn db ->
+        at = now()
+        exec(db, "DELETE FROM auth_replay WHERE expires_at <= ?1", [at])
+
+        # An ignored insert returns no row: the key was used before.
+        Enum.map(keys, fn key ->
+          query(
+            db,
+            "INSERT OR IGNORE INTO auth_replay (key, expires_at) VALUES (?1, ?2) RETURNING 1",
+            [key, at + ttl_ms]
+          ) != []
+        end)
+      end)
+
+    {:reply, Enum.all?(fresh), state}
   end
 
   def handle_call({:create_link, input}, _from, state) do
@@ -302,47 +384,50 @@ defmodule T3.Auth do
 
   # --- store -------------------------------------------------------------------
 
-  defp insert_pairing(db, label, scopes) do
+  defp insert_pairing(db, label, scopes, opts \\ []) do
     token = random_token()
     id = "pairing-" <> Base.encode16(:crypto.strong_rand_bytes(6), case: :lower)
     created = now()
+    expires = created + Keyword.get(opts, :ttl, @pairing_ttl)
 
     exec(
       db,
-      "INSERT INTO auth_pairing (token_hash, expires_at, id, label, scopes, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-      [hash(token), created + @pairing_ttl, id, label, Enum.join(scopes, " "), created]
+      "INSERT INTO auth_pairing (token_hash, expires_at, id, label, scopes, created_at, proof_key) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+      [hash(token), expires, id, label, Enum.join(scopes, " "), created, opts[:proof_key]]
     )
 
     %{
       "id" => id,
       "credential" => token,
       "createdAt" => iso(created),
-      "expiresAt" => iso(created + @pairing_ttl)
+      "expiresAt" => iso(expires)
     }
     |> put_present("label", label)
   end
 
-  defp create_session(db, scopes, client, events, state) do
+  defp create_session(db, scopes, client, events, state, proof_key \\ nil) do
     access = random_token()
     id = "session-" <> Base.encode16(:crypto.strong_rand_bytes(8), case: :lower)
     created = now()
+    ttl = if proof_key, do: @bound_session_ttl, else: @session_ttl
 
     exec(
       db,
       """
-      INSERT INTO auth_sessions (token_hash, scopes, label, created_at, expires_at, id, device_type, os, user_agent)
-      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+      INSERT INTO auth_sessions (token_hash, scopes, label, created_at, expires_at, id, device_type, os, user_agent, proof_key)
+      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
       """,
       [
         hash(access),
         Enum.join(scopes, " "),
         client[:label],
         created,
-        created + @session_ttl,
+        created + ttl,
         id,
         client[:device_type],
         client[:os],
-        client[:user_agent]
+        client[:user_agent],
+        proof_key
       ]
     )
 
@@ -350,7 +435,7 @@ defmodule T3.Auth do
       for client <- session_rows(db, online(state), "id = ?1", [id]),
           do: event("clientUpserted", client)
 
-    {{:ok, access, div(@session_ttl, 1000), scopes}, events ++ upserted}
+    {{:ok, access, div(ttl, 1000), scopes}, events ++ upserted}
   end
 
   defp links(path) do
@@ -379,17 +464,17 @@ defmodule T3.Auth do
   defp online(state), do: state.sockets |> Map.values() |> MapSet.new()
 
   defp session_rows(db, online, where, args) do
-    for [id, scopes, label, created, expires, last, device, os, agent] <-
+    for [id, scopes, label, created, expires, last, device, os, agent, proof_key] <-
           query(
             db,
-            "SELECT id, scopes, label, created_at, expires_at, last_connected_at, device_type, os, user_agent FROM auth_sessions WHERE #{where} ORDER BY created_at",
+            "SELECT id, scopes, label, created_at, expires_at, last_connected_at, device_type, os, user_agent, proof_key FROM auth_sessions WHERE #{where} ORDER BY created_at",
             args
           ) do
       %{
         "sessionId" => id,
         "subject" => "client",
         "scopes" => String.split(scopes),
-        "method" => "bearer-access-token",
+        "method" => if(proof_key, do: "dpop-access-token", else: "bearer-access-token"),
         "client" =>
           %{"deviceType" => device || device_type(agent)}
           |> put_present("label", label)

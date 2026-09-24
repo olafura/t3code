@@ -69,24 +69,42 @@ defmodule T3.Web.Router do
   post "/oauth/token" do
     params = conn.body_params
 
-    with "urn:ietf:params:oauth:grant-type:token-exchange" <- params["grant_type"],
+    # A client proving a DPoP key gets a session bound to it (T3 Connect).
+    with {:ok, proof_key} <- token_proof_key(conn),
+         "urn:ietf:params:oauth:grant-type:token-exchange" <- params["grant_type"],
          "urn:t3:params:oauth:token-type:environment-bootstrap" <- params["subject_token_type"],
          {:ok, access, expires_in, scopes} <-
-           T3.Auth.exchange(params["subject_token"] || "", %{
-             label: params["client_label"],
-             device_type: params["client_device_type"],
-             os: params["client_os"],
-             user_agent: conn |> get_req_header("user-agent") |> List.first()
-           }) do
+           T3.Auth.exchange(
+             params["subject_token"] || "",
+             %{
+               label: params["client_label"],
+               device_type: params["client_device_type"],
+               os: params["client_os"],
+               user_agent: conn |> get_req_header("user-agent") |> List.first()
+             },
+             proof_key
+           ) do
       json(conn, 200, %{
         "access_token" => access,
         "issued_token_type" => "urn:ietf:params:oauth:token-type:access_token",
-        "token_type" => "Bearer",
+        "token_type" => if(proof_key, do: "DPoP", else: "Bearer"),
         "expires_in" => expires_in,
         "scope" => Enum.join(scopes, " ")
       })
     else
-      _ -> json(conn, 400, %{"error" => "invalid_grant"})
+      {:dpop_error, reason} ->
+        conn
+        |> put_resp_header("www-authenticate", "DPoP")
+        |> json(401, %{
+          "_tag" => "EnvironmentAuthInvalidError",
+          "code" => "auth_invalid",
+          "reason" => "invalid_credential",
+          "dpopFailureReason" => reason,
+          "traceId" => trace_id()
+        })
+
+      _ ->
+        json(conn, 400, %{"error" => "invalid_grant"})
     end
   end
 
@@ -146,7 +164,8 @@ defmodule T3.Web.Router do
   end
 
   post "/api/auth/websocket-ticket" do
-    with {:ok, token} <- request_token(conn),
+    with {:ok, _session, _method} <- request_session(conn),
+         {:ok, token, _scheme} <- request_token(conn),
          {:ok, ticket, expires_at} <- T3.Auth.issue_ticket(token) do
       json(conn, 200, %{"ticket" => ticket, "expiresAt" => iso(expires_at)})
     else
@@ -337,15 +356,19 @@ defmodule T3.Web.Router do
     end
   end
 
-  # A request's session and how it was presented: a bearer token, or the session
-  # cookie of a browser running the app this node serves.
+  # A request's session and how it was presented: a bearer token, a DPoP-bound
+  # token with a fresh proof of its key (T3 Connect), or the session cookie of a
+  # browser running the app this node serves.
   defp request_session(conn) do
-    with {:ok, token} <- request_token(conn),
-         {:ok, session} <- T3.Auth.session(token) do
+    with {:ok, token, scheme} <- request_token(conn),
+         {:ok, session} <- T3.Auth.session(token),
+         :ok <- proven(conn, session, token, scheme) do
       method =
-        if get_req_header(conn, "authorization") == [],
-          do: "browser-session-cookie",
-          else: "bearer-access-token"
+        case scheme do
+          :cookie -> "browser-session-cookie"
+          :bearer -> "bearer-access-token"
+          :dpop -> "dpop-access-token"
+        end
 
       {:ok, session, method}
     else
@@ -356,17 +379,74 @@ defmodule T3.Web.Router do
   defp request_token(conn) do
     case get_req_header(conn, "authorization") do
       ["Bearer " <> token] ->
-        {:ok, token}
+        {:ok, token, :bearer}
+
+      ["DPoP " <> token] ->
+        {:ok, token, :dpop}
 
       [] ->
         case fetch_cookies(conn).cookies do
-          %{@session_cookie => token} -> {:ok, token}
+          %{@session_cookie => token} -> {:ok, token, :cookie}
           _ -> :error
         end
 
       _ ->
         :error
     end
+  end
+
+  # A key-bound session is presented only as DPoP, with a proof from its key for
+  # this request and token; an unbound one never as DPoP.
+  defp proven(_conn, %{proof_key: nil}, _token, scheme) when scheme != :dpop, do: :ok
+
+  defp proven(conn, %{proof_key: key}, token, :dpop) when is_binary(key) do
+    with [proof] <- get_req_header(conn, "dpop"),
+         {:ok, checked} <-
+           T3.Dpop.verify(proof, conn.method, addressed_url(conn),
+             thumbprint: key,
+             access_token: token
+           ),
+         true <- fresh_proof?(checked) do
+      :ok
+    else
+      _ -> :error
+    end
+  end
+
+  defp proven(_conn, _session, _token, _scheme), do: :error
+
+  # `/oauth/token`: `{:ok, thumbprint}` for a request proving a DPoP key,
+  # `{:ok, nil}` for one without a proof.
+  defp token_proof_key(conn) do
+    case get_req_header(conn, "dpop") do
+      [] ->
+        {:ok, nil}
+
+      [proof] ->
+        case T3.Dpop.verify(proof, "POST", addressed_url(conn)) do
+          {:ok, checked} ->
+            if fresh_proof?(checked), do: {:ok, checked.thumbprint}, else: {:dpop_error, "replay"}
+
+          {:error, reason} ->
+            {:dpop_error, reason}
+        end
+
+      _ ->
+        {:dpop_error, "invalid_proof"}
+    end
+  end
+
+  defp fresh_proof?(%{thumbprint: thumbprint, jti: jti}) do
+    key = :crypto.hash(:sha256, "#{thumbprint}:#{jti}") |> Base.url_encode64(padding: false)
+    T3.Auth.consume_once(["dpop-proof-" <> key], :timer.minutes(6))
+  end
+
+  # The URL the client addressed, as a DPoP proof names it: through a T3 Connect
+  # tunnel the request arrives as plain HTTP, marked `x-forwarded-proto: https`.
+  defp addressed_url(conn) do
+    scheme = if get_req_header(conn, "x-forwarded-proto") == ["https"], do: "https", else: "http"
+    host = conn |> get_req_header("host") |> List.first() || "localhost"
+    "#{scheme}://#{host}#{conn.request_path}"
   end
 
   defp json(conn, status, body) do
@@ -445,6 +525,85 @@ defmodule T3.Web.Router do
   catch
     _, _ -> {:error, 502, "The node holding this file is unavailable."}
   end
+
+  # T3 Connect (`T3.Cloud`): a client links the node to its account ...
+  post "/api/connect/link-proof" do
+    conn = no_store(conn)
+
+    with_scope(conn, "relay:write", fn _session ->
+      forwarded =
+        get_req_header(conn, "x-forwarded-host") != [] or
+          get_req_header(conn, "x-forwarded-proto") != []
+
+      with {:ok, body} <- json_body(conn) do
+        if forwarded,
+          do: cloud_result({:error, 400, "Invalid managed endpoint origin."}),
+          else: cloud_result(T3.Cloud.link_proof(body, addressed_url(conn)))
+      end
+    end)
+  end
+
+  post "/api/connect/relay-config" do
+    with_scope(conn, "relay:write", fn _session ->
+      with {:ok, body} <- json_body(conn), do: cloud_result(T3.Cloud.apply_relay_config(body))
+    end)
+  end
+
+  get "/api/connect/link-state" do
+    with_scope(conn, "relay:read", fn _session -> {200, T3.Cloud.link_state()} end)
+  end
+
+  post "/api/connect/unlink" do
+    with_scope(conn, "relay:write", fn _session -> {200, T3.Cloud.unlink()} end)
+  end
+
+  post "/api/connect/preferences" do
+    with_scope(conn, "relay:write", fn _session ->
+      with {:ok, body} <- json_body(conn), do: cloud_result(T3.Cloud.set_preferences(body))
+    end)
+  end
+
+  # ... and the relay, through the node's tunnel, checks it and mints credentials
+  # for clients, each request signed by the relay's key rather than a session.
+  post "/api/t3-connect/health" do
+    relay_call(conn, &T3.Cloud.health/1)
+  end
+
+  post "/api/connect/mint-credential" do
+    relay_call(conn, &T3.Cloud.mint/1)
+  end
+
+  post "/api/t3-connect/mint-credential" do
+    relay_call(conn, &T3.Cloud.mint/1)
+  end
+
+  defp relay_call(conn, fun) do
+    {status, body} =
+      case json_body(conn) do
+        {:ok, body} -> cloud_result(fun.(body))
+        _ -> cloud_result({:error, 400, "Invalid request body."})
+      end
+
+    conn |> no_store() |> json(status, body)
+  end
+
+  defp cloud_result({:ok, body}), do: {200, body}
+  defp cloud_result({:error, status, %{} = body}), do: {status, body}
+
+  defp cloud_result({:error, status, message}) do
+    tag =
+      case status do
+        400 -> "EnvironmentHttpBadRequestError"
+        401 -> "EnvironmentHttpUnauthorizedError"
+        409 -> "EnvironmentHttpConflictError"
+        _ -> "EnvironmentHttpInternalServerError"
+      end
+
+    {status, %{"_tag" => tag, "message" => message}}
+  end
+
+  defp no_store(conn),
+    do: merge_resp_headers(conn, [{"cache-control", "no-store"}, {"pragma", "no-cache"}])
 
   # The browser's traces, forwarded to the collector `T3CODE_OTLP_TRACES_URL` names
   # (OTLP over HTTP, JSON), as the Node server does; without one they are dropped.

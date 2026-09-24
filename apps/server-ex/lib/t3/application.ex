@@ -56,6 +56,8 @@ defmodule T3.Application do
           T3.Acp.UrlAuth,
           Supervisor.child_spec({Task, &T3.Acp.load/0}, id: :acp_models),
           T3.Web,
+          # A T3 Connect link's managed tunnel (`T3.Cloud`).
+          T3.Cloud.Tunnel,
           # Turns the restart cut off go on, where the user asked for that.
           Supervisor.child_spec({Task, &T3.Orchestration.Recovery.continue/0}, id: :continue),
           # Projects that ask for it are brought up to date.
