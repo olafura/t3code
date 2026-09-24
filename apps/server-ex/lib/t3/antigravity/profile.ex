@@ -106,7 +106,7 @@ defmodule T3.Antigravity.Profile do
     """
 
     cond do
-      String.contains?(path, [":", "'", "\n", "%s"]) ->
+      String.contains?(path, [":", "\r", "\n", "\0", "%s"]) ->
         {:error, "The T3 home path cannot be used to suppress Antigravity browser launches."}
 
       File.write(path, script) == :ok and File.chmod(path, 0o700) == :ok ->
@@ -189,7 +189,8 @@ defmodule T3.Antigravity.Profile do
         [
           {"GEMINI_HOME", profile},
           {"AGY_ACP_FORCE_FILE_STORAGE", "1"},
-          {"BROWSER", "'#{helper_path(profile)}' %s"},
+          # Python splits this like a shell: quote the path.
+          {"BROWSER", "'#{String.replace(helper_path(profile), "'", "'\"'\"'")}' %s"},
           {"PYTHONUNBUFFERED", "1"},
           {"ANTIGRAVITY_HARNESS_PATH", executable.harness},
           {"TMPDIR", tmp}

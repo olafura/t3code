@@ -447,7 +447,8 @@ defmodule T3.Attachments do
     if segment in ["", "pending"], do: "_pending", else: segment
   end
 
-  defp dir, do: Path.join(home(), "attachments")
+  @doc "Where this node keeps attachments (a folder agents may be allowed to read)."
+  def dir, do: Path.join(home(), "attachments")
   defp home, do: Application.fetch_env!(:t3, :home)
   defp now_ms, do: System.system_time(:millisecond)
 end

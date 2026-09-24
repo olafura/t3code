@@ -1489,7 +1489,9 @@ defmodule T3.Orchestration do
             type: attachment["type"],
             name: attachment["name"],
             mime_type: attachment["mimeType"],
-            path: path
+            path: path,
+            # A clipboard paste folded into a file, which agents may read lazily.
+            pasted: get_in(attachment, ["source", "_tag"]) == "pasted-text"
           }
         ),
       native_thread_id: get_in(provider_thread || %{}, ["nativeThreadRef", "nativeId"]),

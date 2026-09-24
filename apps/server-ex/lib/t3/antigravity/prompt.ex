@@ -24,12 +24,12 @@ defmodule T3.Antigravity.Prompt do
   @max_total 50 * 1024 * 1024
 
   @doc """
-  The content blocks for `text` and `attachments` (the turn's
-  `%{type, name, mime_type, path}` maps, `pasted: true` for a clipboard paste):
-  `{:ok, blocks}` or `{:error, message}`.
+  The content blocks for the message `text` (which already says where each upload
+  is saved) and `attachments` (the turn's `%{type, name, mime_type, path}` maps,
+  `pasted: true` for a clipboard paste): `{:ok, blocks}` or `{:error, message}`.
   """
   def build(text, attachments) do
-    text = T3.Attachments.prompt_text(text, attachments) |> String.trim()
+    text = String.trim(text || "")
     blocks = if text == "", do: [], else: [%{"type" => "text", "text" => text}]
 
     attachments
