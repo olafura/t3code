@@ -58,6 +58,7 @@ defmodule T3.Application do
           T3.Acp.UrlAuth,
           Supervisor.child_spec({Task, &T3.Acp.load/0}, id: :acp_models),
           T3.Web,
+          Supervisor.child_spec({Task, &T3.Web.announce/0}, id: :announce),
           tailscale_serve(),
           # A T3 Connect link's managed tunnel (`T3.Cloud`).
           T3.Cloud.Tunnel,

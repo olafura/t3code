@@ -64,6 +64,21 @@ defmodule T3.CLITest do
     assert usage =~ "t3ctl pair"
   end
 
+  test "a node prints an administrative pairing URL when it starts", %{port: port} do
+    out = capture_io(fn -> assert :ok = T3.Web.announce() end)
+
+    assert [_, token] =
+             Regex.run(~r{Pairing URL: http://127\.0\.0\.1:#{port}/pair#token=(\S+)}, out)
+
+    assert {:ok, _, _, scopes} = T3.Auth.exchange(token)
+    assert "access:write" in scopes
+
+    # The desktop app signs its own window in instead.
+    Application.put_env(:t3, :desktop_token, "t")
+    on_exit(fn -> Application.delete_env(:t3, :desktop_token) end)
+    assert capture_io(fn -> T3.Web.announce() end) == ""
+  end
+
   test "the service runs the release's service script with the node's home" do
     plist = T3.CLI.launchd_plist("/opt/t3", "/Users/me/.t3/elixir")
     assert plist =~ "<string>/opt/t3/bin/t3-service</string>"

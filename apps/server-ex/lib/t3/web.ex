@@ -10,6 +10,45 @@ defmodule T3.Web do
   end
 
   @doc """
+  At startup outside the desktop app, prints a pairing URL with administrative
+  scopes, as `npx t3` does, so a new node can be opened in a browser right away.
+  """
+  def announce do
+    unless Application.get_env(:t3, :desktop_token) do
+      token = T3.Auth.create_pairing_token(T3.Store.path(), true)
+      IO.puts("T3 node is ready. Pairing URL: #{base_url()}/pair#token=#{token}")
+    end
+
+    :ok
+  end
+
+  @doc "The address other machines reach this node at."
+  def base_url do
+    port = Application.get_env(:t3, :port, 3780)
+
+    host =
+      case Application.get_env(:t3, :host, "127.0.0.1") do
+        any when any in ["0.0.0.0", "::"] -> external_ipv4() || "localhost"
+        host -> host
+      end
+
+    "http://#{if String.contains?(host, ":"), do: "[#{host}]", else: host}:#{port}"
+  end
+
+  defp external_ipv4 do
+    with {:ok, interfaces} <- :inet.getifaddrs() do
+      Enum.find_value(interfaces, fn {_name, opts} ->
+        Enum.find_value(Keyword.get_values(opts, :addr), fn
+          {a, _, _, _} = ip when a != 127 -> :inet.ntoa(ip) |> to_string()
+          _ -> nil
+        end)
+      end)
+    else
+      _ -> nil
+    end
+  end
+
+  @doc """
   The node's access token, generated on first use and kept in the T3 home directory
   with owner-only permissions.
   """
