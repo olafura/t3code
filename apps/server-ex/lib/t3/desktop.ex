@@ -30,6 +30,9 @@ defmodule T3.Desktop do
     if token = bootstrap["desktopBootstrapToken"],
       do: Application.put_env(:t3, :desktop_token, token)
 
+    if bootstrap["tailscaleServeEnabled"] == true,
+      do: Application.put_env(:t3, :tailscale_serve, bootstrap["tailscaleServePort"] || 443)
+
     # The app's telemetry channel (`T3.Desktop.Channel`), inherited descriptors.
     with telemetry when is_integer(telemetry) <- bootstrap["desktopTelemetryFd"],
          control when is_integer(control) <- bootstrap["desktopTelemetryControlFd"],

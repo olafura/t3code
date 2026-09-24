@@ -58,6 +58,7 @@ defmodule T3.Application do
           T3.Acp.UrlAuth,
           Supervisor.child_spec({Task, &T3.Acp.load/0}, id: :acp_models),
           T3.Web,
+          tailscale_serve(),
           # A T3 Connect link's managed tunnel (`T3.Cloud`).
           T3.Cloud.Tunnel,
           T3.Cloud.Activity,
@@ -75,6 +76,13 @@ defmodule T3.Application do
       strategy: :one_for_one,
       name: T3.Supervisor
     )
+  end
+
+  defp tailscale_serve do
+    case Application.get_env(:t3, :tailscale_serve) do
+      nil -> nil
+      port -> {T3.TailscaleServe, port}
+    end
   end
 
   defp desktop_channel do
