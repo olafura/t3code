@@ -59,7 +59,8 @@ defmodule T3.Application do
           # Turns the restart cut off go on, where the user asked for that.
           Supervisor.child_spec({Task, &T3.Orchestration.Recovery.continue/0}, id: :continue),
           # Projects that ask for it are brought up to date.
-          Supervisor.child_spec({Task, &T3.Projects.auto_pull/0}, id: :auto_pull)
+          Supervisor.child_spec({Task, &T3.Projects.auto_pull/0}, id: :auto_pull),
+          Supervisor.child_spec({Task, &T3.Projects.identify_all/0}, id: :identify_projects)
         ] ++ discovery(home)
       else
         []

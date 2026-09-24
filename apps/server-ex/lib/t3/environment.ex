@@ -21,7 +21,8 @@ defmodule T3.Environment do
       # Commands are resolved against the thread on the node, so clients need not
       # read the projection before sending.
       "capabilities" => %{
-        "repositoryIdentity" => false,
+        # Projects carry the repository they are clones of (`T3.Repository`).
+        "repositoryIdentity" => true,
         "serverResolvedCommandContext" => true,
         # GitHub pull requests through `gh` (`T3.PullRequests`), diff over HTTP.
         "pullRequests" => true,

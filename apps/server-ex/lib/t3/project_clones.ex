@@ -125,6 +125,7 @@ defmodule T3.ProjectClones do
       case result do
         :ok ->
           Process.send_after(self(), {:forget, id}, @forget_done_after)
+          T3.Projects.identify(id, state.clones[id]["destinationPath"])
           %{"phase" => "done", "stage" => "checkout", "percent" => 100, "endedAt" => now()}
 
         {:error, message} ->

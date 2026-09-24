@@ -38,6 +38,7 @@ defmodule T3.Projects do
         }
 
         {:ok, _} = T3.Streams.commit(id, :project, [{"project", id, Patch.diff(nil, project)}])
+        identify(id, root)
         {:ok, contract(project)}
     end
   end
@@ -55,7 +56,9 @@ defmodule T3.Projects do
         )
       )
 
-    update(id, &Map.merge(&1, Map.put(fields, "updatedAt", Entities.now())))
+    result = update(id, &Map.merge(&1, Map.put(fields, "updatedAt", Entities.now())))
+    if fields["workspaceRoot"], do: identify(id, fields["workspaceRoot"])
+    result
   end
 
   def mutate(%{"type" => "project.delete", "projectId" => id}),
@@ -100,6 +103,36 @@ defmodule T3.Projects do
       "updatedAt" => project["updatedAt"],
       "deletedAt" => project["deletedAt"]
     })
+  end
+
+  @doc """
+  Records in the background which repository a project's workspace is a clone of
+  (`T3.Repository`), when that changed. Runs when a project is added, moved or
+  cloned into, and for every project at boot (`identify_all/0`), since remotes
+  change outside T3.
+  """
+  def identify(id, root) do
+    Task.start(fn -> record_identity(id, root) end)
+    :ok
+  end
+
+  def identify_all do
+    for {{node, id}, {"project", %{"workspaceRoot" => root} = project}} <- T3.Shell.rows(),
+        node == node(),
+        project["deletedAt"] == nil,
+        do: record_identity(id, root)
+
+    :ok
+  end
+
+  defp record_identity(id, root) do
+    identity = T3.Repository.identity(root)
+
+    update(id, fn project ->
+      if identity,
+        do: Map.put(project, "repositoryIdentity", identity),
+        else: Map.delete(project, "repositoryIdentity")
+    end)
   end
 
   @doc """
