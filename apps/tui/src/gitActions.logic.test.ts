@@ -18,7 +18,14 @@ const status = (over: Partial<VcsStatusResult>): VcsStatusResult =>
     ...over,
   }) as unknown as VcsStatusResult;
 
-const openPr = { number: 7, title: "x", url: "https://example/pr/7", baseRef: "main", headRef: "feature/x", state: "open" };
+const openPr = {
+  number: 7,
+  title: "x",
+  url: "https://example/pr/7",
+  baseRef: "main",
+  headRef: "feature/x",
+  state: "open",
+};
 
 describe("resolveGitQuickAction", () => {
   it("Given a busy state, then it shows a disabled in-progress hint", () => {
@@ -28,12 +35,20 @@ describe("resolveGitQuickAction", () => {
 
   it("Given working-tree changes on a feature branch with upstream, then it offers Commit, push & PR", () => {
     const action = resolveGitQuickAction(status({ hasWorkingTreeChanges: true }), false);
-    expect(action).toMatchObject({ kind: "run_action", action: "commit_push_pr", label: "Commit, push & PR" });
+    expect(action).toMatchObject({
+      kind: "run_action",
+      action: "commit_push_pr",
+      label: "Commit, push & PR",
+    });
   });
 
   it("Given ahead of upstream with no PR, then it offers Push & create PR", () => {
     const action = resolveGitQuickAction(status({ aheadCount: 2 }), false);
-    expect(action).toMatchObject({ kind: "run_action", action: "create_pr", label: "Push & create PR" });
+    expect(action).toMatchObject({
+      kind: "run_action",
+      action: "create_pr",
+      label: "Push & create PR",
+    });
   });
 
   it("Given an open PR that is up to date, then it offers View PR", () => {

@@ -2,10 +2,10 @@
   "name": "@t3tools/tui",
   "version": "0.0.27",
   "private": true,
-  "type": "module",
   "files": [
     "dist"
   ],
+  "type": "module",
   "exports": {
     ".": {
       "default": "./dist/index.js"

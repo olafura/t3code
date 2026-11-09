@@ -100,8 +100,12 @@ export const FilesView = React.memo(function FilesView({
           if (row.kind === "dir") {
             return (
               <text key={`d:${row.path}`} {...(active ? { bg: palette.selectedBg } : {})}>
-                <span fg={active ? palette.accent : palette.dim}>{`${marker}${indent}${row.collapsed ? "▸" : "▾"} `}</span>
-                <span fg={active ? palette.text : palette.dim}>{clip(`${row.name}/`, nameRoom)}</span>
+                <span
+                  fg={active ? palette.accent : palette.dim}
+                >{`${marker}${indent}${row.collapsed ? "▸" : "▾"} `}</span>
+                <span fg={active ? palette.text : palette.dim}>
+                  {clip(`${row.name}/`, nameRoom)}
+                </span>
               </text>
             );
           }
@@ -129,7 +133,9 @@ export const FilesView = React.memo(function FilesView({
       paddingRight={1}
     >
       <text>
-        <span fg={palette.accent}>{viewing ? `file · ${clip(viewing.path, 40)}` : `files · ${clip(cwdLabel, 40)}`}</span>
+        <span fg={palette.accent}>
+          {viewing ? `file · ${clip(viewing.path, 40)}` : `files · ${clip(cwdLabel, 40)}`}
+        </span>
         <span fg={palette.dim}>
           {viewing
             ? "  ·  PgUp/PgDn scroll · Esc back"

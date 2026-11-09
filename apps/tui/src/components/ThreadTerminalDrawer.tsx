@@ -36,7 +36,9 @@ export interface TerminalInfo {
 function renderSegment(segment: TermSegment, key: number): React.ReactNode {
   // Default cells inherit the terminal's own fg/bg; inverse swaps them so the
   // cursor cell and reverse-video runs read correctly on any theme.
-  const fg = segment.inverse ? (segment.backgroundColor ?? THEME.bg) : (segment.color ?? THEME.text);
+  const fg = segment.inverse
+    ? (segment.backgroundColor ?? THEME.bg)
+    : (segment.color ?? THEME.text);
   const bg = segment.inverse ? (segment.color ?? THEME.text) : segment.backgroundColor;
   let node: React.ReactNode = segment.text;
   if (segment.underline) node = <u>{node}</u>;
@@ -131,7 +133,9 @@ const TerminalPane = React.memo(function TerminalPane({
     // the visible one — background tabs needn't trigger N PTY resizes per window
     // resize; a hidden pane resyncs when it becomes visible (visible is a dep).
     if (visible) {
-      void client.terminalResize(info.threadId, info.terminalId, safeCols, safeRows).catch(() => {});
+      void client
+        .terminalResize(info.threadId, info.terminalId, safeCols, safeRows)
+        .catch(() => {});
     }
   }, [safeCols, safeRows, visible]);
 

@@ -34,7 +34,8 @@ export function deriveContextWindow(
     const maxTokens = asFiniteNumber(payload?.maxTokens);
     const usedPercentage =
       maxTokens !== null && maxTokens > 0 ? Math.min(100, (usedTokens / maxTokens) * 100) : null;
-    const remainingTokens = maxTokens !== null ? Math.max(0, Math.round(maxTokens - usedTokens)) : null;
+    const remainingTokens =
+      maxTokens !== null ? Math.max(0, Math.round(maxTokens - usedTokens)) : null;
     return { usedTokens, maxTokens, remainingTokens, usedPercentage };
   }
   return null;

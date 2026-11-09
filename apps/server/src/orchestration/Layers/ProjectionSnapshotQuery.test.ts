@@ -1154,17 +1154,19 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
     }),
   );
 
-  it.effect("windows thread-detail activities to the most recent 500 and pages older on demand", () =>
-    Effect.gen(function* () {
-      const snapshotQuery = yield* ProjectionSnapshotQuery;
-      const sql = yield* SqlClient.SqlClient;
+  it.effect(
+    "windows thread-detail activities to the most recent 500 and pages older on demand",
+    () =>
+      Effect.gen(function* () {
+        const snapshotQuery = yield* ProjectionSnapshotQuery;
+        const sql = yield* SqlClient.SqlClient;
 
-      yield* sql`DELETE FROM projection_projects`;
-      yield* sql`DELETE FROM projection_threads`;
-      yield* sql`DELETE FROM projection_thread_activities`;
-      yield* sql`DELETE FROM projection_state`;
+        yield* sql`DELETE FROM projection_projects`;
+        yield* sql`DELETE FROM projection_threads`;
+        yield* sql`DELETE FROM projection_thread_activities`;
+        yield* sql`DELETE FROM projection_state`;
 
-      yield* sql`
+        yield* sql`
         INSERT INTO projection_projects (
           project_id, title, workspace_root, default_model_selection_json,
           scripts_json, created_at, updated_at, deleted_at
@@ -1176,7 +1178,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
         )
       `;
 
-      yield* sql`
+        yield* sql`
         INSERT INTO projection_threads (
           thread_id, project_id, title, model_selection_json, runtime_mode,
           interaction_mode, branch, worktree_path, latest_turn_id,
@@ -1191,13 +1193,13 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
         )
       `;
 
-      // 600 activities (sequence 1..600); the detail load must return only the
-      // most recent 500 (sequence 101..600), re-sorted ascending for display.
-      const total = 600;
-      yield* Effect.forEach(
-        Array.from({ length: total }, (_unused, index) => index + 1),
-        (seq) =>
-          sql`
+        // 600 activities (sequence 1..600); the detail load must return only the
+        // most recent 500 (sequence 101..600), re-sorted ascending for display.
+        const total = 600;
+        yield* Effect.forEach(
+          Array.from({ length: total }, (_unused, index) => index + 1),
+          (seq) =>
+            sql`
             INSERT INTO projection_thread_activities (
               activity_id, thread_id, turn_id, tone, kind, summary, payload_json,
               sequence, created_at
@@ -1208,43 +1210,43 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
               '2026-04-01T00:01:00.000Z'
             )
           `,
-        { discard: true },
-      );
+          { discard: true },
+        );
 
-      const threadDetail = yield* snapshotQuery.getThreadDetailById(ThreadId.make("thread-1"));
-      assert.equal(threadDetail._tag, "Some");
-      if (threadDetail._tag === "Some") {
-        const activities = threadDetail.value.activities;
-        assert.equal(activities.length, 500);
-        assert.equal(activities[0]?.summary, "act-101");
-        assert.equal(activities[0]?.sequence, 101);
-        assert.equal(activities.at(-1)?.summary, "act-600");
-      }
+        const threadDetail = yield* snapshotQuery.getThreadDetailById(ThreadId.make("thread-1"));
+        assert.equal(threadDetail._tag, "Some");
+        if (threadDetail._tag === "Some") {
+          const activities = threadDetail.value.activities;
+          assert.equal(activities.length, 500);
+          assert.equal(activities[0]?.summary, "act-101");
+          assert.equal(activities[0]?.sequence, 101);
+          assert.equal(activities.at(-1)?.summary, "act-600");
+        }
 
-      // Lazy-load the page immediately older than the windowed view (cursor =
-      // oldest loaded sequence, 101): sequences 1..100, ascending, no more left.
-      const olderPage = yield* snapshotQuery.getThreadActivitiesPage({
-        threadId: ThreadId.make("thread-1"),
-        beforeSequence: 101,
-        limit: 500,
-      });
-      assert.equal(olderPage.activities.length, 100);
-      assert.equal(olderPage.activities[0]?.summary, "act-1");
-      assert.equal(olderPage.activities.at(-1)?.summary, "act-100");
-      assert.equal(olderPage.hasMore, false);
+        // Lazy-load the page immediately older than the windowed view (cursor =
+        // oldest loaded sequence, 101): sequences 1..100, ascending, no more left.
+        const olderPage = yield* snapshotQuery.getThreadActivitiesPage({
+          threadId: ThreadId.make("thread-1"),
+          beforeSequence: 101,
+          limit: 500,
+        });
+        assert.equal(olderPage.activities.length, 100);
+        assert.equal(olderPage.activities[0]?.summary, "act-1");
+        assert.equal(olderPage.activities.at(-1)?.summary, "act-100");
+        assert.equal(olderPage.hasMore, false);
 
-      // A bounded page returns the newest `limit` of the older set and reports
-      // that more remain (sequences 401..600, with 1..400 still older).
-      const boundedPage = yield* snapshotQuery.getThreadActivitiesPage({
-        threadId: ThreadId.make("thread-1"),
-        beforeSequence: 601,
-        limit: 200,
-      });
-      assert.equal(boundedPage.activities.length, 200);
-      assert.equal(boundedPage.activities[0]?.summary, "act-401");
-      assert.equal(boundedPage.activities.at(-1)?.summary, "act-600");
-      assert.equal(boundedPage.hasMore, true);
-    }),
+        // A bounded page returns the newest `limit` of the older set and reports
+        // that more remain (sequences 401..600, with 1..400 still older).
+        const boundedPage = yield* snapshotQuery.getThreadActivitiesPage({
+          threadId: ThreadId.make("thread-1"),
+          beforeSequence: 601,
+          limit: 200,
+        });
+        assert.equal(boundedPage.activities.length, 200);
+        assert.equal(boundedPage.activities[0]?.summary, "act-401");
+        assert.equal(boundedPage.activities.at(-1)?.summary, "act-600");
+        assert.equal(boundedPage.hasMore, true);
+      }),
   );
 
   it.effect("uses projection_threads.latest_turn_id for bulk command and shell snapshots", () =>

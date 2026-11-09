@@ -30,7 +30,10 @@ const SidebarProjectItem = React.memo(function SidebarProjectItem({
   const dotWidth = row.status ? 2 : 0;
   const titleBudget = innerWidth - 3 - count.length - dotWidth;
   return (
-    <box onMouseDown={() => store.toggleProject(row.id)} {...(selected ? { backgroundColor: palette.selectedBg } : {})}>
+    <box
+      onMouseDown={() => store.toggleProject(row.id)}
+      {...(selected ? { backgroundColor: palette.selectedBg } : {})}
+    >
       <text>
         <span fg={selected ? palette.accent : palette.text}>
           {`${selected ? "▌" : " "}${caret} ${padClip(row.title, titleBudget)}${count}${row.status ? " " : ""}`}
@@ -57,7 +60,10 @@ const SidebarThreadRow = React.memo(function SidebarThreadRow({
   const time = ` ${relativeTime(thread.updatedAt)}`;
   const titleBudget = innerWidth - 4 - time.length;
   return (
-    <box onMouseDown={() => store.select({ kind: "thread", id: thread.id })} {...(selected ? { backgroundColor: palette.selectedBg } : {})}>
+    <box
+      onMouseDown={() => store.select({ kind: "thread", id: thread.id })}
+      {...(selected ? { backgroundColor: palette.selectedBg } : {})}
+    >
       <text>
         <span fg={palette.accent}>{selected ? "▌ " : "  "}</span>
         <StatusDot status={status} />
@@ -81,7 +87,10 @@ const SidebarMoreRow = React.memo(function SidebarMoreRow({
 }): React.ReactNode {
   const palette = usePalette();
   return (
-    <box onMouseDown={() => store.loadMore(projectId)} {...(selected ? { backgroundColor: palette.selectedBg } : {})}>
+    <box
+      onMouseDown={() => store.loadMore(projectId)}
+      {...(selected ? { backgroundColor: palette.selectedBg } : {})}
+    >
       <text fg={selected ? palette.accent : palette.dim}>
         {`   ${selected ? "▶" : " "}… show ${hiddenCount} more`}
       </text>

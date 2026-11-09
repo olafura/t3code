@@ -39,8 +39,7 @@ export function addTab(tabs: ThreadTabs | null): ThreadTabs {
 export function closeTab(tabs: ThreadTabs, id: string): ThreadTabs | null {
   const ids = tabs.ids.filter((existing) => existing !== id);
   if (ids.length === 0) return null;
-  const activeId =
-    id === tabs.activeId ? (ids[ids.length - 1] as string) : tabs.activeId;
+  const activeId = id === tabs.activeId ? (ids[ids.length - 1] as string) : tabs.activeId;
   return { ids, activeId };
 }
 

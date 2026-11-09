@@ -280,9 +280,10 @@ export function applyTerminalColors(colors: TerminalColors): void {
 export const usePalette = (): Palette => THEME;
 
 /** Glyph + colour for a status-line tone (mirrors the web toast icon set). */
-export function statusGlyphColor(
-  kind: "info" | "success" | "error" | "busy",
-): { readonly glyph: string; readonly color: RGBA } {
+export function statusGlyphColor(kind: "info" | "success" | "error" | "busy"): {
+  readonly glyph: string;
+  readonly color: RGBA;
+} {
   switch (kind) {
     case "success":
       return { glyph: "✓", color: ansi("green") };

@@ -75,7 +75,9 @@ export const CommandPalette = React.memo(function CommandPalette({
             >
               <text>
                 <span fg={active ? palette.accent : palette.dim}>{active ? "▸ " : "  "}</span>
-                <span fg={active ? palette.text : palette.dim}>{clip(command.title, labelRoom)}</span>
+                <span fg={active ? palette.text : palette.dim}>
+                  {clip(command.title, labelRoom)}
+                </span>
                 {command.hint ? <span fg={palette.dim}>{`  ${command.hint}`}</span> : null}
               </text>
             </box>

@@ -290,8 +290,7 @@ export const ChatComposer = React.memo(function ChatComposer({
   // A free-text answer only makes sense for single-select questions (multi-select
   // toggles options); for those, Space must type rather than toggle (see the
   // `answerTyping` flag in ChatView/useKeyBindings).
-  const allowCustomAnswer =
-    answering && !pendingUserInput.questions[uiQuestionIndex]?.multiSelect;
+  const allowCustomAnswer = answering && !pendingUserInput.questions[uiQuestionIndex]?.multiSelect;
   const showReplyEditor = inputFocused && !answering;
   const showAnswerInput = inputFocused && allowCustomAnswer;
   return (

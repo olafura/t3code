@@ -142,7 +142,12 @@ describe("turn folds", () => {
         message("c1", "assistant", "2026-06-19T00:00:02.000Z", { turnId: "t1" }),
       ],
       [toolActivity("a1", "2026-06-19T00:00:01.000Z", "t1")],
-      latestTurn({ turnId: "t1", state: "running", startedAt: "2026-06-19T00:00:00.000Z", completedAt: null }),
+      latestTurn({
+        turnId: "t1",
+        state: "running",
+        startedAt: "2026-06-19T00:00:00.000Z",
+        completedAt: null,
+      }),
     );
     expect(rows.some((r) => r.kind === "turn-fold")).toBe(false);
     expect(rows.map((r) => r.kind)).toEqual(["message", "work", "message"]);
@@ -191,7 +196,10 @@ describe("working indicator", () => {
   it("Given an idle session and completed turn, then isWorking is false", () => {
     expect(
       isWorking(
-        thread({ session: { status: "idle" } as never, latestTurn: { state: "completed" } as never }),
+        thread({
+          session: { status: "idle" } as never,
+          latestTurn: { state: "completed" } as never,
+        }),
       ),
     ).toBe(false);
   });
@@ -220,10 +228,12 @@ describe("changed files", () => {
     }) as unknown as OrchestrationCheckpointSummary;
 
   it("sums additions and deletions across files", () => {
-    const stat = diffStat(checkpoint("m1", "t", [
-      { path: "a", additions: 3, deletions: 1 },
-      { path: "b", additions: 4, deletions: 2 },
-    ]).files);
+    const stat = diffStat(
+      checkpoint("m1", "t", [
+        { path: "a", additions: 3, deletions: 1 },
+        { path: "b", additions: 4, deletions: 2 },
+      ]).files,
+    );
     expect(stat).toEqual({ additions: 7, deletions: 3 });
   });
 

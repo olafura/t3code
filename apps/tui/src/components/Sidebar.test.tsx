@@ -22,10 +22,10 @@ const baseProps = {
 
 describe("Sidebar search box", () => {
   it("renders the wordmark, a search box, and the Projects header", async () => {
-    const t = await testRender(
-      <Sidebar {...baseProps} filter="" searchFocused={false} />,
-      { width: 30, height: 18 },
-    );
+    const t = await testRender(<Sidebar {...baseProps} filter="" searchFocused={false} />, {
+      width: 30,
+      height: 18,
+    });
     await t.renderOnce();
     const frame = t.captureCharFrame();
     expect(frame).toContain("T3");
@@ -36,10 +36,10 @@ describe("Sidebar search box", () => {
   });
 
   it("shows the active query when a filter is set", async () => {
-    const t = await testRender(
-      <Sidebar {...baseProps} filter="parser" searchFocused={false} />,
-      { width: 30, height: 18 },
-    );
+    const t = await testRender(<Sidebar {...baseProps} filter="parser" searchFocused={false} />, {
+      width: 30,
+      height: 18,
+    });
     await t.renderOnce();
     expect(t.captureCharFrame()).toContain("parser");
     t.renderer.destroy();

@@ -8,8 +8,24 @@ import { FilesView, type ViewingFile } from "./FilesView.tsx";
 
 const rows: ReadonlyArray<FlatTreeRow> = [
   { kind: "dir", name: "src", path: "src", depth: 0, additions: 0, deletions: 0, collapsed: false },
-  { kind: "file", name: "app.ts", path: "src/app.ts", depth: 1, additions: 0, deletions: 0, collapsed: false },
-  { kind: "file", name: "README.md", path: "README.md", depth: 0, additions: 0, deletions: 0, collapsed: false },
+  {
+    kind: "file",
+    name: "app.ts",
+    path: "src/app.ts",
+    depth: 1,
+    additions: 0,
+    deletions: 0,
+    collapsed: false,
+  },
+  {
+    kind: "file",
+    name: "README.md",
+    path: "README.md",
+    depth: 0,
+    additions: 0,
+    deletions: 0,
+    collapsed: false,
+  },
 ];
 
 async function frameOf(props: {

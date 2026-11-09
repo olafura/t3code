@@ -58,7 +58,12 @@ describe("MessagesTimeline header", () => {
 
 async function bodyFrame(
   over: Partial<OrchestrationThread>,
-  approvals: ReadonlyArray<{ requestId: string; requestKind: string; detail?: string; createdAt: string }> = [],
+  approvals: ReadonlyArray<{
+    requestId: string;
+    requestKind: string;
+    detail?: string;
+    createdAt: string;
+  }> = [],
   approvalIndex = 0,
 ): Promise<string> {
   const ref = React.createRef<null>();
@@ -96,7 +101,13 @@ describe("MessagesTimeline body", () => {
           updatedAt: "2026-06-19T00:00:00.000Z",
           streaming: false,
           attachments: [
-            { type: "image", id: "att1", name: "diagram.png", mimeType: "image/png", sizeBytes: 24_576 },
+            {
+              type: "image",
+              id: "att1",
+              name: "diagram.png",
+              mimeType: "image/png",
+              sizeBytes: 24_576,
+            },
           ],
         },
       ],
@@ -140,7 +151,13 @@ describe("MessagesTimeline body", () => {
           updatedAt: "2026-06-19T00:00:00.000Z",
           streaming: false,
           attachments: [
-            { type: "image", id: "att1", name: "broken.png", mimeType: "image/png", sizeBytes: 1024 },
+            {
+              type: "image",
+              id: "att1",
+              name: "broken.png",
+              mimeType: "image/png",
+              sizeBytes: 1024,
+            },
           ],
         },
       ],
@@ -223,7 +240,13 @@ describe("MessagesTimeline body", () => {
     const full = {
       ...detail("default"),
       messages: [
-        { id: "m1", role: "assistant", text: "done", createdAt: "2026-06-19T00:00:00.000Z", streaming: false },
+        {
+          id: "m1",
+          role: "assistant",
+          text: "done",
+          createdAt: "2026-06-19T00:00:00.000Z",
+          streaming: false,
+        },
       ],
       checkpoints: [
         {
@@ -264,7 +287,13 @@ describe("MessagesTimeline body", () => {
     const full = {
       ...detail("default"),
       messages: [
-        { id: "m1", role: "assistant", text: "done", createdAt: "2026-06-19T00:00:00.000Z", streaming: false },
+        {
+          id: "m1",
+          role: "assistant",
+          text: "done",
+          createdAt: "2026-06-19T00:00:00.000Z",
+          streaming: false,
+        },
       ],
       checkpoints: [
         {
@@ -310,7 +339,13 @@ describe("MessagesTimeline body", () => {
     const full = {
       ...detail("default"),
       messages: [
-        { id: "m1", role: "assistant", text: "done", createdAt: "2026-06-19T00:00:00.000Z", streaming: false },
+        {
+          id: "m1",
+          role: "assistant",
+          text: "done",
+          createdAt: "2026-06-19T00:00:00.000Z",
+          streaming: false,
+        },
       ],
       checkpoints: [
         {
@@ -360,8 +395,20 @@ describe("MessagesTimeline body", () => {
     const full = {
       ...detail("default"),
       messages: [
-        { id: "a1", role: "assistant", text: "looking into it", createdAt: "2026-06-19T00:00:00.000Z", streaming: false },
-        { id: "u1", role: "user", text: "ship it please", createdAt: "2026-06-19T00:00:01.000Z", streaming: false },
+        {
+          id: "a1",
+          role: "assistant",
+          text: "looking into it",
+          createdAt: "2026-06-19T00:00:00.000Z",
+          streaming: false,
+        },
+        {
+          id: "u1",
+          role: "user",
+          text: "ship it please",
+          createdAt: "2026-06-19T00:00:01.000Z",
+          streaming: false,
+        },
       ],
     } as unknown as OrchestrationThread;
     const t = await testRender(
@@ -407,8 +454,24 @@ describe("MessagesTimeline body", () => {
   it("Given a settled turn, then its tool work folds behind a 'Worked for' row", async () => {
     const frame = await bodyFrame({
       messages: [
-        { id: "u1", role: "user", text: "go", turnId: "t1", createdAt: "2026-06-19T00:00:00.000Z", updatedAt: "2026-06-19T00:00:00.000Z", streaming: false },
-        { id: "m1", role: "assistant", text: "done", turnId: "t1", createdAt: "2026-06-19T00:00:05.000Z", updatedAt: "2026-06-19T00:00:05.000Z", streaming: false },
+        {
+          id: "u1",
+          role: "user",
+          text: "go",
+          turnId: "t1",
+          createdAt: "2026-06-19T00:00:00.000Z",
+          updatedAt: "2026-06-19T00:00:00.000Z",
+          streaming: false,
+        },
+        {
+          id: "m1",
+          role: "assistant",
+          text: "done",
+          turnId: "t1",
+          createdAt: "2026-06-19T00:00:05.000Z",
+          updatedAt: "2026-06-19T00:00:05.000Z",
+          streaming: false,
+        },
       ] as never,
       activities: [
         {
@@ -505,8 +568,18 @@ describe("MessagesTimeline body", () => {
     const frame = await bodyFrame(
       {},
       [
-        { requestId: "r1", requestKind: "command", detail: "rm -rf build", createdAt: "2026-06-19T00:00:00.000Z" },
-        { requestId: "r2", requestKind: "file-change", detail: "src/app.ts", createdAt: "2026-06-19T00:00:01.000Z" },
+        {
+          requestId: "r1",
+          requestKind: "command",
+          detail: "rm -rf build",
+          createdAt: "2026-06-19T00:00:00.000Z",
+        },
+        {
+          requestId: "r2",
+          requestKind: "file-change",
+          detail: "src/app.ts",
+          createdAt: "2026-06-19T00:00:01.000Z",
+        },
       ],
       1,
     );

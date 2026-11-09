@@ -1591,8 +1591,7 @@ describe("sanitizeTerminalHistoryChunk", () => {
       sanitizeTerminalHistoryChunk(pending, data, { responsesOnly: true });
 
     it("strips terminal responses (DA, DECRPM, cursor, DSR, OSC colour) that leak as garbage", () => {
-      const responses =
-        "\x1b[?1;2c\x1b[?2026;2$y\x1b[2;5R\x1b[0n\x1b]11;rgb:1616/1616/1616\x07";
+      const responses = "\x1b[?1;2c\x1b[?2026;2$y\x1b[2;5R\x1b[0n\x1b]11;rgb:1616/1616/1616\x07";
       assert.equal(live(`a${responses}b`).visibleText, "ab");
     });
 

@@ -44,13 +44,7 @@ import {
   runtimeModeLabel,
 } from "../controls.ts";
 import { gitActionNeedsCommitMessage } from "../gitActions.logic.ts";
-import {
-  addTab,
-  closeTab,
-  cycleActiveId,
-  initialTabs,
-  type ThreadTabs,
-} from "../terminalTabs.ts";
+import { addTab, closeTab, cycleActiveId, initialTabs, type ThreadTabs } from "../terminalTabs.ts";
 
 /** Default width of the thread-list pane. */
 const LIST_PANE_WIDTH = 34;
@@ -149,8 +143,9 @@ export function ChatView({
   const [renameDraft, setRenameDraft] = React.useState("");
   // The commit-message dialog: the draft + which commit-bearing action to run on submit.
   const [commitDraft, setCommitDraft] = React.useState("");
-  const [pendingCommitAction, setPendingCommitAction] =
-    React.useState<GitStackedAction | null>(null);
+  const [pendingCommitAction, setPendingCommitAction] = React.useState<GitStackedAction | null>(
+    null,
+  );
   const [projectIndex, setProjectIndex] = React.useState(0);
   // Options for the new-thread dialog (^O cycles runtime, ^B toggles plan/build).
   const [newRuntimeMode, setNewRuntimeMode] = React.useState<RuntimeMode>("full-access");
@@ -196,7 +191,8 @@ export function ChatView({
   const activeProjectIndex = projects.length > 0 ? Math.min(projectIndex, projects.length - 1) : 0;
   const selectedThreadId = state.selection?.kind === "thread" ? state.selection.id : null;
   const rows = React.useMemo(
-    () => buildRows(state.shell, state.expanded, state.loadedInFull, selectedThreadId, state.filter),
+    () =>
+      buildRows(state.shell, state.expanded, state.loadedInFull, selectedThreadId, state.filter),
     [state.shell, state.expanded, state.loadedInFull, selectedThreadId, state.filter],
   );
   const detail = state.detail;
@@ -426,7 +422,13 @@ export function ChatView({
       store.setStatus("Select a model first.", "info");
       return;
     }
-    setPicker({ kind: "reasoning", title: "reasoning", status: "loading", options: [], selectedIndex: 0 });
+    setPicker({
+      kind: "reasoning",
+      title: "reasoning",
+      status: "loading",
+      options: [],
+      selectedIndex: 0,
+    });
     void client
       .getReasoningChoices(selection.instanceId, selection.model)
       .then((result) =>
@@ -538,8 +540,7 @@ export function ChatView({
     !!picker || overlay === "command" || overlay === "revert" || overlay === "confirmDelete";
   // A pending question renders a panel inside the composer (header + question +
   // options + hint + spacer), so the composer grows to fit it.
-  const pendingPanelHeight =
-    userInputActive && uiQuestion ? uiQuestion.options.length + 4 : 0;
+  const pendingPanelHeight = userInputActive && uiQuestion ? uiQuestion.options.length + 4 : 0;
   const composerHeight =
     focus === "new"
       ? 9
@@ -810,7 +811,9 @@ export function ChatView({
       filesScroll(delta);
       return;
     }
-    setFilesIndex((index) => Math.min(Math.max(0, index + delta), Math.max(0, fileRows.length - 1)));
+    setFilesIndex((index) =>
+      Math.min(Math.max(0, index + delta), Math.max(0, fileRows.length - 1)),
+    );
   };
   const filesActivate = () => {
     if (viewingFile) return;
@@ -932,9 +935,8 @@ export function ChatView({
         run: () =>
           runCommand(() => {
             const archived = detail.archivedAt !== null;
-            void (archived
-              ? client.unarchiveThread(detail.id)
-              : client.archiveThread(detail.id)
+            void (
+              archived ? client.unarchiveThread(detail.id) : client.archiveThread(detail.id)
             ).catch(() => {});
             store.setStatus(archived ? "Unarchived." : "Archived.", "success");
           }),
@@ -988,7 +990,12 @@ export function ChatView({
         run: () => runCommand(openRuntimePicker),
       });
       if (actionablePlan) {
-        list.push({ id: "implement", title: "Implement plan", hint: "^Y", run: () => runCommand(implementPlan) });
+        list.push({
+          id: "implement",
+          title: "Implement plan",
+          hint: "^Y",
+          run: () => runCommand(implementPlan),
+        });
       }
     }
     list.push({
@@ -998,11 +1005,26 @@ export function ChatView({
       run: () => runCommand(toggleTerminal),
     });
     if (detail) {
-      list.push({ id: "terminal-new", title: "New terminal", keywords: "shell group tab", run: () => runCommand(newTerminal) });
+      list.push({
+        id: "terminal-new",
+        title: "New terminal",
+        keywords: "shell group tab",
+        run: () => runCommand(newTerminal),
+      });
     }
     if (detailTabs && detailTabs.ids.length > 1) {
-      list.push({ id: "terminal-next", title: "Next terminal", keywords: "tab", run: () => runCommand(() => cycleTerminal(1)) });
-      list.push({ id: "terminal-prev", title: "Previous terminal", keywords: "tab", run: () => runCommand(() => cycleTerminal(-1)) });
+      list.push({
+        id: "terminal-next",
+        title: "Next terminal",
+        keywords: "tab",
+        run: () => runCommand(() => cycleTerminal(1)),
+      });
+      list.push({
+        id: "terminal-prev",
+        title: "Previous terminal",
+        keywords: "tab",
+        run: () => runCommand(() => cycleTerminal(-1)),
+      });
     }
     if (terminalOpen && detailTabs) {
       list.push({
@@ -1042,7 +1064,15 @@ export function ChatView({
     });
     return list;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [detail, checkpoints.length, activeTerminal, detailTabs, terminalOpen, rightPanelOpen, actionablePlan]);
+  }, [
+    detail,
+    checkpoints.length,
+    activeTerminal,
+    detailTabs,
+    terminalOpen,
+    rightPanelOpen,
+    actionablePlan,
+  ]);
 
   const filteredCommands = React.useMemo(
     () => filterCommands(paletteCommands, commandQuery),
@@ -1059,28 +1089,28 @@ export function ChatView({
       : settingsOpen
         ? "settings"
         : filesOpen
-        ? "files"
-        : diffOpen
-        ? "diff"
-        : picker
-          ? "select"
-          : overlay === "command"
-        ? "command"
-        : overlay === "confirmDelete"
-          ? "confirmDelete"
-          : overlay === "revert"
-            ? "revert"
-            : focus === "new"
-            ? "new"
-            : focus === "rename"
-              ? "rename"
-              : focus === "filter"
-                ? "filter"
-                : focus === "commit"
-                  ? "commit"
-                  : userInputActive
-                    ? "userInput"
-                    : "compose";
+          ? "files"
+          : diffOpen
+            ? "diff"
+            : picker
+              ? "select"
+              : overlay === "command"
+                ? "command"
+                : overlay === "confirmDelete"
+                  ? "confirmDelete"
+                  : overlay === "revert"
+                    ? "revert"
+                    : focus === "new"
+                      ? "new"
+                      : focus === "rename"
+                        ? "rename"
+                        : focus === "filter"
+                          ? "filter"
+                          : focus === "commit"
+                            ? "commit"
+                            : userInputActive
+                              ? "userInput"
+                              : "compose";
 
   useKeyBindings({
     mode: keyMode,
@@ -1108,8 +1138,7 @@ export function ChatView({
         const current = RUNTIME_MODES.indexOf(mode);
         return RUNTIME_MODES[(current + 1) % RUNTIME_MODES.length] ?? "full-access";
       }),
-    onNewTogglePlan: () =>
-      setNewInteractionMode((mode) => (mode === "plan" ? "default" : "plan")),
+    onNewTogglePlan: () => setNewInteractionMode((mode) => (mode === "plan" ? "default" : "plan")),
     onNewCycleField: () =>
       setNewField((field) =>
         field === "message" ? "branch" : field === "branch" ? "worktree" : "message",
@@ -1177,7 +1206,9 @@ export function ChatView({
     },
     onCommandPrev: () =>
       setCommandIndex((index) =>
-        filteredCommands.length === 0 ? 0 : (index - 1 + filteredCommands.length) % filteredCommands.length,
+        filteredCommands.length === 0
+          ? 0
+          : (index - 1 + filteredCommands.length) % filteredCommands.length,
       ),
     onCommandNext: () =>
       setCommandIndex((index) =>
@@ -1338,7 +1369,9 @@ export function ChatView({
     "^N new",
     "^E term",
     ...(actionablePlan ? ["^Y implement"] : []),
-    ...(approvals.length > 0 ? [approvals.length > 1 ? "^A/^R approve (↑/↓)" : "^A/^R approve"] : []),
+    ...(approvals.length > 0
+      ? [approvals.length > 1 ? "^A/^R approve (↑/↓)" : "^A/^R approve"]
+      : []),
     "^K commands",
     "^F find",
     ...(width >= RIGHT_PANEL_MIN_TERMINAL_WIDTH ? [`^L panel ${rightPanelOpen ? "▾" : "▸"}`] : []),
@@ -1474,59 +1507,70 @@ export function ChatView({
           onRun={(index) => filteredCommands[index]?.run()}
         />
       ) : overlay === "revert" && detail ? (
-        <RevertMenu checkpoints={checkpoints} selected={Math.min(revertIndex, checkpoints.length - 1)} />
+        <RevertMenu
+          checkpoints={checkpoints}
+          selected={Math.min(revertIndex, checkpoints.length - 1)}
+        />
       ) : overlay === "confirmDelete" && detail ? (
         <ConfirmDeleteMenu title={detail.title} />
       ) : null}
 
       <ChatComposer
-          // Search/filter now lives in the sidebar; the composer never owns it.
-          mode={focus === "filter" ? "compose" : focus}
-          reply={reply}
-          draft={draft}
-          auxValue={focus === "rename" ? renameDraft : focus === "commit" ? commitDraft : ""}
-          placeholder={placeholder}
-          projectName={projects[activeProjectIndex]?.title ?? "(none)"}
-          interactionMode={focus === "new" ? newInteractionMode : (detail?.interactionMode ?? "default")}
-          newRuntimeMode={newRuntimeMode}
-          newBranch={newBranch}
-          newWorktree={newWorktree}
-          newField={newField}
-          editorRows={promptLines}
-          inputFocused={
-            !terminalFocused &&
-            !diffOpen &&
-            !filesOpen &&
-            !settingsOpen &&
-            !popoverOpen &&
-            focus !== "filter"
-          }
-          composerEpoch={composerEpoch}
-          controls={controls}
-          working={working}
-          width={chatWidth}
-          pendingUserInput={userInputActive ? pendingUserInput : null}
-          uiQuestionIndex={uiQuestionIndex}
-          uiOptionIndex={uiOptionIndex}
-          uiSelectedLabels={uiSelectedLabels}
-          answerDraft={customAnswer}
-          onAnswerInput={setCustomAnswer}
-          onReplyInput={setReply}
-          onReplySubmit={sendReply}
-          onDraftInput={(value) => setDraft(value.replace(/\t/g, ""))}
-          onBranchInput={(value) => setNewBranch(value.replace(/\t/g, ""))}
-          onWorktreeInput={(value) => setNewWorktree(value.replace(/\t/g, ""))}
-          onAuxInput={focus === "commit" ? setCommitDraft : setRenameDraft}
-          onTogglePlan={togglePlanMode}
-          onOpenAccess={openRuntimePicker}
-          onOpenModel={openModelPicker}
-          onOpenReasoning={openReasoningPicker}
-          onStop={stopTurn}
-          onSend={sendReply}
-          onSubmitAnswer={submitUserInput}
-        />
+        // Search/filter now lives in the sidebar; the composer never owns it.
+        mode={focus === "filter" ? "compose" : focus}
+        reply={reply}
+        draft={draft}
+        auxValue={focus === "rename" ? renameDraft : focus === "commit" ? commitDraft : ""}
+        placeholder={placeholder}
+        projectName={projects[activeProjectIndex]?.title ?? "(none)"}
+        interactionMode={
+          focus === "new" ? newInteractionMode : (detail?.interactionMode ?? "default")
+        }
+        newRuntimeMode={newRuntimeMode}
+        newBranch={newBranch}
+        newWorktree={newWorktree}
+        newField={newField}
+        editorRows={promptLines}
+        inputFocused={
+          !terminalFocused &&
+          !diffOpen &&
+          !filesOpen &&
+          !settingsOpen &&
+          !popoverOpen &&
+          focus !== "filter"
+        }
+        composerEpoch={composerEpoch}
+        controls={controls}
+        working={working}
+        width={chatWidth}
+        pendingUserInput={userInputActive ? pendingUserInput : null}
+        uiQuestionIndex={uiQuestionIndex}
+        uiOptionIndex={uiOptionIndex}
+        uiSelectedLabels={uiSelectedLabels}
+        answerDraft={customAnswer}
+        onAnswerInput={setCustomAnswer}
+        onReplyInput={setReply}
+        onReplySubmit={sendReply}
+        onDraftInput={(value) => setDraft(value.replace(/\t/g, ""))}
+        onBranchInput={(value) => setNewBranch(value.replace(/\t/g, ""))}
+        onWorktreeInput={(value) => setNewWorktree(value.replace(/\t/g, ""))}
+        onAuxInput={focus === "commit" ? setCommitDraft : setRenameDraft}
+        onTogglePlan={togglePlanMode}
+        onOpenAccess={openRuntimePicker}
+        onOpenModel={openModelPicker}
+        onOpenReasoning={openReasoningPicker}
+        onStop={stopTurn}
+        onSend={sendReply}
+        onSubmitAnswer={submitUserInput}
+      />
 
-      <box flexDirection="row" justifyContent="space-between" paddingLeft={1} paddingRight={1} flexShrink={0}>
+      <box
+        flexDirection="row"
+        justifyContent="space-between"
+        paddingLeft={1}
+        paddingRight={1}
+        flexShrink={0}
+      >
         <text fg={palette.dim}>{hint}</text>
         <text>
           <span fg={statusStyle.color}>{` ${statusStyle.glyph} `}</span>

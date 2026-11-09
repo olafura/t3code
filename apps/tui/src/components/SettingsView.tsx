@@ -77,14 +77,12 @@ export const SettingsView = React.memo(function SettingsView({
         <text> </text>
         <text fg={palette.accent}>Source control</text>
         <Row label="branch" value={vcsStatus?.refName ?? "—"} width={width} />
-        <Row
-          label="pull request"
-          value={pr ? `#${pr.number} ${pr.state}` : "—"}
-          width={width}
-        />
+        <Row label="pull request" value={pr ? `#${pr.number} ${pr.state}` : "—"} width={width} />
         <Row
           label="working tree"
-          value={vcsStatus ? (vcsStatus.hasWorkingTreeChanges ? "uncommitted changes" : "clean") : "—"}
+          value={
+            vcsStatus ? (vcsStatus.hasWorkingTreeChanges ? "uncommitted changes" : "clean") : "—"
+          }
           width={width}
         />
 
@@ -95,7 +93,9 @@ export const SettingsView = React.memo(function SettingsView({
             {group.bindings.map((binding) => (
               <text key={binding.keys + binding.description}>
                 <span fg={ansi("cyan")}>{`  ${binding.keys.padEnd(keyCol)}`}</span>
-                <span fg={palette.text}>{clip(binding.description, Math.max(8, width - keyCol - 4))}</span>
+                <span fg={palette.text}>
+                  {clip(binding.description, Math.max(8, width - keyCol - 4))}
+                </span>
               </text>
             ))}
           </box>

@@ -9,10 +9,7 @@ import {
 } from "./userInput.ts";
 
 let seq = 0;
-function activity(
-  kind: string,
-  payload: Record<string, unknown>,
-): OrchestrationThreadActivity {
+function activity(kind: string, payload: Record<string, unknown>): OrchestrationThreadActivity {
   seq += 1;
   return {
     id: `a${seq}`,
@@ -62,7 +59,9 @@ describe("derivePendingUserInputs", () => {
   });
 
   it("Given a malformed request (no questions), then it is ignored", () => {
-    expect(derivePendingUserInputs([activity("user-input.requested", { requestId: "r1" })])).toHaveLength(0);
+    expect(
+      derivePendingUserInputs([activity("user-input.requested", { requestId: "r1" })]),
+    ).toHaveLength(0);
   });
 });
 

@@ -34,11 +34,21 @@ export function mergeVcsStatus(
 // "PR" terminology is fixed (the TUI doesn't resolve provider-specific labels).
 
 export type GitQuickAction =
-  | { readonly kind: "run_action"; readonly label: string; readonly action: GitStackedAction; readonly disabled: false }
+  | {
+      readonly kind: "run_action";
+      readonly label: string;
+      readonly action: GitStackedAction;
+      readonly disabled: false;
+    }
   | { readonly kind: "open_pr"; readonly label: string; readonly disabled: false }
   | { readonly kind: "open_publish"; readonly label: string; readonly disabled: false }
   | { readonly kind: "run_pull"; readonly label: string; readonly disabled: false }
-  | { readonly kind: "show_hint"; readonly label: string; readonly disabled: true; readonly hint: string };
+  | {
+      readonly kind: "show_hint";
+      readonly label: string;
+      readonly disabled: true;
+      readonly hint: string;
+    };
 
 export interface GitMenuItem {
   readonly id: "commit" | "push" | "pr";
@@ -66,7 +76,12 @@ export function resolveGitQuickAction(
     return { kind: "show_hint", label: "Commit", disabled: true, hint: "Git action in progress." };
   }
   if (!status) {
-    return { kind: "show_hint", label: "Commit", disabled: true, hint: "Git status is unavailable." };
+    return {
+      kind: "show_hint",
+      label: "Commit",
+      disabled: true,
+      hint: "Git status is unavailable.",
+    };
   }
 
   const hasBranch = status.refName !== null;
@@ -95,7 +110,12 @@ export function resolveGitQuickAction(
     if (hasOpenPr || isDefaultRef) {
       return { kind: "run_action", label: "Commit & push", action: "commit_push", disabled: false };
     }
-    return { kind: "run_action", label: "Commit, push & PR", action: "commit_push_pr", disabled: false };
+    return {
+      kind: "run_action",
+      label: "Commit, push & PR",
+      action: "commit_push_pr",
+      disabled: false,
+    };
   }
 
   if (!status.hasUpstream) {
@@ -105,7 +125,12 @@ export function resolveGitQuickAction(
     }
     if (!isAhead) {
       if (hasOpenPr) return { kind: "open_pr", label: "View PR", disabled: false };
-      return { kind: "show_hint", label: "Push", disabled: true, hint: "No local commits to push." };
+      return {
+        kind: "show_hint",
+        label: "Push",
+        disabled: true,
+        hint: "No local commits to push.",
+      };
     }
     if (hasOpenPr || isDefaultRef) {
       return {
@@ -160,10 +185,7 @@ export function resolveGitQuickAction(
 }
 
 /** The contextual Commit / Push / Create-or-View-PR menu for the actions list. */
-export function buildGitMenuItems(
-  status: VcsStatusResult | null,
-  isBusy: boolean,
-): GitMenuItem[] {
+export function buildGitMenuItems(status: VcsStatusResult | null, isBusy: boolean): GitMenuItem[] {
   if (!status) return [];
 
   const hasBranch = status.refName !== null;
@@ -177,7 +199,13 @@ export function buildGitMenuItems(
   const canCommit = !isBusy && hasChanges;
   const canPush = !isBusy && hasBranch && !isBehind && status.aheadCount > 0 && hasRemoteReady;
   const canCreatePr =
-    !isBusy && hasBranch && !hasChanges && !hasOpenPr && hasDefaultBranchDelta && !isBehind && hasRemoteReady;
+    !isBusy &&
+    hasBranch &&
+    !hasChanges &&
+    !hasOpenPr &&
+    hasDefaultBranchDelta &&
+    !isBehind &&
+    hasRemoteReady;
   const canOpenPr = !isBusy && hasOpenPr;
 
   const commitItem: GitMenuItem = {
@@ -192,9 +220,5 @@ export function buildGitMenuItems(
     ? { id: "pr", label: "View PR", disabled: !canOpenPr, action: null, openUrl: status.pr?.url }
     : { id: "pr", label: "Create PR", disabled: !canCreatePr, action: "create_pr" };
 
-  return [
-    commitItem,
-    { id: "push", label: "Push", disabled: !canPush, action: "push" },
-    prItem,
-  ];
+  return [commitItem, { id: "push", label: "Push", disabled: !canPush, action: "push" }, prItem];
 }

@@ -20,7 +20,14 @@ const threadRow = (id: string): Row => ({ kind: "thread", id, thread: {} as neve
 describe("selectionEquals", () => {
   it("Given a project selection and a matching project row, then true", () => {
     const selection: Selection = { kind: "project", id: "p1" };
-    const row: Row = { kind: "project", id: "p1", title: "P1", count: 0, status: null, expanded: false };
+    const row: Row = {
+      kind: "project",
+      id: "p1",
+      title: "P1",
+      count: 0,
+      status: null,
+      expanded: false,
+    };
     expect(selectionEquals(selection, row)).toBe(true);
   });
 
@@ -34,8 +41,7 @@ describe("selectionEquals", () => {
 });
 
 describe("visibleThreadsForProject", () => {
-  const many = (n: number) =>
-    Array.from({ length: n }, (_, i) => ({ id: `t${i}` })) as never[];
+  const many = (n: number) => Array.from({ length: n }, (_, i) => ({ id: `t${i}` })) as never[];
 
   it("Given loadedInFull, then all threads are visible with 0 hidden", () => {
     const { visible, hidden } = visibleThreadsForProject(many(20), true, null);
@@ -78,10 +84,13 @@ describe("buildRows", () => {
 
   it("Given an expanded project, then its threads follow the project row", () => {
     const rows = buildRows(
-      shell([{ id: "p1", title: "P1" }], [
-        { id: "t1", projectId: "p1" },
-        { id: "t2", projectId: "p1" },
-      ]),
+      shell(
+        [{ id: "p1", title: "P1" }],
+        [
+          { id: "t1", projectId: "p1" },
+          { id: "t2", projectId: "p1" },
+        ],
+      ),
       new Set(["p1"]),
       new Set(["p1"]),
       null,
@@ -90,7 +99,12 @@ describe("buildRows", () => {
   });
 
   it("Given a project with no threads, then it still appears (matches the project count)", () => {
-    const rows = buildRows(shell([{ id: "empty", title: "Empty" }], []), new Set(), new Set(), null);
+    const rows = buildRows(
+      shell([{ id: "empty", title: "Empty" }], []),
+      new Set(),
+      new Set(),
+      null,
+    );
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({ kind: "project", id: "empty", count: 0 });
   });
@@ -144,9 +158,24 @@ describe("buildRows — project ordering", () => {
   const richShell = () =>
     ({
       projects: [
-        { id: "old", title: "Old", createdAt: ts("2026-01-01T00:00:00.000Z"), updatedAt: ts("2026-01-01T00:00:00.000Z") },
-        { id: "new", title: "New", createdAt: ts("2026-01-01T00:00:00.000Z"), updatedAt: ts("2026-01-01T00:00:00.000Z") },
-        { id: "empty", title: "Empty", createdAt: ts("2026-03-01T00:00:00.000Z"), updatedAt: ts("2026-03-01T00:00:00.000Z") },
+        {
+          id: "old",
+          title: "Old",
+          createdAt: ts("2026-01-01T00:00:00.000Z"),
+          updatedAt: ts("2026-01-01T00:00:00.000Z"),
+        },
+        {
+          id: "new",
+          title: "New",
+          createdAt: ts("2026-01-01T00:00:00.000Z"),
+          updatedAt: ts("2026-01-01T00:00:00.000Z"),
+        },
+        {
+          id: "empty",
+          title: "Empty",
+          createdAt: ts("2026-03-01T00:00:00.000Z"),
+          updatedAt: ts("2026-03-01T00:00:00.000Z"),
+        },
       ],
       threads: [
         { id: "t-old", projectId: "old", title: "t", updatedAt: ts("2026-02-01T00:00:00.000Z") },
@@ -164,8 +193,18 @@ describe("buildRows — project ordering", () => {
   it("Given equal activity, then it breaks ties by title", () => {
     const flat = {
       projects: [
-        { id: "b", title: "Bravo", createdAt: ts("2026-01-01T00:00:00.000Z"), updatedAt: ts("2026-05-01T00:00:00.000Z") },
-        { id: "a", title: "Alpha", createdAt: ts("2026-01-01T00:00:00.000Z"), updatedAt: ts("2026-05-01T00:00:00.000Z") },
+        {
+          id: "b",
+          title: "Bravo",
+          createdAt: ts("2026-01-01T00:00:00.000Z"),
+          updatedAt: ts("2026-05-01T00:00:00.000Z"),
+        },
+        {
+          id: "a",
+          title: "Alpha",
+          createdAt: ts("2026-01-01T00:00:00.000Z"),
+          updatedAt: ts("2026-05-01T00:00:00.000Z"),
+        },
       ],
       threads: [],
     } as unknown as OrchestrationShellSnapshot;

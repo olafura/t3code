@@ -122,19 +122,25 @@ describe("ChatComposer", () => {
   });
 
   it("Given rename mode, when rendered, then it shows the rename label and hint", async () => {
-    const frame = await frameOf(<ChatComposer {...base} mode="rename" auxValue="old title" inputFocused />);
+    const frame = await frameOf(
+      <ChatComposer {...base} mode="rename" auxValue="old title" inputFocused />,
+    );
     expect(frame).toContain("rename");
     expect(frame).toContain("Enter rename");
   });
 
   it("Given filter mode, when rendered, then it shows the find label and hint", async () => {
-    const frame = await frameOf(<ChatComposer {...base} mode="filter" auxValue="log" inputFocused />);
+    const frame = await frameOf(
+      <ChatComposer {...base} mode="filter" auxValue="log" inputFocused />,
+    );
     expect(frame).toContain("find");
     expect(frame).toContain("Enter keep");
   });
 
   it("Given commit mode, when rendered, then it shows the commit label, message, and hint", async () => {
-    const frame = await frameOf(<ChatComposer {...base} mode="commit" auxValue="fix the bug" inputFocused />);
+    const frame = await frameOf(
+      <ChatComposer {...base} mode="commit" auxValue="fix the bug" inputFocused />,
+    );
     expect(frame).toContain("commit");
     expect(frame).toContain("fix the bug");
     expect(frame).toContain("Enter commit");
@@ -142,7 +148,13 @@ describe("ChatComposer", () => {
 
   it("Given new-thread mode, when rendered, then it shows the dialog, project, and options", async () => {
     const frame = await frameOf(
-      <ChatComposer {...base} mode="new" newRuntimeMode="approval-required" interactionMode="plan" inputFocused />,
+      <ChatComposer
+        {...base}
+        mode="new"
+        newRuntimeMode="approval-required"
+        interactionMode="plan"
+        inputFocused
+      />,
     );
     expect(frame).toContain("new thread");
     expect(frame).toContain("Acme");
@@ -216,7 +228,9 @@ describe("ChatComposer", () => {
   it("Given a draft, when a global Ctrl-shortcut key is pressed, then the editor keeps the draft", async () => {
     function Harness(): React.ReactNode {
       const [reply, setReply] = React.useState("");
-      return <ChatComposer {...base} mode="compose" reply={reply} inputFocused onReplyInput={setReply} />;
+      return (
+        <ChatComposer {...base} mode="compose" reply={reply} inputFocused onReplyInput={setReply} />
+      );
     }
     const t = await testRender(<Harness />, { width: 60, height: 8 });
     await t.renderOnce();

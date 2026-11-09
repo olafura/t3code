@@ -87,10 +87,14 @@ export function RightPanel({
           <box marginTop={1} {...(quickActionable ? { onMouseDown: runQuick } : {})}>
             <text>
               <span fg={quick.disabled ? palette.dim : palette.accent}>{"▸ "}</span>
-              <span fg={quick.disabled ? palette.dim : palette.text}>{clip(quick.label, room)}</span>
+              <span fg={quick.disabled ? palette.dim : palette.text}>
+                {clip(quick.label, room)}
+              </span>
             </text>
           </box>
-          {quick.kind === "show_hint" ? <text fg={palette.dim}>{`  ${clip(quick.hint, room)}`}</text> : null}
+          {quick.kind === "show_hint" ? (
+            <text fg={palette.dim}>{`  ${clip(quick.hint, room)}`}</text>
+          ) : null}
           {quick.kind === "open_publish" ? (
             <text fg={palette.dim}>{"  publish from the terminal (^E)"}</text>
           ) : null}

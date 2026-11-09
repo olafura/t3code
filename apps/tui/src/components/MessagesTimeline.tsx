@@ -95,9 +95,7 @@ function WorkGroupSection({
   if (groupedEntries.length === 0) return null;
   const hasOverflow = groupedEntries.length > MAX_VISIBLE_WORK_LOG_ENTRIES;
   const visibleEntries =
-    hasOverflow && !expanded
-      ? groupedEntries.slice(-MAX_VISIBLE_WORK_LOG_ENTRIES)
-      : groupedEntries;
+    hasOverflow && !expanded ? groupedEntries.slice(-MAX_VISIBLE_WORK_LOG_ENTRIES) : groupedEntries;
   const hiddenCount = groupedEntries.length - visibleEntries.length;
   return (
     <box flexDirection="column" marginBottom={1}>
@@ -239,7 +237,12 @@ function FoldableRowView({
   }
   return (
     <box flexDirection="column" marginTop={1} marginBottom={1}>
-      <markdown content={body} syntaxStyle={syntaxStyle} streaming={message.streaming} {...mdClient} />
+      <markdown
+        content={body}
+        syntaxStyle={syntaxStyle}
+        streaming={message.streaming}
+        {...mdClient}
+      />
       {attachmentsNode}
       {checkpoint ? (
         <ChangedFilesTree
@@ -322,14 +325,12 @@ function ChangedFilesTree({
     <box flexDirection="column" marginTop={1}>
       <box flexDirection="row" justifyContent="space-between">
         <box
-          {...(onOpenDiff
-            ? { onMouseDown: () => onOpenDiff(checkpoint.checkpointTurnCount) }
-            : {})}
+          {...(onOpenDiff ? { onMouseDown: () => onOpenDiff(checkpoint.checkpointTurnCount) } : {})}
         >
           <text>
             <span fg={palette.dim}>{`changed files (${files.length})  `}</span>
             <span fg={ansi("green")}>{`+${additions}`}</span>
-            <span fg={palette.dim}>{" "}</span>
+            <span fg={palette.dim}> </span>
             <span fg={ansi("red")}>{`-${deletions}`}</span>
             {onOpenDiff ? <span fg={palette.dim}>{"   ▸ diff"}</span> : null}
           </text>
@@ -387,7 +388,14 @@ function ContextMeter({
   readonly palette: Palette;
 }): React.ReactNode {
   const pct = snapshot.usedPercentage;
-  const color = pct === null ? palette.dim : pct >= 90 ? ansi("red") : pct >= 70 ? ansi("yellow") : ansi("green");
+  const color =
+    pct === null
+      ? palette.dim
+      : pct >= 90
+        ? ansi("red")
+        : pct >= 70
+          ? ansi("yellow")
+          : ansi("green");
   return (
     <text>
       <span fg={palette.dim}>{"context  "}</span>
@@ -480,8 +488,7 @@ export const MessagesTimeline = React.memo(function MessagesTimeline({
   const startedAt = detail ? workingStartedAt(detail) : null;
 
   const timeline = React.useMemo(
-    () =>
-      detail ? deriveTimelineEntries(detail.messages, activityList, detail.latestTurn) : [],
+    () => (detail ? deriveTimelineEntries(detail.messages, activityList, detail.latestTurn) : []),
     [detail, activityList],
   );
   const checkpointByMessage = React.useMemo(
@@ -545,13 +552,19 @@ export const MessagesTimeline = React.memo(function MessagesTimeline({
           </text>
         </box>
         <text>
-          <span fg={approvals.length > 0 ? ansi("red") : ansi(sessionStatusColor(detail.session?.status))}>
+          <span
+            fg={
+              approvals.length > 0 ? ansi("red") : ansi(sessionStatusColor(detail.session?.status))
+            }
+          >
             {approvals.length > 0 ? "pending approval" : statusLabel(detail)}
           </span>
           <span fg={detail.interactionMode === "plan" ? palette.accent : palette.dim}>
             {`  ·  ${detail.interactionMode === "plan" ? "plan" : "build"}`}
           </span>
-          <span fg={palette.dim}>{`  ·  ${detail.runtimeMode}  ·  ${relativeTime(detail.updatedAt)}`}</span>
+          <span
+            fg={palette.dim}
+          >{`  ·  ${detail.runtimeMode}  ·  ${relativeTime(detail.updatedAt)}`}</span>
         </text>
       </box>
 
@@ -593,11 +606,20 @@ export const MessagesTimeline = React.memo(function MessagesTimeline({
       </scrollbox>
 
       {approvals.length > 0 ? (
-        <box flexDirection="column" border borderStyle="rounded" borderColor={ansi("red")} paddingLeft={1} paddingRight={1}>
+        <box
+          flexDirection="column"
+          border
+          borderStyle="rounded"
+          borderColor={ansi("red")}
+          paddingLeft={1}
+          paddingRight={1}
+        >
           <text>
             <span fg={ansi("red")}>Approval required</span>
             {approvals.length > 1 ? (
-              <span fg={palette.dim}>{`  (${Math.min(approvalIndex, approvals.length - 1) + 1} of ${approvals.length})`}</span>
+              <span
+                fg={palette.dim}
+              >{`  (${Math.min(approvalIndex, approvals.length - 1) + 1} of ${approvals.length})`}</span>
             ) : null}
           </text>
           {approvals.map((approval, index) => {

@@ -47,7 +47,13 @@ import {
   unarchiveThread as unarchiveThreadOp,
   updateThreadMetadata,
 } from "@t3tools/client-runtime/operations";
-import { request, rpcSessionFactoryLayer, RpcSessionFactory, runStream, subscribe } from "@t3tools/client-runtime/rpc";
+import {
+  request,
+  rpcSessionFactoryLayer,
+  RpcSessionFactory,
+  runStream,
+  subscribe,
+} from "@t3tools/client-runtime/rpc";
 import type { RpcSession } from "@t3tools/client-runtime/rpc";
 
 import { mergeVcsStatus } from "./gitActions.logic.ts";
@@ -224,7 +230,8 @@ export type TuiRuntime = ManagedRuntime.ManagedRuntime<
 const inMemoryCacheStoreLayer = Layer.sync(EnvironmentCacheStore, () => {
   const threads = new Map<string, OrchestrationThread>();
   const shells = new Map<string, OrchestrationShellSnapshot>();
-  const threadKey = (environmentId: string, threadId: string) => `${environmentId}\u0000${threadId}`;
+  const threadKey = (environmentId: string, threadId: string) =>
+    `${environmentId}\u0000${threadId}`;
   return EnvironmentCacheStore.of({
     loadShell: (environmentId) => Effect.succeed(Option.fromUndefinedOr(shells.get(environmentId))),
     saveShell: (environmentId, snapshot) =>
@@ -370,17 +377,16 @@ export interface TuiClient {
   readonly listModels: () => Promise<ModelOption[]>;
   readonly setModel: (threadId: ThreadId, instanceId: string, model: string) => Promise<void>;
   /** Reasoning/effort choices for a model (null if it exposes none). */
-  readonly getReasoningChoices: (instanceId: string, model: string) => Promise<ReasoningChoices | null>;
+  readonly getReasoningChoices: (
+    instanceId: string,
+    model: string,
+  ) => Promise<ReasoningChoices | null>;
   readonly setReasoning: (
     thread: Pick<OrchestrationThread, "id" | "modelSelection">,
     descriptorId: string,
     choiceId: string,
   ) => Promise<void>;
-  readonly terminalWrite: (
-    threadId: ThreadId,
-    terminalId: string,
-    data: string,
-  ) => Promise<void>;
+  readonly terminalWrite: (threadId: ThreadId, terminalId: string, data: string) => Promise<void>;
   readonly terminalResize: (
     threadId: ThreadId,
     terminalId: string,
@@ -505,8 +511,9 @@ export function makeTuiClient(runtime: TuiRuntime, origin = ""): TuiClient {
     // watcher keeps `latestThreads` fresh (so peekThread is instant) and evicts the
     // entry if the thread is deleted — otherwise makeEnvironmentThreadState retries
     // its now-failing subscription every 250ms forever and hammers the server.
-    let resolveRef: (ref: SubscriptionRef.SubscriptionRef<EnvironmentThreadState>) => void =
-      () => {};
+    let resolveRef: (
+      ref: SubscriptionRef.SubscriptionRef<EnvironmentThreadState>,
+    ) => void = () => {};
     const ref = new Promise<SubscriptionRef.SubscriptionRef<EnvironmentThreadState>>((resolve) => {
       resolveRef = resolve;
     });
@@ -643,7 +650,10 @@ export function makeTuiClient(runtime: TuiRuntime, origin = ""): TuiClient {
             },
             runtimeMode: thread.runtimeMode,
             interactionMode: "default",
-            sourceProposedPlan: { threadId: thread.id, planId: OrchestrationProposedPlanId.make(planId) },
+            sourceProposedPlan: {
+              threadId: thread.id,
+              planId: OrchestrationProposedPlanId.make(planId),
+            },
           });
         }),
       ),

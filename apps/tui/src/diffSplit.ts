@@ -55,7 +55,11 @@ function pathForSection(lines: ReadonlyArray<string>): string {
   }
   // Prefer the new path; for deletions (+++ /dev/null) use the old path.
   const chosen =
-    newPath && newPath !== "/dev/null" ? newPath : oldPath && oldPath !== "/dev/null" ? oldPath : newPath;
+    newPath && newPath !== "/dev/null"
+      ? newPath
+      : oldPath && oldPath !== "/dev/null"
+        ? oldPath
+        : newPath;
   return chosen ? stripGitPrefix(chosen) : "(unknown)";
 }
 
